@@ -1,0 +1,428 @@
+// E6-01 / E5-09 — the overlay survives a reload.
+//
+// The fake below is an in-memory OPFS, not a stub: it has real directories,
+// a real `entries()` and a `createWritable` that truncates. That matters
+// because the bugs this code can have are about the SHAPE of the store — a
+// rewritten file keeping its old tail, a deletion that does not reach the
+// disk, a restore that copies everything straight back out — and a stub that
+// records calls would catch none of them.
+
+import { describe, expect, it } from "vitest";
+import { Vfs, seedDust } from "../src/fs/vfs.js";
+import {
+  restoreFromOpfs,
+  mirrorToOpfs,
+  type DirHandleLike,
+  type FileHandleLike,
+} from "../src/fs/opfs.js";
+
+// ---------------------------------------------------------------- the fake
+
+class FakeFile implements FileHandleLike {
+  constructor(public data: Uint8Array = new Uint8Array()) {}
+  getFile(): Promise<{ arrayBuffer(): Promise<ArrayBuffer> }> {
+    const d = this.data;
+    return Promise.resolve({
+      arrayBuffer: () => Promise.resolve(d.slice().buffer as ArrayBuffer),
+    });
+  }
+  createWritable(): Promise<{ write(d: Uint8Array): Promise<void>; close(): Promise<void> }> {
+    // A fresh writable truncates — the whole point of the test below.
+    this.data = new Uint8Array();
+    return Promise.resolve({
+      write: (d: Uint8Array) => {
+        this.data = new Uint8Array(d);
+        return Promise.resolve();
+      },
+      close: () => Promise.resolve(),
+    });
+  }
+}
+
+class FakeDir implements DirHandleLike {
+  readonly children = new Map<string, FakeDir | FakeFile>();
+  getDirectoryHandle(name: string, opts?: { create?: boolean }): Promise<DirHandleLike> {
+    const got = this.children.get(name);
+    if (got instanceof FakeDir) return Promise.resolve(got);
+    if (got !== undefined) return Promise.reject(new Error(`${name} is a file`));
+    if (opts?.create !== true) return Promise.reject(new Error(`no ${name}`));
+    const d = new FakeDir();
+    this.children.set(name, d);
+    return Promise.resolve(d);
+  }
+  getFileHandle(name: string, opts?: { create?: boolean }): Promise<FileHandleLike> {
+    const got = this.children.get(name);
+    if (got instanceof FakeFile) return Promise.resolve(got);
+    if (got !== undefined) return Promise.reject(new Error(`${name} is a directory`));
+    if (opts?.create !== true) return Promise.reject(new Error(`no ${name}`));
+    const f = new FakeFile();
+    this.children.set(name, f);
+    return Promise.resolve(f);
+  }
+  removeEntry(name: string, opts?: { recursive?: boolean }): Promise<void> {
+    const got = this.children.get(name);
+    if (got === undefined) return Promise.reject(new Error(`no ${name}`));
+    // As OPFS does: without `recursive`, a directory with anything in it
+    // refuses. E9-56's prune leans on that refusal as its stop condition,
+    // so a fake that deletes anyway could not show the difference.
+    if (got instanceof FakeDir && got.children.size > 0 && opts?.recursive !== true) {
+      return Promise.reject(new Error(`${name} is not empty`));
+    }
+    this.children.delete(name);
+    return Promise.resolve();
+  }
+  async *entries(): AsyncIterableIterator<[string, DirHandleLike | FileHandleLike]> {
+    for (const [k, v] of [...this.children]) yield [k, v];
+  }
+}
+
+function store() {
+  const root = new FakeDir();
+  return { root, open: () => Promise.resolve(root as DirHandleLike) };
+}
+
+const text = (v: Uint8Array | null): string | null =>
+  v === null ? null : new TextDecoder().decode(v);
+
+describe("the mirror", () => {
+  it("writes what the overlay wrote, and nothing the base supplied", async () => {
+    const s = store();
+    const vfs = new Vfs();
+    vfs.mount("/home/we/dust/code/awake/awake.lua", () => "-- base, from the build");
+    const m = mirrorToOpfs(vfs, { root: s.open, debounceMs: 0 });
+
+    vfs.write("/home/we/dust/data/awake/awake-01.pset", "hello");
+    await m.flush();
+
+    // The pset is there...
+    const dust = await s.root.getDirectoryHandle("norns-dust");
+    const walk = async (d: DirHandleLike, at = ""): Promise<string[]> => {
+      const out: string[] = [];
+      for await (const [name, h] of d.entries()) {
+        if ((h as FakeFile).getFile !== undefined) out.push(`${at}/${name}`);
+        else out.push(...(await walk(h as DirHandleLike, `${at}/${name}`)));
+      }
+      return out;
+    };
+    const paths = await walk(dust);
+    expect(paths).toContain("/home/we/dust/data/awake/awake-01.pset");
+    // ...and the 690-file base is NOT.
+    expect(paths.some((p) => p.includes("awake.lua"))).toBe(false);
+    m.stop();
+  });
+
+  it("truncates, so a shorter rewrite does not keep the old tail", async () => {
+    const s = store();
+    const vfs = new Vfs();
+    const m = mirrorToOpfs(vfs, { root: s.open, debounceMs: 0 });
+    vfs.write("/a.txt", "a very long first version");
+    await m.flush();
+    vfs.write("/a.txt", "short");
+    await m.flush();
+
+    const vfs2 = new Vfs();
+    await restoreFromOpfs(vfs2, { root: s.open });
+    expect(text(vfs2.read("/a.txt"))).toBe("short");
+    m.stop();
+  });
+
+  it("coalesces a burst into one write per path", async () => {
+    const s = store();
+    const vfs = new Vfs();
+    const m = mirrorToOpfs(vfs, { root: s.open, debounceMs: 5 });
+    for (let i = 0; i < 50; i++) vfs.write("/busy.txt", `v${i}`);
+    await m.flush();
+    expect(m.stats.writes).toBe(1);
+    m.stop();
+  });
+});
+
+describe("the round trip", () => {
+  it("brings a file back after a reload", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.write("/home/we/dust/data/system.state", "norns.state.clock.tempo = 140");
+    await m.flush();
+    m.stop();
+
+    // A reload: a brand new Vfs, the same store.
+    const b = new Vfs();
+    const r = await restoreFromOpfs(b, { root: s.open });
+    expect(r.files).toBe(1);
+    expect(text(b.read("/home/we/dust/data/system.state"))).toBe(
+      "norns.state.clock.tempo = 140",
+    );
+  });
+
+  it("KEEPS A DELETION. A removed base file must not come back", async () => {
+    const s = store();
+    const base = (v: Vfs) => v.mount("/home/we/dust/code/doomed.lua", () => "-- bundled");
+    const a = new Vfs();
+    base(a);
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    expect(a.exists("/home/we/dust/code/doomed.lua")).toBe(true);
+    a.remove("/home/we/dust/code/doomed.lua");
+    await m.flush();
+    m.stop();
+
+    // The base is supplied fresh on every load, so without a tombstone the
+    // file is simply back.
+    const b = new Vfs();
+    base(b);
+    const r = await restoreFromOpfs(b, { root: s.open });
+    expect(r.tombstones).toBe(1);
+    expect(b.exists("/home/we/dust/code/doomed.lua")).toBe(false);
+  });
+
+  it("keeps an empty directory, which util.make_dir creates before any write", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.mkdir("/home/we/dust/data/newscript");
+    await m.flush();
+    m.stop();
+
+    const b = new Vfs();
+    await restoreFromOpfs(b, { root: s.open });
+    expect(b.isDir("/home/we/dust/data/newscript")).toBe(true);
+  });
+
+  // E9-56 — a user asked why maiden offered `terrarium` as installed while
+  // SELECT had nothing to choose. The folder was there and empty: deleting
+  // a script's files left its directory in OPFS, the restore turns every
+  // OPFS directory into a `vfs.mkdir`, and maiden's installed list is
+  // directories. 281 of 329 folders were in that state.
+  it("takes the folder away with the last file in it", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.write("/home/we/dust/code/terrarium/terrarium.lua", "-- script");
+    a.write("/home/we/dust/code/terrarium/lib/brain.lua", "-- lib");
+    await m.flush();
+    for (const p of a.walk("/home/we/dust/code/terrarium")) a.remove(p);
+    await m.flush();
+    m.stop();
+
+    const b = new Vfs();
+    await restoreFromOpfs(b, { root: s.open });
+    expect(b.isDir("/home/we/dust/code/terrarium"), "no phantom script").toBe(false);
+    expect(b.list("/home/we/dust/code").map((e) => e.name)).toEqual([]);
+  });
+
+  it("stops at a folder that still has something in it", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.write("/home/we/dust/code/thing/thing.lua", "-- script");
+    a.write("/home/we/dust/code/thing/lib/one.lua", "-- one");
+    a.write("/home/we/dust/code/thing/lib/two.lua", "-- two");
+    await m.flush();
+    a.remove("/home/we/dust/code/thing/lib/one.lua");
+    await m.flush();
+    m.stop();
+
+    const b = new Vfs();
+    await restoreFromOpfs(b, { root: s.open });
+    expect(b.readText("/home/we/dust/code/thing/lib/two.lua")).toBe("-- two");
+    expect(b.readText("/home/we/dust/code/thing/thing.lua")).toBe("-- script");
+  });
+
+  it("leaves a script's own data folder alone when its last pset goes", async () => {
+    // Only `~/dust/code` is pruned. A folder under `~/dust/data` belongs to
+    // a script — `util.make_dir` on first run is how it appears — and an
+    // empty one there is not pretending to be anything.
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.mkdir("/home/we/dust/data/thing");
+    a.write("/home/we/dust/data/thing/one.pset", "a pset");
+    await m.flush();
+    a.remove("/home/we/dust/data/thing/one.pset");
+    await m.flush();
+    m.stop();
+
+    const b = new Vfs();
+    await restoreFromOpfs(b, { root: s.open });
+    expect(b.isDir("/home/we/dust/data/thing")).toBe(true);
+  });
+
+  it("does not copy the restored tree straight back out", async () => {
+    // `restore` bypasses the watchers on purpose. Without that, every boot
+    // rewrites everything it just read.
+    const s = store();
+    const a = new Vfs();
+    const m1 = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    for (let i = 0; i < 5; i++) a.write(`/f${i}.txt`, `x${i}`);
+    await m1.flush();
+    m1.stop();
+
+    const b = new Vfs();
+    await restoreFromOpfs(b, { root: s.open });
+    const m2 = mirrorToOpfs(b, { root: s.open, debounceMs: 0 });
+    await m2.flush();
+    expect(m2.stats.writes).toBe(0);
+    m2.stop();
+  });
+
+  it("is a first run, not an error, when there is nothing stored", async () => {
+    const s = store();
+    const vfs = new Vfs();
+    const r = await restoreFromOpfs(vfs, { root: s.open });
+    expect(r).toEqual({ files: 0, tombstones: 0, placeholders: 0, references: 0, bytes: 0, ghosts: 0 });
+  });
+
+  it("carries on with no OPFS at all", async () => {
+    const vfs = new Vfs();
+    const lines: string[] = [];
+    const root = () => Promise.reject(new Error("no OPFS in this browser"));
+    const r = await restoreFromOpfs(vfs, { root, log: (l) => lines.push(l) });
+    expect(r.files).toBe(0);
+    expect(lines[0]).toContain("unavailable");
+
+    const m = mirrorToOpfs(vfs, { root, debounceMs: 0, log: (l) => lines.push(l) });
+    vfs.write("/a.txt", "still works in memory");
+    await m.flush();
+    expect(text(vfs.read("/a.txt"))).toBe("still works in memory");
+    m.stop();
+  });
+});
+
+describe("a copied reference survives a reload", () => {
+  // THE BUG THIS CLOSES, from the outside: `beets` copies its demo loops
+  // into ~/dust/audio on its first run and plays them. Next session the
+  // folder is there, the names are there, and they read as nothing — and
+  // beets never repairs it, because it only copies `if util.file_exists
+  // (dir) == false`. A script that worked once is broken for ever.
+  //
+  // The copy is BY REFERENCE on purpose: the loops are fetched the first
+  // time they are played, so copying them means copying the declaration,
+  // not pulling megabytes through a shell for a copy nobody may read.
+  // Which is why the mirror has to keep declarations as well as bytes.
+  const demo = { url: "/dust-bin/beets/demo/0.wav", size: 1234 };
+
+  it("comes back, still lazy, and still reaching the same place", async () => {
+    const s = store();
+    const made = new Vfs();
+    made.mountRemote("/home/we/dust/code/beets/demo/0.wav", demo);
+    const mirror = mirrorToOpfs(made, { root: s.open, debounceMs: 0 });
+    made.copyRemote("/home/we/dust/audio/beets/0.wav", demo);
+    await mirror.flush();
+
+    const back = new Vfs();
+    // The build declares its own files before a restore runs.
+    back.mountRemote("/home/we/dust/code/beets/demo/0.wav", demo);
+    const r = await restoreFromOpfs(back, { root: s.open });
+    expect(r.references).toBe(1);
+    expect(back.remoteAt("/home/we/dust/audio/beets/0.wav")).toEqual(demo);
+    expect(back.read("/home/we/dust/audio/beets/0.wav"), "still lazy").toBeNull();
+  });
+
+  it("is DROPPED when this version no longer supplies it, and says so", async () => {
+    // A stored reference aims at a url the build serves. Update norns-js
+    // with a different dust tree and it aims at nothing — restoring it
+    // would trade "file absent" for "file fails at the moment you press
+    // play", which is worse.
+    const s = store();
+    const made = new Vfs();
+    made.mountRemote("/home/we/dust/code/old/0.wav", demo);
+    const mirror = mirrorToOpfs(made, { root: s.open, debounceMs: 0 });
+    made.copyRemote("/home/we/dust/audio/old/0.wav", demo);
+    await mirror.flush();
+
+    const back = new Vfs();
+    const said: string[] = [];
+    const r = await restoreFromOpfs(back, { root: s.open, log: (l) => void said.push(l) });
+    expect(r.references).toBe(0);
+    expect(back.remoteAt("/home/we/dust/audio/old/0.wav")).toBeNull();
+    expect(said.some((l) => l.includes("no longer supplies"))).toBe(true);
+  });
+
+  it("stops being a reference once its bytes have arrived", async () => {
+    const made = new Vfs();
+    made.copyRemote("/home/we/dust/audio/x.wav", demo);
+    expect(made.references()).toHaveLength(1);
+    made.write("/home/we/dust/audio/x.wav", new Uint8Array([1, 2, 3]));
+    expect(made.references(), "an ordinary file now").toHaveLength(0);
+  });
+});
+
+describe("what norns actually does with it", () => {
+  it("brings back the grid vport binding across a reload (E5-09)", async () => {
+    // `core/state.lua:163` writes `grid.vports[i].name` into system.state,
+    // and `state.resume` dofiles it at startup. The only thing missing was
+    // that the file did not survive.
+    const s = store();
+    const a = new Vfs();
+    seedDust(a);
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.write(
+      "/home/we/dust/data/system.state",
+      "grid.vports[1].name = 'virtual grid v0001'\nmidi.vports[1].name = 'virtual midi loopback'\n",
+    );
+    await m.flush();
+    m.stop();
+
+    const b = new Vfs();
+    seedDust(b);
+    await restoreFromOpfs(b, { root: s.open });
+    expect(text(b.read("/home/we/dust/data/system.state"))).toContain("virtual grid v0001");
+  });
+});
+
+// E9-65 — the phantom script folders, and why they were for ever.
+//
+// A whole dust tree went missing twice in one session and what was left
+// behind was a directory per script with nothing in it. maiden listed
+// every one as installed (E9-56 asked for a file instead), and they came
+// back on every boot: an empty directory is written to the placeholder
+// sidecar, the sidecar is restored with `mkdir`, and `mkdir` puts it back
+// into the sidecar. Thirty-four of them were on this disk.
+//
+// An empty directory is worth keeping almost everywhere — `util.make_dir`
+// is how a script claims `~/dust/data/<name>` on its first run. Under
+// `~/dust/code` nothing creates a folder except an install, and an install
+// puts files in it.
+describe("an empty script folder", () => {
+  it("is not restored, and does not come back on the next boot either", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.mkdir("/home/we/dust/code/ghost");
+    a.mkdir("/home/we/dust/data/ghost");
+    a.write("/home/we/dust/code/real/real.lua", "-- a script");
+    await m.flush();
+    m.stop();
+
+    const b = new Vfs();
+    const r = await restoreFromOpfs(b, { root: s.open });
+    expect(b.isDir("/home/we/dust/code/ghost"), "the phantom is dropped").toBe(false);
+    expect(b.isDir("/home/we/dust/data/ghost"), "a script's data folder is not").toBe(true);
+    expect(b.readText("/home/we/dust/code/real/real.lua")).toBe("-- a script");
+    expect(r.ghosts, "one dropped, and it is counted").toBe(1);
+
+    // And the second boot: the sidecar must not have been written back
+    // with the phantom still in it.
+    const m2 = mirrorToOpfs(b, { root: s.open, debounceMs: 0 });
+    b.write("/home/we/dust/data/ghost/anything.txt", "x");
+    await m2.flush();
+    m2.stop();
+    const c = new Vfs();
+    await restoreFromOpfs(c, { root: s.open });
+    expect(c.isDir("/home/we/dust/code/ghost")).toBe(false);
+  });
+
+  it("keeps a code folder that still has a file in it", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.write("/home/we/dust/code/keep/lib/thing.lua", "-- lib");
+    await m.flush();
+    m.stop();
+
+    const b = new Vfs();
+    await restoreFromOpfs(b, { root: s.open });
+    expect(b.isDir("/home/we/dust/code/keep")).toBe(true);
+    expect(b.readText("/home/we/dust/code/keep/lib/thing.lua")).toBe("-- lib");
+  });
+});

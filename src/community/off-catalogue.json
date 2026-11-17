@@ -1,0 +1,54 @@
+{
+  "what": "Libraries a norns script asks for by folder name that are NOT in the 354-entry community catalogue, and that do exist. E9-70 found them by reading the ten scripts the blockers table had wrongly called blocked; E9-71 made them installable. Every row was checked by fetching the repository and confirming it holds the exact file the script asks for, and every row is a manual install ON HARDWARE TOO - none of the six is a catalogue entry, so a norns owner pastes the url into maiden or git-clones it on the box, which is the same gesture as the project panel's url install.",
+  "optional": "ALL SIX ARE OPTIONAL. Each sits behind a guard the script writes - a mod that must be enabled, a folder it tests for, a device that must be plugged in, a constant shipped false - and all eight scripts that ask for one were measured running without it. They are installed with the script anyway, so that enabling the mod or plugging in the device is all there is left to do.",
+  "libraries": {
+    "namesizer": {
+      "name": "namesizer",
+      "url": "https://github.com/Quixotic7/namesizer",
+      "file": "lib/namesizer.lua",
+      "wanted_by": ["cheat_codes_2"],
+      "guard": "if util.file_exists(_path.code..\"namesizer\") then",
+      "what": "random name synthesis; cheat_codes_2 names its clips with it"
+    },
+    "matrix": {
+      "name": "matrix",
+      "url": "https://github.com/sixolet/matrix",
+      "file": "lib/matrix.lua",
+      "wanted_by": ["cyrene"],
+      "guard": "the ask is in cyrene/lib/mod.lua, and core/mods.lua requires a mod only when it is enabled",
+      "what": "a signal-routing mod; cyrene's own mod builds on it"
+    },
+    "fx": {
+      "name": "fx",
+      "url": "https://github.com/sixolet/fx",
+      "file": "lib/fx.lua",
+      "wanted_by": ["fixed-filter-banking-crisis"],
+      "guard": "the ask is in lib/mod.lua, but its SuperCollider class FxBase is needed whether or not the mod is enabled",
+      "what": "the send/insert FX framework. The one of the six whose absence is visible: without it the class library reports 'FxFixedFilterBankingCrisis : FxBase - This superclass does not exist'"
+    },
+    "z_tuning": {
+      "name": "z_tuning",
+      "url": "https://github.com/catfact/z_tuning",
+      "file": "lib/mod.lua",
+      "wanted_by": ["sines"],
+      "guard": "if _mods.is_enabled('z_tuning') then",
+      "what": "a tuning mod. aidanreilly/z_tuning is the sines author's fork of it"
+    },
+    "shnth": {
+      "name": "shnth",
+      "url": "https://github.com/cfdrake/shnth",
+      "file": "lib/shnth.lua",
+      "wanted_by": ["shnthsalslied", "tetrabobo", "tetrabotis"],
+      "guard": "sh = hid.connect(1) / if sh.device then",
+      "what": "the Shbobo shnth library, reached only with a shnth plugged in over HID"
+    },
+    "gridcapture": {
+      "name": "GridCapture",
+      "url": "https://github.com/tlubke/GridCapture",
+      "file": "GridCapture.lua",
+      "wanted_by": ["gridstep"],
+      "guard": "_GRID_CAPTURE = false / if _GRID_CAPTURE then",
+      "what": "screenshots and recordings of grid LED states. gridstep ships the switch off, so this is unreachable until somebody edits the script"
+    }
+  }
+}

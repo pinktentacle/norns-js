@@ -1,0 +1,1374 @@
+diff --git a/lang/CMakeLists.txt b/lang/CMakeLists.txt
+index 94bdec763320977e420105bf2000076a925f02be..958638521e647859a4628329d1fe11a8bc6fbe26 100644
+--- a/lang/CMakeLists.txt
++++ b/lang/CMakeLists.txt
+@@ -400,6 +400,23 @@ elseif(EMSCRIPTEN)
+     # necessary b/c pthread init is async in emscripten, but sclang needs some threads right away
+     set(PTHREAD_POOL_SIZE "4" CACHE STRING "Number of threads to spawn sclang.wasm at call time")
+ 
++    # The class library can be baked into sclang.data at link time, or
++    # delivered as a compressed archive the host page unpacks into MEMFS
++    # before bootInterpreter(). The archive is ~1.5 MB smaller per cold load
++    # because CDNs do not compress application/octet-stream. ON keeps the
++    # historical behaviour; platform/wasm/sclang/sclang-tests.mjs and the
++    # demo pages assume ON, as they inject nothing of their own.
++    option(SC_WASM_PRELOAD_CLASSLIB
++        "Bake SCClassLibrary into sclang.data with --preload-file" ON)
++    if(SC_WASM_PRELOAD_CLASSLIB)
++        set(SCLANG_CLASSLIB_FLAGS
++            "--preload-file ${CMAKE_SOURCE_DIR}/SCClassLibrary@/sc/SCClassLibrary")
++    else()
++        # --preload-file is what implies -sFORCE_FILESYSTEM (emscripten
++        # tools/link.py:1319-1323). Without it the JS FS helpers go away.
++        set(SCLANG_CLASSLIB_FLAGS "-sFORCE_FILESYSTEM=1")
++    endif()
++
+     set_target_properties(sclang PROPERTIES LINK_FLAGS "\
+         -sAUDIO_WORKLET \
+         --bind \
+@@ -415,7 +432,7 @@ elseif(EMSCRIPTEN)
+         -sMODULARIZE=1 \
+         -sEXPORTED_FUNCTIONS=['_webOscBindingAnchor','_main','_free','_scWasmBindingAnchor'] \
+         -sPTHREAD_POOL_SIZE=${PTHREAD_POOL_SIZE} \
+-        --preload-file ${CMAKE_SOURCE_DIR}/SCClassLibrary@/sc/SCClassLibrary \
++        ${SCLANG_CLASSLIB_FLAGS} \
+         -sSTACK_SIZE=1048576 \
+         -sDEFAULT_PTHREAD_STACK_SIZE=1048576 \
+         -sENVIRONMENT=web,worker,node \
+diff --git a/platform/wasm/CMakeLists.txt b/platform/wasm/CMakeLists.txt
+index c34a2c300978f6c865489407fa0ce956fda06dc3..e298c41c3063eef41f31c2b79fca7aafe5676ebd 100644
+--- a/platform/wasm/CMakeLists.txt
++++ b/platform/wasm/CMakeLists.txt
+@@ -29,8 +29,12 @@ set(EDITOR_WASM_FILES
+     $<TARGET_FILE_DIR:scsynth>/scsynth.wasm
+     $<TARGET_FILE_DIR:sclang>/sclang.js
+     $<TARGET_FILE_DIR:sclang>/sclang.wasm
+-    $<TARGET_FILE_DIR:sclang>/sclang.data
+ )
++# Without --preload-file there is no sclang.data to copy, and
++# copy_if_different fails on a missing source.
++if(SC_WASM_PRELOAD_CLASSLIB)
++    list(APPEND EDITOR_WASM_FILES $<TARGET_FILE_DIR:sclang>/sclang.data)
++endif()
+ add_custom_command(TARGET webeditor POST_BUILD
+     COMMAND ${CMAKE_COMMAND} -E make_directory ${EDITOR_WASM_OUTPUT}
+     COMMAND ${CMAKE_COMMAND} -E copy_if_different
+diff --git a/server/plugins/CMakeLists.txt b/server/plugins/CMakeLists.txt
+index e54fed7713d40ecd17e094383baa67b8c1bde745..6822177fbd2209af50f5cfa170dfe928416d8f6d 100644
+--- a/server/plugins/CMakeLists.txt
++++ b/server/plugins/CMakeLists.txt
+@@ -107,6 +107,768 @@ foreach(plugin_src ${plugin_sources})
+     endif()
+ endforeach()
+ 
++# --- norns-js: sc3-plugins, compiled IN ---------------------------------
++#
++# wasm has no dlopen, so a plugin that is not on the link line does not
++# exist. `STATIC_PLUGINS` is already ON for emscripten (top-level
++# CMakeLists.txt:213), and `PluginLoad(X)` then expands to `X_Load`, so an
++# out-of-tree UGen set needs exactly two things: a target here, and its
++# `X_Load` called from SC_StaticPlugins.h.
++#
++# Only the sets norns' community scripts actually reach are built. A static
++# scan of ~/dust/code found 15 of 51 .sc files using one of: Decimator and
++# the rest of DistortionUGens, DFM1 (TJUGens), SVF (BlackrainUGens) and
++# MdaPiano (MdaUGens).
++#
++# DEINDUGens (JPverb, Greyhole) is here too, but through WRAPPERS. Those two
++# are Faust-generated and are not written for a static link: each ends with a
++# bare `load()` rather than `PluginLoad(X)`, and each defines `class mydsp`
++# with virtual functions at global scope, so their vtables are COMDAT symbols
++# the linker would silently fold into one — a JPverb running Greyhole's DSP,
++# with nothing to say so. `tools/sclang/sc3-faust/*.cpp` gives each its own
++# namespace and the `X_Load` name the static loader expects.
++if(SC3_PLUGINS_DIR AND EXISTS "${SC3_PLUGINS_DIR}")
++    message(STATUS "sc3-plugins: building from ${SC3_PLUGINS_DIR}")
++    set(sc3_plugin_targets
++        "DistortionUGens|DistortionUGens/DistortionUGens.cpp"
++        "TJUGens|TJUGens/TJUGens.cpp,TJUGens/Dfm1.cpp,TJUGens/Dfm1Lut.cpp,TJUGens/NoiseGen.cpp"
++        "BlackrainUGens|BlackrainUGens/BlackrainUGens.cpp"
++        "MdaUGens|MdaUGens/MdaUGens.cpp"
++        # Coyote (oooooo) and EnvFollow (pedalboard). Their CLASSES were
++        # shipped before their UGens were, which is the failure the class
++        # list above warns about: sclang resolves the name, the server
++        # throws on the def, and with exceptions off that aborts the
++        # thread handling /d_recv for the rest of the session.
++        # BatPVUgens.cpp is left out: it needs the FFT interface table.
++        "BatUGens|BatUGens/BatUGens.cpp"
++        "SLUGens|SLUGens/SLUGens.cpp"
++        # --- E9-28: the rest of what norns has -----------------------------
++        #
++        # norns builds the WHOLE of sc3-plugins (its Dockerfile:131 clones
++        # the repository and installs every target), so every name below is
++        # one a catalogue script may use and get on hardware. The six above
++        # were chosen by a scan of the 35 BUNDLED scripts; these were chosen
++        # by a scan of all 354, counting scripts per UGen:
++        #
++        #   MCLDUGens                13 scripts  SawDPW[9] ArrayMin[2] ...
++        #   BhobUGens                10          MoogLadder[8] RLPFD ...
++        #   AntiAliasingOscillators   5          DPW3Tri
++        #   JoshUGens                 3          PV_Freeze[2] WarpZ
++        #   SkUGens                   3          FM7
++        #   SCMIRUGens                2          OnsetStatistics
++        #   BerlachUGens, LoopBufUGens, NHUGens, RFWUGens
++        #                             1 each     BLBufRd, LoopBuf, NHHall,
++        #                                        AverageOutput
++        "AntiAliasingOscillators|AntiAliasingOscillators/AntiAliasingOscillators.cpp"
++        "MCLDUGens|MCLDUGens/MCLDBufferUGens.cpp,MCLDUGens/MCLDCepstrumUGens.cpp,MCLDUGens/MCLDChaosUGens.cpp,MCLDUGens/MCLDDistortionUGens.cpp,MCLDUGens/MCLDFFTUGens.cpp,MCLDUGens/MCLDFilterUGens.cpp,MCLDUGens/MCLDGetenvUGen.cpp,MCLDUGens/MCLDOscUGens.cpp,MCLDUGens/MCLDPollUGens.cpp,MCLDUGens/MCLDSOMUGens.cpp,MCLDUGens/MCLDSparseUGens.cpp,MCLDUGens/MCLDTreeUGens.cpp,MCLDUGens/MCLDTriggeredStatsUgens.cpp"
++        "BhobUGens|BhobUGens/BhobChaos.cpp,BhobUGens/BhobFFT.cpp,BhobUGens/BhobFilt.cpp,BhobUGens/BhobGrain.cpp,BhobUGens/BhobNoise.cpp"
++        "SkUGens|SkUGens/FM7.cpp"
++        "SCMIRUGens|SCMIRUGens/AttackSlope.cpp,SCMIRUGens/BeatStatistics.cpp,SCMIRUGens/Chromagram.cpp,SCMIRUGens/FeatureSave.cpp,SCMIRUGens/KeyClarity.cpp,SCMIRUGens/KeyMode.cpp,SCMIRUGens/OnsetStatistics.cpp,SCMIRUGens/SensoryDissonance.cpp"
++        # AmbisonicUGens.cpp is left out: it and JoshAmbiUGens.cpp both
++        # define `A2B_Ctor` and `Mirroring`, two plugins with one UGen
++        # name between them. Upstream builds each as its own .so and
++        # never has to choose; a static link does. JoshAmbi is the
++        # larger of the two (36 functions against 18) and is kept.
++        "JoshUGens|JoshUGens/JoshAmbiUGens.cpp,JoshUGens/JoshGrainUGens.cpp,JoshUGens/JoshPVUGens.cpp,JoshUGens/JoshUGens.cpp,JoshUGens/PermUGens.cpp"
++        "BerlachUGens|BerlachUGens/BerlachUGens.cpp"
++        "LoopBufUGens|LoopBufUGens/LoopBuf.cpp"
++        "NHUGens|NHUGens/NHHall.cpp"
++        "RFWUGens|RFWUGens/RFWUGens.cpp"
++        # And the rest that builds. norns has every set; these are the ones
++        # nothing in the catalogue names today but that a script could, and
++        # they cost one translation unit each. What is NOT here, and why,
++        # is in docs/11-MISSING.md.
++        "AuditoryModeling|AuditoryModeling/AuditoryModelingUGens.cpp,AuditoryModeling/MeddisHairCell.cpp,AuditoryModeling/SimpleHairCell.cpp"
++        "BBCut2UGens|BBCut2UGens/BBCut2UGens.cpp,BBCut2UGens/DrumTrack.cpp"
++        "BetablockerUGens|BetablockerUGens/betablocker/machine.cpp,BetablockerUGens/betablocker/thread.cpp,BetablockerUGens/BetablockerUGens.cpp"
++        "ConcatUGens|ConcatUGens/Concat.cpp"
++        "MembraneUGens|MembraneUGens/Membrane.cpp,MembraneUGens/Membrane_shape.c"
++        "QuantityUGens|QuantityUGens/QuantityUGens.cpp"
++        "RMEQSuiteUGens|RMEQSuiteUGens/RMEQSuite.cpp"
++        "SummerUGens|SummerUGens/SummerUGens.cpp"
++        "TagSystemUGens|TagSystemUGens/TagSystemUgens.cpp"
++        "VBAPUGens|VBAPUGens/VBAP.cpp"
++        "VOSIMUGens|VOSIMUGens/VOSIM.cpp"
++        # E9-29 — three sets whose only obstacle was a NAME.
++        #
++        # `PluginLoad(X)` pastes X into `X_Load`, and a macro cannot reach a
++        # pasted token, so these could not be renamed from here. They are
++        # renamed at the source instead and the change is carried in
++        # patches/sc3-plugins.patch: ChaosUGens said `Chaos`, which is
++        # SuperCollider's own core plugin, and said it TWICE (NoiseRing.cpp
++        # and PredPrey.cpp — upstream builds each file as its own shared
++        # object, so it never had to choose); GlitchUGens said `Filter`,
++        # also core's; Neuromodules said `TagSystem`, which TagSystemUGens
++        # already has. Nothing but the load symbol is touched.
++        "ChaosUGens|ChaosUGens/NoiseRing.cpp,ChaosUGens/PredPrey.cpp"
++        "GlitchUGens|GlitchUGens/GlitchUGens.cpp"
++        "Neuromodules|Neuromodules/Neuromodules.cpp"
++        # DWGBowed.cpp and DWGPlucked.cpp each `#include "dwglib/DWG.cpp"`,
++        # so that file must NOT also be compiled on its own: it would be a
++        # third copy of the helpers the uniquifying below already gives each
++        # translation unit its own name for. OteyPiano.cpp includes it too,
++        # across the tree, and gets its own copy the same way.
++        "DWGUGens|DWGUGens/DWGBowed.cpp,DWGUGens/DWGPlucked.cpp"
++        "OteyPianoUGens|OteyPianoUGens/dwgs.cpp,OteyPianoUGens/filter.cpp,OteyPianoUGens/hammer.cpp,OteyPianoUGens/OteyPiano.cpp,OteyPianoUGens/reverb.cpp"
++        # AYUGens carries its own copy of libayemu, at
++        # AYUGens/AY_libayemu — there is nothing to fetch. It was listed
++        # as "needs libayemu" only because the first survey looked for
++        # `.cpp` and ay8912 is a `.c`.
++        "AYUGens|AYUGens/AY_UGen.cpp,AYUGens/AY_libayemu/src/ay8912.c"
++    )
++
++    # --- E9-30: StkUGens and StkInst --------------------------------------
++    #
++    # STK IS VENDORED INSIDE sc3-plugins, at external_libraries/stk. These
++    # two were written down as "needs the STK library" on the strength of
++    # `#include <Clarinet.h>` failing, which was true and misleading: the
++    # header is right there, two directories up, and upstream's own
++    # CMakeLists builds exactly this way when SYSTEM_STK is off.
++    #
++    # The exclusions are upstream's, not invented here: Rt* is RtAudio and
++    # RtMidi, and Inet/Socket/Tcp/Udp/Thread/Mutex/Messager are the
++    # platform plumbing a UGen never reaches. What is left is DSP.
++    #
++    # The instruments read `rawwaves/*.raw` at runtime — 45 files, 348 KB —
++    # and StkInst takes the path as a UGen argument rather than baking one
++    # in, so they are shipped into the page's filesystem by
++    # tools/build-audio-assets.mjs rather than compiled in.
++    if(EXISTS "${SC3_PLUGINS_DIR}/../external_libraries/stk/include/Stk.h")
++        set(STK_DIR "${SC3_PLUGINS_DIR}/../external_libraries/stk")
++        file(GLOB stk_srcs "${STK_DIR}/src/*.cpp")
++        file(GLOB stk_drop
++            "${STK_DIR}/src/Rt*.cpp" "${STK_DIR}/src/Inet*.cpp"
++            "${STK_DIR}/src/Socket.cpp" "${STK_DIR}/src/Tcp*.cpp"
++            "${STK_DIR}/src/UdpSocket.cpp" "${STK_DIR}/src/Thread.cpp"
++            "${STK_DIR}/src/Mutex.cpp" "${STK_DIR}/src/Messager.cpp")
++        list(REMOVE_ITEM stk_srcs ${stk_drop})
++        # ONE archive for the library, shared by both plugins: compiling
++        # eighty files twice would be eighty duplicate symbols as well as
++        # twice the work.
++        add_library(sc3_stklib ${TYPE} ${stk_srcs})
++        target_include_directories(sc3_stklib PUBLIC
++            "${STK_DIR}" "${STK_DIR}/include" "${STK_DIR}/src/include")
++        target_link_libraries(sc3_stklib PRIVATE plugin_common)
++        foreach(stk_plugin StkUGens StkInst)
++            if(stk_plugin STREQUAL "StkUGens")
++                set(stk_src "${SC3_PLUGINS_DIR}/StkUGens/StkAll.cpp")
++            else()
++                set(stk_src "${SC3_PLUGINS_DIR}/StkInst/StkInst.cpp")
++            endif()
++            add_library(sc3_${stk_plugin} ${TYPE} "${stk_src}")
++            target_link_libraries(sc3_${stk_plugin} PRIVATE plugin_common sc3_stklib)
++            target_include_directories(sc3_${stk_plugin} PRIVATE
++                "${SC3_PLUGINS_DIR}/${stk_plugin}")
++            # `gWorld` as well as `ft`: StkInst.cpp and OteyPiano.cpp
++            # both define it, two plugins with one global between them.
++            set_source_files_properties("${stk_src}" PROPERTIES
++                COMPILE_DEFINITIONS "ft=sc3_ft_${stk_plugin};gWorld=sc3_gWorld_${stk_plugin}")
++            list(APPEND plugins sc3_${stk_plugin})
++        endforeach()
++        set(SC3_STK_BUILT TRUE)
++    else()
++        message(STATUS "sc3-plugins: no vendored stk - StkUGens and StkInst left out")
++        set(SC3_STK_BUILT FALSE)
++    endif()
++
++    # E9-29 — the two sets that need fftw, and only when it is built.
++    #
++    # `PitchDetection` carries Tartini, the pitch tracker acrostic, splnkr
++    # and caliper use. Its header picks a backend and there are two:
++    # FFTW, or Apple's vDSP. There is no portable third path to fall back
++    # on, so without fftw these cannot be built at all — which is why they
++    # were the only sets left out for a reason that was not a name clash or
++    # a missing class. norns gets libfftw3 from Debian;
++    # tools/sclang/build-fftw.sh builds ours.
++    if(FFTW3F_LIB AND EXISTS "${FFTW3F_LIB}")
++        message(STATUS "sc3-plugins: fftw3f at ${FFTW3F_LIB}")
++        list(APPEND sc3_plugin_targets
++            "PitchDetection|PitchDetection/PitchDetection.cpp,PitchDetection/Qitch.cpp,PitchDetection/Tartini.cpp"
++            "NCAnalysisUGens|NCAnalysisUGens/LPCAnalysis.cpp,NCAnalysisUGens/LPCAnalyzer.cpp,NCAnalysisUGens/MedianSeparation.cpp,NCAnalysisUGens/NCAnalysis.cpp,NCAnalysisUGens/SMS.cpp,NCAnalysisUGens/TPV.cpp,NCAnalysisUGens/WalshHadamard.cpp,NCAnalysisUGens/WaveletDaub.cpp")
++        set(sc3_fftw_targets PitchDetection NCAnalysisUGens)
++    else()
++        message(STATUS "sc3-plugins: no fftw3f - Tartini, Qitch and NCAnalysis left out")
++        set(sc3_fftw_targets "")
++    endif()
++    foreach(entry ${sc3_plugin_targets})
++        # Commas inside an entry, not semicolons: a semicolon IS CMake's
++        # list separator, so a multi-source entry would be torn apart by
++        # the foreach before this line ever saw it.
++        string(REPLACE "|" ";" parts "${entry}")
++        list(GET parts 0 sc3_name)
++        list(GET parts 1 sc3_srcs_raw)
++        string(REPLACE "," ";" sc3_srcs "${sc3_srcs_raw}")
++        set(sc3_full "")
++        foreach(src ${sc3_srcs})
++            list(APPEND sc3_full "${SC3_PLUGINS_DIR}/${src}")
++        endforeach()
++        add_library(sc3_${sc3_name} ${TYPE} ${sc3_full})
++        target_link_libraries(sc3_${sc3_name} PRIVATE plugin_common)
++        # E9-28: ONE NAME PER TRANSLATION UNIT, because a static link has
++        # one symbol table and these plugins were written for many.
++        #
++        # A plugin says `InterfaceTable* ft;` at file scope. Built as a
++        # shared object — which is how sc3-plugins is built everywhere
++        # else, norns included — each one gets its own. Linked statically,
++        # thirteen of the files added here define that symbol, and so does
++        # SuperCollider's own FFTInterfaceTable.cpp:
++        #
++        #     wasm-ld: error: duplicate symbol: ft
++        #     >>> defined in libsc3_MCLDUGens.a(MCLDFFTUGens.cpp.o)
++        #     >>> defined in libsc3_BhobUGens.a(BhobFFT.cpp.o)
++        #
++        # Most files write `static InterfaceTable* ft;` and never had the
++        # problem; these did not. `-fcommon` was tried first and does
++        # NOTHING here: clang applies it to C only, and these are C++.
++        #
++        # So the name is made unique per file instead. The macro renames
++        # the definition and every use in the same translation unit — SC's
++        # own macros expand to `ft->fRTAlloc(...)`, and a macro's expansion
++        # is rescanned, so those are renamed too and still reach the
++        # variable this file sets in its own `X_Load`. The one place `ft`
++        # is passed rather than dereferenced,
++        # `SCWorld_Allocator alloc(ft, ...)` in MCLDCepstrumUGens.cpp, is
++        # renamed the same way and still passes the same pointer.
++        #
++        # `Mirroring` gets the same treatment: BhobChaos.cpp and
++        # BhobFilt.cpp each define `float Mirroring(float, float, float)`,
++        # two plugins with one helper name between them.
++        # Every name below is one the linker reported twice, each time
++        # because a set keeps its own copy of a helper rather than sharing
++        # one — `evalpoly` is written out in both DWGBowed.cpp and
++        # DWGPlucked.cpp, the psychoacoustic tables `phons`, `contours`,
++        # `eqlbandsizes` and `eqlbandbins` are copied between SCMIRUGens and
++        # BBCut2UGens, and so on. Each file keeps its own, under its own
++        # name. Found by building, not by reading: the list is exactly what
++        # `wasm-ld: error: duplicate symbol` named, and nothing is renamed
++        # on suspicion.
++        set(sc3_uniquify
++            ft Mirroring
++            phons contours eqlbandsizes eqlbandbins
++            evalpoly evalpolyA evalpolyB evalrampedA evalrampedB
++            groupdelay PhaseDelayDerive PhaseIIR ValimakiDispersion
++            complex_divide complex_multiply kill_denormals volcar
++            CircularBuffer CircularBufferBase
++            Nchoose PhaseDelay cmp gWorld)
++        # PER FILE, EXCEPT WHERE A SET SHARES ONE.
++        #
++        # Most sets give every file its own `InterfaceTable* ft`, so a
++        # per-file name is right. OteyPianoUGens does not: `piano.h`
++        # DEFINES it and `dwgs.h`, `hammer.h`, `reverb.h` and `filter.cpp`
++        # say `extern`. Renaming that one per file turns the reference into
++        #
++        #     undefined symbol: sc3_ft_dwgs
++        #
++        # so the set's own name is used there and the four files still
++        # agree with each other, while differing from every other set.
++        # The suffix is the only thing that changes.
++        # Which sets these are was not guessed: it is every set with an
++        # `extern InterfaceTable *ft` anywhere in it, which is the shape
++        # that says "one definition, several users".
++        #
++        # DWGUGens has that `extern` too and is NOT here, because its two
++        # files each `#include "dwglib/DWG.cpp"` and so each carries its
++        # OWN definition: one name per set would make them collide again,
++        # which is what the build said when it was tried.
++        set(sc3_ft_shared_sets OteyPianoUGens PitchDetection NCAnalysisUGens)
++        if(sc3_name IN_LIST sc3_ft_shared_sets)
++            set(one_shared TRUE)
++        else()
++            set(one_shared FALSE)
++        endif()
++        foreach(one_src ${sc3_full})
++            get_filename_component(one_stem "${one_src}" NAME_WE)
++            # A shared set takes the SET's name for every symbol, not just
++            # for `ft`: OteyPianoUGens defines `groupdelay` once, in the
++            # copy of dwglib/DWG.cpp that OteyPiano.cpp includes, and
++            # dwgs.cpp calls it. One name per file breaks that too.
++            if(one_shared)
++                set(one_suffix "${sc3_name}")
++            else()
++                set(one_suffix "${one_stem}")
++            endif()
++            set(one_defs "")
++            foreach(sym ${sc3_uniquify})
++                list(APPEND one_defs "${sym}=sc3_${sym}_${one_suffix}")
++            endforeach()
++            set_source_files_properties("${one_src}" PROPERTIES
++                COMPILE_DEFINITIONS "${one_defs}")
++        endforeach()
++        # Quoted includes find a plugin's own headers next to its .cpp, but
++        # the multi-file sets reach sideways; be explicit.
++        target_include_directories(sc3_${sc3_name} PRIVATE "${SC3_PLUGINS_DIR}/${sc3_name}")
++        if(sc3_name STREQUAL "AYUGens")
++            target_include_directories(sc3_${sc3_name} PRIVATE
++                "${SC3_PLUGINS_DIR}/AYUGens/AY_libayemu/include")
++        endif()
++        if(sc3_name IN_LIST sc3_fftw_targets)
++            target_include_directories(sc3_${sc3_name} PRIVATE "${FFTW3F_INCLUDE}")
++            target_link_libraries(sc3_${sc3_name} PRIVATE "${FFTW3F_LIB}")
++        endif()
++        list(APPEND plugins sc3_${sc3_name})
++    endforeach()
++
++    # The Faust pair, each compiled through its wrapper. The include path
++    # has to reach BOTH the wrapper's own directory and the plugin's, since
++    # the wrapper does `#include "JPverbRaw.cpp"`.
++    if(SC3_FAUST_WRAPPER_DIR AND EXISTS "${SC3_FAUST_WRAPPER_DIR}")
++        foreach(faust_name JPverbRaw GreyholeRaw)
++            add_library(sc3_${faust_name} ${TYPE}
++                "${SC3_FAUST_WRAPPER_DIR}/${faust_name}_static.cpp")
++            target_link_libraries(sc3_${faust_name} PRIVATE plugin_common)
++            target_include_directories(sc3_${faust_name} PRIVATE
++                "${SC3_PLUGINS_DIR}/DEINDUGens"
++                "${SC3_PLUGINS_DIR}/DEINDUGens/include")
++            list(APPEND plugins sc3_${faust_name})
++        endforeach()
++    endif()
++endif()
++
++# --- norns-js E9-36/E9-40: single-plugin repositories -------------------
++#
++# Upstream packs ship one repository per UGen, each with its own CMake and
++# its own `.so`. Here they are all one binary, so they are one list: a
++# name, then the sources, and the set is built like any other plugin.
++#
++# THE PTR OSCILLATORS. `bitters`, `lamination`, `faeng` and
++# `schicksalslied` each bundle an ARM `.so` and copy it into Extensions --
++# which is the half-state E9-33 now refuses, so until this they could not
++# have them at all.
++#
++# FINDING THE SOURCE WAS THE WORK. The scripts' author published one
++# repository per oscillator, and the account was renamed: `ryleelyman`
++# answers 404 and the repositories live under `robbielyman`. GitHub's code
++# search needs a token, so this was found by asking the API who owns
++# `ryleelyman/bitters` -- it answers `robbielyman` -- and listing that
++# account: FormantTriPTR, pulseptr, triangleptr.
++#
++# BYTEBEAT is midouest/bytebeat: one UGen, plus a small lexer and parser
++# for the expression language it evaluates per sample. Those two throw
++# `invalid_argument` on a malformed expression and ByteBeat.cpp catches
++# it, so these three files -- and only these three -- are compiled with
++# `-fexceptions`. Without it emscripten drops the catch and a typo in a
++# bytebeat expression aborts the whole server.
++if(SC_EXTRA_DIR AND EXISTS "${SC_EXTRA_DIR}")
++    message(STATUS "single-plugin repositories: building from ${SC_EXTRA_DIR}")
++    set(extra_targets
++        "FormantTriPTR|FormantTriPTR.cpp"
++        "PulsePTR|PulsePTR.cpp"
++        "TrianglePTR|TrianglePTR.cpp"
++        "ByteBeat|ByteBeat.cpp,lex.cpp,parse.cpp")
++    foreach(entry ${extra_targets})
++        string(REPLACE "|" ";" parts "${entry}")
++        list(GET parts 0 x_name)
++        list(GET parts 1 x_srcs)
++        string(REPLACE "," ";" x_srcs "${x_srcs}")
++        set(x_full "")
++        foreach(src ${x_srcs})
++            list(APPEND x_full "${SC_EXTRA_DIR}/${x_name}/${src}")
++        endforeach()
++        add_library(x_${x_name} ${TYPE} ${x_full})
++        target_link_libraries(x_${x_name} PRIVATE plugin_common)
++        target_include_directories(x_${x_name} PRIVATE "${SC_EXTRA_DIR}/${x_name}")
++        # Each repository has its own file-level `ft`, and one symbol table
++        # cannot hold four of them.
++        set_source_files_properties("${SC_EXTRA_DIR}/${x_name}/${x_name}.cpp"
++            PROPERTIES COMPILE_DEFINITIONS "ft=x_ft_${x_name}")
++        if(x_name STREQUAL "ByteBeat")
++            # -pthread for the same reason the rest of the binary has it:
++            # wasm-ld refuses --shared-memory for an object without the
++            # atomics and bulk-memory features, and the exception tables
++            # -fexceptions emits are exactly such a data segment.
++            target_compile_options(x_${x_name} PRIVATE -fexceptions -pthread)
++        endif()
++        list(APPEND plugins x_${x_name})
++    endforeach()
++endif()
++
++# --- norns-js E9-35: PortedPlugins, compiled IN -------------------------
++#
++# The pack `amenbreak` tries to `wget` from
++# schollz/tapedeck/releases/download/PortedPlugins, which is a binary
++# release built for the Raspberry Pi. The SOURCE is schollz/portedplugins,
++# a fork of madskjeldgaard/portedplugins carrying Fverb2 and XPlayBuf, and
++# it is what this builds from.
++#
++# Seven catalogue scripts wait on it: amenbreak, tapedeck, rachim, twins,
++# Eastwind, graintopia and zxcvbn want `AnalogTape`, `AnalogChew`,
++# `AnalogDegrade`, `AnalogLoss`, `AnalogVintageDistortion`, `Fverb` and
++# `Fverb2`. `VAKorg35`, which docs/11-MISSING.md listed as missing from
++# sc3-plugins, is here too.
++#
++# `odinfilters/*.cpp` holds out-of-line definitions that five of the
++# filters include by header, so it is ONE archive they share rather than a
++# copy each. `mutated/` is not built: Rongs.hpp `#include`s
++# `../mutated/mi-modal.cpp` directly, so compiling it again would be a
++# second copy of the same symbols.
++if(PORTED_PLUGINS_DIR AND EXISTS "${PORTED_PLUGINS_DIR}")
++    message(STATUS "PortedPlugins: building from ${PORTED_PLUGINS_DIR}")
++    add_library(pp_odin ${TYPE}
++        "${PORTED_PLUGINS_DIR}/odinfilters/DiodeFilter.cpp"
++        "${PORTED_PLUGINS_DIR}/odinfilters/Korg35Filter.cpp"
++        "${PORTED_PLUGINS_DIR}/odinfilters/LadderFilter.cpp"
++        "${PORTED_PLUGINS_DIR}/odinfilters/SEMFilter12.cpp"
++        "${PORTED_PLUGINS_DIR}/odinfilters/VAOnePoleFilter.cpp")
++    target_link_libraries(pp_odin PRIVATE plugin_common)
++    # E9-58 — THE OTHER FOURTEEN, which wanted two libraries this build did
++    # not have. `daisysp` for AnalogBassDrum, AnalogSnareDrum, BLOsc,
++    # DCompressor, HarmonicOsc, NeoFormant, NeoVarSawOsc, OscBank,
++    # Resonator, StringVoice, VarShapeOsc, VosimOsc and ZOsc; `Eigen` for
++    # ChowDSP's GenSVF and the Werner filter that includes it. Their own
++    # build downloads both through CPM at configure time, which a wasm
++    # cross-build cannot do; both are vendored under third_party now and
++    # passed in, and a build without them is exactly what it was before.
++    #
++    # No catalogue script was waiting on them — that was measured, and
++    # said so in the commit that left them out. They are here because a
++    # UGen a pack ships and this server does not have is a gap whether or
++    # not somebody has walked into it yet: `scsynth` throws on a SynthDef
++    # naming a UGen it lacks, and with exceptions off that throw takes the
++    # audio thread with it for the rest of the session.
++    if(DAISYSP_DIR AND EXISTS "${DAISYSP_DIR}/Source/daisysp.h")
++        file(GLOB_RECURSE daisysp_srcs "${DAISYSP_DIR}/Source/*.cpp")
++        # DaisySP-LGPL is DaisySP's OWN submodule, and two of these
++        # plugins are inside it: `BLOsc` wants daisysp::BlOsc and
++        # `DCompressor` daisysp::Compressor, both moved out of the MIT
++        # tree into an LGPL-2.1 one. It is a separate licence and so a
++        # separate decision -- recorded in LICENCES.md -- and a
++        # checkout without the submodule simply builds the other eleven.
++        file(GLOB_RECURSE daisysp_lgpl_srcs "${DAISYSP_DIR}/DaisySP-LGPL/Source/*.cpp")
++        list(APPEND daisysp_srcs ${daisysp_lgpl_srcs})
++        add_library(pp_daisysp ${TYPE} ${daisysp_srcs})
++        target_include_directories(pp_daisysp PUBLIC
++            "${DAISYSP_DIR}/Source"
++            "${DAISYSP_DIR}/Source/Control"
++            "${DAISYSP_DIR}/Source/Drums"
++            "${DAISYSP_DIR}/Source/Dynamics"
++            "${DAISYSP_DIR}/Source/Effects"
++            "${DAISYSP_DIR}/Source/Filters"
++            "${DAISYSP_DIR}/Source/Noise"
++            "${DAISYSP_DIR}/Source/PhysicalModeling"
++            "${DAISYSP_DIR}/Source/Sampling"
++            "${DAISYSP_DIR}/Source/Synthesis"
++            "${DAISYSP_DIR}/Source/Utility"
++            "${DAISYSP_DIR}/DaisySP-LGPL/Source"
++            "${DAISYSP_DIR}/DaisySP-LGPL/Source/Control"
++            "${DAISYSP_DIR}/DaisySP-LGPL/Source/Dynamics"
++            "${DAISYSP_DIR}/DaisySP-LGPL/Source/Effects"
++            "${DAISYSP_DIR}/DaisySP-LGPL/Source/Filters"
++            "${DAISYSP_DIR}/DaisySP-LGPL/Source/PhysicalModeling"
++            "${DAISYSP_DIR}/DaisySP-LGPL/Source/Synthesis"
++            "${DAISYSP_DIR}/DaisySP-LGPL/Source/Utility")
++        message(STATUS "PortedPlugins: DaisySP from ${DAISYSP_DIR}")
++        set(pp_daisy_users
++            AnalogBassDrum AnalogSnareDrum BLOsc DCompressor HarmonicOsc
++            NeoFormant NeoVarSawOsc OscBank Resonator StringVoice
++            VarShapeOsc VosimOsc ZOsc)
++    else()
++        message(STATUS "PortedPlugins: no DaisySP, thirteen plugins skipped")
++        set(pp_daisy_users "")
++    endif()
++    set(pp_odin_users VA1Pole VADiodeFilter VAKorg35 VALadder VASEM12)
++    set(pp_targets
++        "AnalogFoldOsc|AnalogFoldOsc/AnalogFoldOsc.cpp,AnalogFoldOsc/buchla259cell.cpp,AnalogFoldOsc/buchla259waveshaper.cpp"
++        "Chen|Chen/Chen.cpp"
++        "ChowDSP|ChowDSP/AnalogChew.cpp,ChowDSP/AnalogDegrade.cpp,ChowDSP/AnalogLoss.cpp,ChowDSP/AnalogPhaser.cpp,ChowDSP/AnalogPhaserMod.cpp,ChowDSP/AnalogPulseShaper.cpp,ChowDSP/AnalogTape.cpp,ChowDSP/AnalogVintageDistortion.cpp,ChowDSP/BaxandallEQ.cpp,ChowDSP/PhasorModal.cpp"
++        "LPG|LPG/LPG.cpp"
++        "LockhartWavefolder|LockhartWavefolder/LockhartCell.cpp,LockhartWavefolder/LockhartWavefolder.cpp"
++        "NonlinearFilter|NonlinearFilter/EQFilter.cpp,NonlinearFilter/NonlinearFilter.cpp"
++        "Rongs|Rongs/Rongs.cpp"
++        "VA1Pole|VA1Pole/VA1Pole.cpp"
++        "VADiodeFilter|VADiodeFilter/VADiodeFilter.cpp"
++        "VAKorg35|VAKorg35/VAKorg35.cpp"
++        "VALadder|VALadder/VALadder.cpp"
++        "VASEM12|VASEM12/VASEM12.cpp"
++        "VadimFilter|VadimFilter/VadimFilter.cpp"
++        "XPlayBuf|XPlayBuf/XPlayBuf.cpp"
++    )
++    # E9-58 — the DaisySP ones, one source each, appended only when the
++    # library is there so the list above stays the no-dependency build.
++    foreach(pp_d ${pp_daisy_users})
++        list(APPEND pp_targets "${pp_d}|${pp_d}/${pp_d}.cpp")
++    endforeach()
++    # Werner lives inside ChowDSP's directory and is the only thing in this
++    # pack that needs Eigen; ChowDSP's own target above does not include it.
++    if(EIGEN_DIR AND EXISTS "${EIGEN_DIR}/Eigen/Dense")
++        list(APPEND pp_targets "Werner|ChowDSP/Werner.cpp")
++        message(STATUS "PortedPlugins: Eigen from ${EIGEN_DIR}")
++    else()
++        message(STATUS "PortedPlugins: no Eigen, Werner skipped")
++    endif()
++    foreach(entry ${pp_targets})
++        string(REPLACE "|" ";" parts "${entry}")
++        list(GET parts 0 pp_name)
++        list(GET parts 1 pp_srcs_raw)
++        string(REPLACE "," ";" pp_srcs "${pp_srcs_raw}")
++        set(pp_full "")
++        foreach(src ${pp_srcs})
++            list(APPEND pp_full "${PORTED_PLUGINS_DIR}/${src}")
++        endforeach()
++        add_library(pp_${pp_name} ${TYPE} ${pp_full})
++        target_link_libraries(pp_${pp_name} PRIVATE plugin_common)
++        target_include_directories(pp_${pp_name} PRIVATE
++            "${PORTED_PLUGINS_DIR}/${pp_name}" "${PORTED_PLUGINS_DIR}")
++        if(pp_name IN_LIST pp_odin_users)
++            target_link_libraries(pp_${pp_name} PRIVATE pp_odin)
++        endif()
++        if(pp_name IN_LIST pp_daisy_users)
++            target_link_libraries(pp_${pp_name} PRIVATE pp_daisysp)
++            # BLOsc and DCompressor name daisysp::BlOsc and
++            # daisysp::Compressor, which today's DaisySP keeps in its
++            # LGPL submodule — and `daisysp.h`, the only header they
++            # include, does not pull that one in. A forced include puts
++            # the declarations where the plugin expects them without
++            # editing somebody else's source.
++            if(pp_name STREQUAL "BLOsc" OR pp_name STREQUAL "DCompressor")
++                target_compile_options(pp_${pp_name} PRIVATE
++                    "-include" "daisysp-lgpl.h")
++            endif()
++        endif()
++        if(pp_name STREQUAL "Werner")
++            target_include_directories(pp_${pp_name} PRIVATE
++                "${EIGEN_DIR}" "${PORTED_PLUGINS_DIR}/ChowDSP")
++        endif()
++        # Two of them write a non-static `InterfaceTable* ft`, the same
++        # shape sc3-plugins had. One name per file, as there.
++        # `HysteresisProcessing.cpp` is `#include`d by both AnalogTape.hpp
++        # and AnalogLoss.hpp — the same shape as DWGUGens — so it is not
++        # compiled on its own, and the class it defines gets one name per
++        # translation unit. Found by the linker, which reported it twice.
++        set(pp_uniquify ft HysteresisProcessing SolverType)
++        foreach(one_src ${pp_full})
++            get_filename_component(one_stem "${one_src}" NAME_WE)
++            set(one_defs "")
++            foreach(sym ${pp_uniquify})
++                list(APPEND one_defs "${sym}=pp_${sym}_${one_stem}")
++            endforeach()
++            set_source_files_properties("${one_src}" PROPERTIES
++                COMPILE_DEFINITIONS "${one_defs}")
++        endforeach()
++        list(APPEND plugins pp_${pp_name})
++    endforeach()
++
++    # Fverb and Fverb2 are Faust-generated: a bare `load(InterfaceTable*)`
++    # and a `class mydsp` at global scope, which is the shape that needs a
++    # namespace of its own. Same wrappers as JPverb and Greyhole — see
++    # tools/sclang/sc3-faust for why a plain link would silently give one
++    # plugin the other's DSP.
++    if(SC3_FAUST_WRAPPER_DIR AND EXISTS "${SC3_FAUST_WRAPPER_DIR}/Fverb_static.cpp")
++        foreach(pp_faust Fverb Fverb2)
++            add_library(pp_${pp_faust} ${TYPE}
++                "${SC3_FAUST_WRAPPER_DIR}/${pp_faust}_static.cpp")
++            target_link_libraries(pp_${pp_faust} PRIVATE plugin_common)
++            target_include_directories(pp_${pp_faust} PRIVATE
++                "${PORTED_PLUGINS_DIR}/${pp_faust}")
++            list(APPEND plugins pp_${pp_faust})
++        endforeach()
++    endif()
++endif()
++
++# --- norns-js: mi-UGens, compiled IN ------------------------------------
++#
++# The Mutable Instruments ports (github.com/v7b1/mi-UGens). A SEPARATE pack
++# from sc3-plugins with its own layout: one CMake project per UGen under
++# `projects/`, each listing the subset of the vendored `eurorack` tree it
++# needs. Its own build makes shared MODULES, which wasm cannot dlopen, so
++# the source lists are reproduced here as static libraries.
++#
++# Five of the twelve. `mi-eng`'s five scripts are one engine each and two of
++# Pedalboard's pedals use MiClouds and MiRings. MiBraids is the one that
++# `#include "samplerate.h"`: it runs its oscillator at a fixed 96 kHz and
++# resamples down to whatever the server is at, so it needs a converter that
++# SuperCollider does not vendor. mi-UGens carries libsamplerate as its own
++# submodule, and that is what is built below.
++#
++# STMLIB IS BUILT ONCE. Every project's CMakeLists lists the same three
++# files -- `dsp/atan.cc`, `dsp/units.cc`, `utils/random.cc` -- which is fine
++# when each becomes its own loadable module and is a duplicate-symbol
++# collision when five static libraries go into one binary. One shared target
++# instead; the plugins' own DSP stays per-plugin, where C++ namespaces
++# (braids::, plaits::, rings::, clouds::, elements::) keep it apart.
++#
++# `-DTEST` is upstream's own switch for "no ARM assembly", which is what
++# makes this buildable for wasm at all.
++if(MI_UGENS_DIR AND EXISTS "${MI_UGENS_DIR}")
++    message(STATUS "mi-UGens: building from ${MI_UGENS_DIR}")
++    set(MI_EURORACK "${MI_UGENS_DIR}/eurorack")
++
++    add_library(mi_stmlib ${TYPE}
++        "${MI_EURORACK}/stmlib/dsp/atan.cc"
++        "${MI_EURORACK}/stmlib/dsp/units.cc"
++        "${MI_EURORACK}/stmlib/utils/random.cc")
++    target_compile_definitions(mi_stmlib PUBLIC TEST)
++    target_include_directories(mi_stmlib PUBLIC "${MI_EURORACK}")
++    target_link_libraries(mi_stmlib PRIVATE plugin_common)
++
++    # LIBSAMPLERATE, AND ONLY THE CONVERTER MiBraids ASKS FOR.
++    #
++    # Its own CMake runs feature probes (endianness, float-to-int clipping,
++    # symbol visibility) to produce a `config.h`. None of those are open
++    # questions for wasm32, and running a second CMake project inside this
++    # one to answer them would also build its tests and its shared library.
++    # So the header is written out here, with the answers stated.
++    #
++    # ENABLE_SINC_FAST_CONVERTER AND NOTHING ELSE. The three sinc converters
++    # differ only in the size of their coefficient table, and the table is a
++    # static array compiled in: fastest is 73 KB of source, medium 614 KB,
++    # best 9304 KB. `MiBraids.cpp:148` sets `SRC_SINC_FASTEST` and never
++    # offers the others, so enabling them would compile 9.9 MB of tables
++    # into the wasm for a quality setting nothing can select. `src_sinc.c`
++    # includes each table behind its own guard, which is what makes this
++    # work.
++    set(MI_SR_DIR "${MI_UGENS_DIR}/projects/MiBraids/libsamplerate")
++    if(EXISTS "${MI_SR_DIR}/src/samplerate.c")
++        set(MI_SR_CONFIG "${CMAKE_CURRENT_BINARY_DIR}/mi_samplerate_config")
++        file(WRITE "${MI_SR_CONFIG}/config.h" [[
++/* Written by the norns-js patch, in place of libsamplerate's own CMake. */
++#define PACKAGE "libsamplerate"
++#define VERSION "0.2.2"
++/* wasm32 traps on an out-of-range float-to-int conversion rather than
++   saturating, so the explicit range checks must stay in. */
++#define CPU_CLIPS_NEGATIVE 0
++#define CPU_CLIPS_POSITIVE 0
++#define CPU_IS_BIG_ENDIAN 0
++#define CPU_IS_LITTLE_ENDIAN 1
++#define HAVE_LRINT 1
++#define HAVE_LRINTF 1
++#define HAVE_STDBOOL_H 1
++#define HAVE_STDINT_H 1
++#define HAVE_UNISTD_H 1
++#define SIZEOF_INT 4
++#define SIZEOF_LONG 4
++/* The fastest sinc converter only -- see the comment in CMakeLists. */
++#define ENABLE_SINC_FAST_CONVERTER
++]])
++        add_library(mi_samplerate ${TYPE}
++            "${MI_SR_DIR}/src/samplerate.c"
++            "${MI_SR_DIR}/src/src_linear.c"
++            "${MI_SR_DIR}/src/src_sinc.c"
++            "${MI_SR_DIR}/src/src_zoh.c")
++        # HAVE_CONFIG_H, or the header above is never read: every source
++        # opens with `#ifdef HAVE_CONFIG_H / #include "config.h"`, and
++        # without it the build gets as far as `bool` and `PACKAGE` being
++        # undeclared -- two symptoms of one missing switch.
++        target_compile_definitions(mi_samplerate PRIVATE HAVE_CONFIG_H)
++        target_include_directories(mi_samplerate PUBLIC
++            "${MI_SR_DIR}/include" "${MI_SR_CONFIG}")
++        set(mi_braids_entry
++            "MiBraids|braids|analog_oscillator.cc,digital_oscillator.cc,macro_oscillator.cc,quantizer.cc,resources.cc")
++    else()
++        message(STATUS "mi-UGens: no libsamplerate submodule, MiBraids skipped")
++        set(mi_braids_entry "")
++    endif()
++
++    set(mi_ugen_targets
++        "MiElements|elements|dsp/exciter.cc,dsp/multistage_envelope.cc,dsp/ominous_voice.cc,dsp/part.cc,dsp/resonator.cc,dsp/string.cc,dsp/tube.cc,dsp/voice.cc,resources.cc"
++        "MiRings|rings|dsp/fm_voice.cc,dsp/part.cc,dsp/resonator.cc,dsp/string.cc,dsp/string_synth_part.cc,resources.cc"
++        "MiClouds|clouds|dsp/correlator.cc,dsp/granular_processor.cc,dsp/mu_law.cc,dsp/pvoc/frame_transformation.cc,dsp/pvoc/phase_vocoder.cc,dsp/pvoc/stft.cc,resources.cc"
++        "MiPlaits|plaits|dsp/chords/chord_bank.cc,dsp/engine/additive_engine.cc,dsp/engine/bass_drum_engine.cc,dsp/engine/chord_engine.cc,dsp/engine/fm_engine.cc,dsp/engine/grain_engine.cc,dsp/engine/hi_hat_engine.cc,dsp/engine/modal_engine.cc,dsp/engine/noise_engine.cc,dsp/engine/particle_engine.cc,dsp/engine/snare_drum_engine.cc,dsp/engine/speech_engine.cc,dsp/engine/string_engine.cc,dsp/engine/swarm_engine.cc,dsp/engine/virtual_analog_engine.cc,dsp/engine/waveshaping_engine.cc,dsp/engine/wavetable_engine.cc,dsp/engine2/chiptune_engine.cc,dsp/engine2/phase_distortion_engine.cc,dsp/engine2/six_op_engine.cc,dsp/engine2/string_machine_engine.cc,dsp/engine2/virtual_analog_vcf_engine.cc,dsp/engine2/wave_terrain_engine.cc,dsp/fm/algorithms.cc,dsp/fm/dx_units.cc,dsp/physical_modelling/modal_voice.cc,dsp/physical_modelling/resonator.cc,dsp/physical_modelling/string.cc,dsp/physical_modelling/string_voice.cc,dsp/speech/lpc_speech_synth.cc,dsp/speech/lpc_speech_synth_controller.cc,dsp/speech/lpc_speech_synth_phonemes.cc,dsp/speech/lpc_speech_synth_words.cc,dsp/speech/naive_speech_synth.cc,dsp/speech/sam_speech_synth.cc,dsp/voice.cc,resources.cc"
++        # E9-36 — four more of the twelve. `terrarium` wants MiRipples and
++        # MiVerb; MiMu and MiOmi cost one translation unit each and are
++        # here for parity with the pack.
++        #
++        # MIBEADS IS NOT HERE AND CANNOT BE: terrarium asks for it, and
++        # there is no MiBeads in v7b1/mi-UGens — not in our checkout and
++        # not upstream, which the GitHub contents API was asked directly.
++        # terrarium installs from a `norns-mi-UGens` release built
++        # elsewhere; whatever that carries, this pack does not.
++        #
++        # MiRipples and MiVerb are their own shape: header-only beside one
++        # `.cpp`, with their includes inside the project rather than in
++        # `eurorack`. They take an empty source list and an extra include
++        # directory below.
++        # E9-38 — MiBeads, which `terrarium` asks for and which E9-36 said
++        # could not be built. That was wrong, and the correction is worth
++        # recording: there is no MiBeads in v7b1/mi-UGens' MAIN, which is
++        # all that was checked — it lives in PULL REQUEST #24, still open.
++        # `patches/mi-UGens.patch` is that PR, applied.
++        "MiBeads|beads|dsp/delay_clock.cc,dsp/delay_controller.cc,dsp/mu_law.cc,dsp/processor.cc,dsp/synth.cc,dsp/trigger_generator.cc,resources.cc"
++        # E9-58 — the last three of the thirteen in this checkout. They were
++        # left out for want of a caller, not for want of a way: each one is
++        # the plain shape the loop above already takes. MiGrids reaches
++        # across into `avrlib` for its PRNG, which is a relative path rather
++        # than a second entry — its own CMakeLists does the same with two
++        # variables.
++        "MiTides|tides2|poly_slope_generator.cc,ramp_extractor.cc,resources.cc"
++        "MiWarps|warps|dsp/filter_bank.cc,dsp/modulator.cc,dsp/oscillator.cc,dsp/vocoder.cc,resources.cc"
++        "MiGrids|grids|clock.cc,pattern_generator.cc,resources.cc,../avrlib/random.cc"
++    )
++    if(mi_braids_entry)
++        list(APPEND mi_ugen_targets "${mi_braids_entry}")
++    endif()
++    foreach(entry ${mi_ugen_targets})
++        # Commas inside an entry, as in the sc3 block above: a semicolon is
++        # CMake's own list separator and would tear an entry apart.
++        string(REPLACE "|" ";" parts "${entry}")
++        list(GET parts 0 mi_name)
++        list(GET parts 1 mi_dir)
++        list(GET parts 2 mi_srcs_raw)
++        string(REPLACE "," ";" mi_srcs "${mi_srcs_raw}")
++        set(mi_full "${MI_UGENS_DIR}/projects/${mi_name}/${mi_name}.cpp")
++        foreach(src ${mi_srcs})
++            list(APPEND mi_full "${MI_EURORACK}/${mi_dir}/${src}")
++        endforeach()
++        add_library(mi_${mi_name} ${TYPE} ${mi_full})
++        target_compile_definitions(mi_${mi_name} PRIVATE TEST)
++        target_include_directories(mi_${mi_name} PRIVATE "${MI_EURORACK}")
++        target_link_libraries(mi_${mi_name} PRIVATE plugin_common mi_stmlib)
++        list(APPEND plugins mi_${mi_name})
++    endforeach()
++
++    # E9-36 — four projects with a shape of their own.
++    #
++    # The loop above takes a project whose extra sources live in
++    # `eurorack/<dir>`. These four do not: MiRipples carries a vendored VCV
++    # Rack tree, MiVerb its own `include/`, MiOmi its own `mi/`, and MiMu is
++    # one file. Bending the loop to cover them would have made it describe
++    # none of them clearly, so they are listed with what they actually need.
++    #
++    # MIBEADS IS NOT HERE AND CANNOT BE: `terrarium` asks for it, and there
++    # is no MiBeads in v7b1/mi-UGens — not in this checkout and not
++    # upstream, which the GitHub contents API was asked directly. terrarium
++    # installs from a `norns-mi-UGens` release built elsewhere.
++    set(mi_own
++        "MiRipples|"
++        "MiVerb|"
++        "MiMu|"
++        "MiOmi|mi/omi/dsp/multistage_envelope.cc,mi/omi/dsp/ominous_voice.cc,mi/omi/dsp/part.cc,mi/omi/resources.cc")
++    foreach(entry ${mi_own})
++        string(REPLACE "|" ";" parts "${entry};")
++        list(GET parts 0 mi_name)
++        list(LENGTH parts mi_n)
++        set(mi_extra_srcs "")
++        if(mi_n GREATER 1)
++            list(GET parts 1 mi_raw)
++            string(REPLACE "," ";" mi_extra_srcs "${mi_raw}")
++        endif()
++        set(mi_full "${MI_UGENS_DIR}/projects/${mi_name}/${mi_name}.cpp")
++        foreach(src ${mi_extra_srcs})
++            list(APPEND mi_full "${MI_UGENS_DIR}/projects/${mi_name}/${src}")
++        endforeach()
++        add_library(mi_${mi_name} ${TYPE} ${mi_full})
++        target_compile_definitions(mi_${mi_name} PRIVATE TEST)
++        target_link_libraries(mi_${mi_name} PRIVATE plugin_common mi_stmlib)
++        target_include_directories(mi_${mi_name} PRIVATE
++            "${MI_EURORACK}"
++            "${MI_UGENS_DIR}/projects/${mi_name}"
++            "${MI_UGENS_DIR}/projects/${mi_name}/include"
++            "${MI_UGENS_DIR}/projects/${mi_name}/mi"
++            "${MI_UGENS_DIR}/projects/${mi_name}/vcvrack"
++            "${MI_UGENS_DIR}/projects/${mi_name}/vcvrack/include"
++            # MiRipples includes <simde/x86/sse4.2.h>: SIMD-everywhere, VCV
++            # Rack's portable stand-in for the x86 intrinsics. It is exactly
++            # the right thing for wasm, and it lives one level up from the
++            # name in the include.
++            "${MI_UGENS_DIR}/projects/${mi_name}/vcvrack/dep")
++        list(APPEND plugins mi_${mi_name})
++    endforeach()
++    # MiBraids is the only one of the five with a dependency of its own.
++    # The include directories ride along: they are PUBLIC on mi_samplerate.
++    if(TARGET mi_MiBraids)
++        target_link_libraries(mi_MiBraids PRIVATE mi_samplerate)
++    endif()
++endif()
++
+ # BelaUGens
+ 
+ if(AUDIOAPI STREQUAL bela)
+diff --git a/server/plugins/SC_StaticPlugins.h b/server/plugins/SC_StaticPlugins.h
+index abaaa78fffc6c0a48e6a0993b98ae9b523afd00c..ed93335b4a8328d4198d63caa26eedd14d7871f0 100644
+--- a/server/plugins/SC_StaticPlugins.h
++++ b/server/plugins/SC_StaticPlugins.h
+@@ -52,9 +52,223 @@ void Test_Load(InterfaceTable* table);
+ void PhysicalModeling_Load(InterfaceTable* table);
+ void Demand_Load(InterfaceTable* table);
+ void DynNoise_Load(InterfaceTable* table);
++
++// norns-js: COMPILED BUT NEVER REGISTERED. These three are in the plugin
++// list in server/plugins/CMakeLists.txt and their objects are linked in,
++// but their `X_Load` was missing from this file -- upstream's static list
++// drifted from its build list. On a dynamic build it does not show: the
++// plugins are .so files and the loader finds them by scanning a directory.
++//
++// In wasm it is fatal, not merely missing. scsynth THROWS on a SynthDef
++// naming a UGen it does not have, this build has exceptions off, so the
++// throw aborts the thread that handles /d_recv -- and that thread never
++// comes back. From then on no SynthDef loads, no poll reports and nothing
++// sounds, for the rest of the session, while the audio thread keeps
++// running and the server keeps answering /status.
++//
++// Measured: one `GbmanN` in `mi-eng/texture-c` killed the server 19 scripts
++// into a 40-script run, and every script after it was dead on arrival.
++// UnpackFFTUGens is NOT here, and that one is not an oversight: it defines
++// a global `ft` that collides with FFTInterfaceTable.cpp's when both are
++// static, and the link fails with "duplicate symbol: ft". Nothing under
++// ~/dust/code uses UnpackFFT, PackFFT or Unpack1FFT -- measured -- so the
++// cost of leaving it out is known and small.
++void Chaos_Load(InterfaceTable* table);
++void DemoUGens_Load(InterfaceTable* table);
+ void FFT_UGens_Load(InterfaceTable* table);
+ void iPhone_Load(InterfaceTable* table);
+ 
++// norns-js: sc3-plugins, linked in because wasm has no dlopen. The names are
++// the plugins' own `PluginLoad(X)` arguments, which is why DistortionUGens
++// is called Ladspa — upstream's copy-paste, and the symbol is just a name.
++#    ifdef SC3_PLUGINS
++void Ladspa_Load(InterfaceTable* table); // DistortionUGens: Decimator, ...
++void TJUgens_Load(InterfaceTable* table); // DFM1
++void Blackrain_Load(InterfaceTable* table); // SVF
++void Mda_Load(InterfaceTable* table); // MdaPiano
++void Bat_Load(InterfaceTable* table); // Coyote, the onset detector oooooo uses
++void SLUGens_Load(InterfaceTable* table); // EnvFollow, which Pedalboard uses
++
++// E9-28 — the rest of what norns has. norns builds the WHOLE of
++// sc3-plugins, so every name here is one a catalogue script may use and
++// get on hardware. The six above were picked from the 35 bundled scripts;
++// these were picked by counting all 354.
++// AntiAliasingOscillators — DPW3Tri, and the rest of the family
++void AntiAliasingOscillators_Load(InterfaceTable* table);
++// MCLDUGens — SawDPW, ArrayMin/Max, WaveLoss, FFTSubbandPower
++void MCLDBuffer_Load(InterfaceTable* table);
++void MCLDCepstrum_Load(InterfaceTable* table);
++void MCLDChaos_Load(InterfaceTable* table);
++void MCLDDistortion_Load(InterfaceTable* table);
++void MCLDFFT_Load(InterfaceTable* table);
++void MCLDFilter_Load(InterfaceTable* table);
++void MCLDGetEnv_Load(InterfaceTable* table);
++void MCLDOsc_Load(InterfaceTable* table);
++void MCLDPoll_Load(InterfaceTable* table);
++void MCLDSOM_Load(InterfaceTable* table);
++void MCLDSparseUGens_Load(InterfaceTable* table);
++void MCLDTree_Load(InterfaceTable* table);
++void MCLDTriggeredStats_Load(InterfaceTable* table);
++// BhobUGens — MoogLadder, RLPFD, LFBrownNoise0
++void BhobChaos_Load(InterfaceTable* table);
++void BhobPV_Load(InterfaceTable* table);
++void BhobFilt_Load(InterfaceTable* table);
++void BhobGrains_Load(InterfaceTable* table);
++void BhobNoise_Load(InterfaceTable* table);
++// SkUGens — FM7
++void FM7_Load(InterfaceTable* table);
++// SCMIRUGens — OnsetStatistics
++void AttackSlope_Load(InterfaceTable* table);
++void BeatStatistics_Load(InterfaceTable* table);
++void Chromagram_Load(InterfaceTable* table);
++void FeatureSave_Load(InterfaceTable* table);
++void KeyClarity_Load(InterfaceTable* table);
++void KeyMode_Load(InterfaceTable* table);
++void OnsetStatistics_Load(InterfaceTable* table);
++void SensoryDissonance_Load(InterfaceTable* table);
++// JoshUGens — PV_Freeze, WarpZ
++void JoshAmbi_Load(InterfaceTable* table);
++void JoshGrain_Load(InterfaceTable* table);
++void JoshPV_Load(InterfaceTable* table);
++void Josh_Load(InterfaceTable* table);
++void PermUGens_Load(InterfaceTable* table);
++// BerlachUGens — BLBufRd
++void Berlach_Load(InterfaceTable* table);
++// LoopBufUGens — LoopBuf
++void LoopBuf_Load(InterfaceTable* table);
++// NHUGens — NHHall
++void NHUGens_Load(InterfaceTable* table);
++// RFWUGens — AverageOutput
++void RFW_Load(InterfaceTable* table);
++// and the rest of the sets that build, for parity with norns
++void AuditoryModeling_Load(InterfaceTable* table);
++void BBCut2UGens_Load(InterfaceTable* table);
++void DrumTrack_Load(InterfaceTable* table);
++void Betablocker_Load(InterfaceTable* table);
++void Concat_Load(InterfaceTable* table);
++void Membrane_Load(InterfaceTable* table);
++void QuantityUGens_Load(InterfaceTable* table);
++void RMEQSuite_Load(InterfaceTable* table);
++void Summer_Load(InterfaceTable* table);
++void TagSystem_Load(InterfaceTable* table);
++void VBAP_Load(InterfaceTable* table);
++void VOSIM_Load(InterfaceTable* table);
++// E9-29: renamed at the source to stop clashing — see the CMakeLists.
++void Sc3ChaosNoiseRing_Load(InterfaceTable* table);
++void Sc3ChaosPredPrey_Load(InterfaceTable* table);
++void GlitchFilter_Load(InterfaceTable* table);
++void NeuromodulesTagSystem_Load(InterfaceTable* table);
++void DWGBowed_Load(InterfaceTable* table);
++void DWGPlucked_Load(InterfaceTable* table);
++void OteyPianoStrings_Load(InterfaceTable* table);
++void AY_Load(InterfaceTable* table);
++// StkUGens and StkInst, from the STK vendored inside sc3-plugins.
++#        ifdef SC3_STK
++void Stk_Load(InterfaceTable* table);
++void StkUnit_Load(InterfaceTable* table);
++#        endif
++// The two that need fftw. `SC3_FFTW` is defined by the CMakeLists only
++// when a libfftw3f.a was found, so a build without one is exactly what it
++// was before.
++#        ifdef SC3_FFTW
++void PitchDetection_Load(InterfaceTable* table);
++void NCAnalysis_Load(InterfaceTable* table);
++#        endif
++#        ifdef SC3_FAUST_PLUGINS
++// Faust-generated, wrapped one namespace each by
++// tools/sclang/sc3-faust/*.cpp — see the comment there for why.
++void JPverbRaw_Load(InterfaceTable* table);
++void GreyholeRaw_Load(InterfaceTable* table);
++#        endif
++#    endif
++
++// norns-js E9-36/E9-40: the single-plugin repositories, one directory each.
++#    ifdef SC_EXTRA_PLUGINS
++void FormantTriPTRUGens_Load(InterfaceTable* table);
++void PulsePTRUGens_Load(InterfaceTable* table);
++void TrianglePTRUGens_Load(InterfaceTable* table);
++void ByteBeat_Load(InterfaceTable* table);
++#    endif
++
++// norns-js E9-35: PortedPlugins. The pack seven catalogue scripts wait on
++// — AnalogTape, AnalogChew, AnalogDegrade, AnalogLoss,
++// AnalogVintageDistortion, Fverb and Fverb2 — built from
++// schollz/portedplugins rather than fetched as a Raspberry Pi binary.
++#    ifdef PORTED_PLUGINS
++void AnalogChewUGens_Load(InterfaceTable* table);
++void AnalogDegradeUGens_Load(InterfaceTable* table);
++void AnalogFoldOscUGens_Load(InterfaceTable* table);
++void AnalogLossUGens_Load(InterfaceTable* table);
++void AnalogPhaserModUGens_Load(InterfaceTable* table);
++void AnalogPhaserUGens_Load(InterfaceTable* table);
++void AnalogPulseShaperUGens_Load(InterfaceTable* table);
++void AnalogTapeUGens_Load(InterfaceTable* table);
++void AnalogVintageDistortionUGens_Load(InterfaceTable* table);
++void ChenUGens_Load(InterfaceTable* table);
++void LPGUGens_Load(InterfaceTable* table);
++void LockhartWavefolderUGens_Load(InterfaceTable* table);
++void NonlinearFilterUGens_Load(InterfaceTable* table);
++void PhasorModalUGens_Load(InterfaceTable* table);
++void RongsUGens_Load(InterfaceTable* table);
++void VA1PoleUGens_Load(InterfaceTable* table);
++void VADiodeFilterUGens_Load(InterfaceTable* table);
++void VAKorg35UGens_Load(InterfaceTable* table);
++void VALadderUGens_Load(InterfaceTable* table);
++void VASEM12UGens_Load(InterfaceTable* table);
++void VadimFilterUGens_Load(InterfaceTable* table);
++void XPlayBufUGens_Load(InterfaceTable* table);
++void Fverb_Load(InterfaceTable* table);
++void Fverb2_Load(InterfaceTable* table);
++// E9-58 — the thirteen that want DaisySP, and Werner which wants Eigen.
++// Both libraries are vendored under third_party and passed in; without
++// them the plugins are not built and these must not be declared, or the
++// link fails on a symbol nothing defines.
++#        ifdef PP_DAISYSP
++void AnalogBassDrumUGens_Load(InterfaceTable* table);
++void AnalogSnareDrumUGens_Load(InterfaceTable* table);
++void BLOscUGens_Load(InterfaceTable* table);
++void DCompressorUGens_Load(InterfaceTable* table);
++void HarmonicOscUGens_Load(InterfaceTable* table);
++void NeoFormantUGens_Load(InterfaceTable* table);
++void NeoVarSawOscUGens_Load(InterfaceTable* table);
++void OscBankUGens_Load(InterfaceTable* table);
++void ResonatorUGens_Load(InterfaceTable* table);
++void StringVoiceUGens_Load(InterfaceTable* table);
++void VarShapeOscUGens_Load(InterfaceTable* table);
++void VosimOscUGens_Load(InterfaceTable* table);
++void ZOscUGens_Load(InterfaceTable* table);
++#        endif
++#        ifdef PP_EIGEN
++void WernerUGens_Load(InterfaceTable* table);
++#        endif
++#    endif
++
++// norns-js: mi-UGens, the Mutable Instruments ports. Same reason as above --
++// no dlopen in wasm. Each name is the project's own `PluginLoad(X)`.
++#    ifdef MI_UGENS
++void MiElements_Load(InterfaceTable* table);
++void MiRings_Load(InterfaceTable* table);
++void MiClouds_Load(InterfaceTable* table);
++void MiPlaits_Load(InterfaceTable* table);
++// E9-36: four more of the twelve. MiBeads is NOT among them — there is no
++// MiBeads in v7b1/mi-UGens, here or upstream.
++void MiBeads_Load(InterfaceTable* table);
++void MiRipples_Load(InterfaceTable* table);
++void MiVerb_Load(InterfaceTable* table);
++void MiMu_Load(InterfaceTable* table);
++void MiOmi_Load(InterfaceTable* table);
++// E9-58 — the last three in the checkout, left out until now for want of
++// a caller rather than for want of a way.
++void MiTides_Load(InterfaceTable* table);
++void MiWarps_Load(InterfaceTable* table);
++void MiGrids_Load(InterfaceTable* table);
++// MiBraids resamples with libsamplerate, which mi-UGens carries as a
++// submodule of its own -- so it is here only when that submodule is.
++#        ifdef MI_BRAIDS
++void MiBraids_Load(InterfaceTable* table);
++#        endif
++#    endif
++
+ #    ifndef NO_LIBSNDFILE
+ void DiskIO_Unload();
+ #    endif
+@@ -91,6 +305,153 @@ void loadStaticPlugins(InterfaceTable* table) {
+     iPhone_Load(table);
+ #    endif
+     FFT_UGens_Load(table);
++    Chaos_Load(table);
++    DemoUGens_Load(table);
++#    ifdef SC3_PLUGINS
++    Ladspa_Load(table);
++    TJUgens_Load(table);
++    Blackrain_Load(table);
++    Mda_Load(table);
++    Bat_Load(table);
++    SLUGens_Load(table);
++    AntiAliasingOscillators_Load(table);
++    MCLDBuffer_Load(table);
++    MCLDCepstrum_Load(table);
++    MCLDChaos_Load(table);
++    MCLDDistortion_Load(table);
++    MCLDFFT_Load(table);
++    MCLDFilter_Load(table);
++    MCLDGetEnv_Load(table);
++    MCLDOsc_Load(table);
++    MCLDPoll_Load(table);
++    MCLDSOM_Load(table);
++    MCLDSparseUGens_Load(table);
++    MCLDTree_Load(table);
++    MCLDTriggeredStats_Load(table);
++    BhobChaos_Load(table);
++    BhobPV_Load(table);
++    BhobFilt_Load(table);
++    BhobGrains_Load(table);
++    BhobNoise_Load(table);
++    FM7_Load(table);
++    AttackSlope_Load(table);
++    BeatStatistics_Load(table);
++    Chromagram_Load(table);
++    FeatureSave_Load(table);
++    KeyClarity_Load(table);
++    KeyMode_Load(table);
++    OnsetStatistics_Load(table);
++    SensoryDissonance_Load(table);
++    JoshAmbi_Load(table);
++    JoshGrain_Load(table);
++    JoshPV_Load(table);
++    Josh_Load(table);
++    PermUGens_Load(table);
++    Berlach_Load(table);
++    LoopBuf_Load(table);
++    NHUGens_Load(table);
++    RFW_Load(table);
++    AuditoryModeling_Load(table);
++    BBCut2UGens_Load(table);
++    DrumTrack_Load(table);
++    Betablocker_Load(table);
++    Concat_Load(table);
++    Membrane_Load(table);
++    QuantityUGens_Load(table);
++    RMEQSuite_Load(table);
++    Summer_Load(table);
++    TagSystem_Load(table);
++    VBAP_Load(table);
++    VOSIM_Load(table);
++    Sc3ChaosNoiseRing_Load(table);
++    Sc3ChaosPredPrey_Load(table);
++    GlitchFilter_Load(table);
++    NeuromodulesTagSystem_Load(table);
++    DWGBowed_Load(table);
++    DWGPlucked_Load(table);
++    OteyPianoStrings_Load(table);
++    AY_Load(table);
++#        ifdef SC3_STK
++    Stk_Load(table);
++    StkUnit_Load(table);
++#        endif
++#        ifdef SC3_FFTW
++    PitchDetection_Load(table);
++    NCAnalysis_Load(table);
++#        endif
++#        ifdef SC3_FAUST_PLUGINS
++    JPverbRaw_Load(table);
++    GreyholeRaw_Load(table);
++#        endif
++#    endif
++#    ifdef SC_EXTRA_PLUGINS
++    FormantTriPTRUGens_Load(table);
++    PulsePTRUGens_Load(table);
++    TrianglePTRUGens_Load(table);
++    ByteBeat_Load(table);
++#    endif
++#    ifdef PORTED_PLUGINS
++    AnalogChewUGens_Load(table);
++    AnalogDegradeUGens_Load(table);
++    AnalogFoldOscUGens_Load(table);
++    AnalogLossUGens_Load(table);
++    AnalogPhaserModUGens_Load(table);
++    AnalogPhaserUGens_Load(table);
++    AnalogPulseShaperUGens_Load(table);
++    AnalogTapeUGens_Load(table);
++    AnalogVintageDistortionUGens_Load(table);
++    ChenUGens_Load(table);
++    LPGUGens_Load(table);
++    LockhartWavefolderUGens_Load(table);
++    NonlinearFilterUGens_Load(table);
++    PhasorModalUGens_Load(table);
++    RongsUGens_Load(table);
++    VA1PoleUGens_Load(table);
++    VADiodeFilterUGens_Load(table);
++    VAKorg35UGens_Load(table);
++    VALadderUGens_Load(table);
++    VASEM12UGens_Load(table);
++    VadimFilterUGens_Load(table);
++    XPlayBufUGens_Load(table);
++    Fverb_Load(table);
++    Fverb2_Load(table);
++#        ifdef PP_DAISYSP
++    AnalogBassDrumUGens_Load(table);
++    AnalogSnareDrumUGens_Load(table);
++    BLOscUGens_Load(table);
++    DCompressorUGens_Load(table);
++    HarmonicOscUGens_Load(table);
++    NeoFormantUGens_Load(table);
++    NeoVarSawOscUGens_Load(table);
++    OscBankUGens_Load(table);
++    ResonatorUGens_Load(table);
++    StringVoiceUGens_Load(table);
++    VarShapeOscUGens_Load(table);
++    VosimOscUGens_Load(table);
++    ZOscUGens_Load(table);
++#        endif
++#        ifdef PP_EIGEN
++    WernerUGens_Load(table);
++#        endif
++#    endif
++
++#    ifdef MI_UGENS
++    MiElements_Load(table);
++    MiRings_Load(table);
++    MiClouds_Load(table);
++    MiPlaits_Load(table);
++    MiBeads_Load(table);
++    MiRipples_Load(table);
++    MiVerb_Load(table);
++    MiMu_Load(table);
++    MiOmi_Load(table);
++    MiTides_Load(table);
++    MiWarps_Load(table);
++    MiGrids_Load(table);
++#        ifdef MI_BRAIDS
++    MiBraids_Load(table);
++#        endif
++#    endif
+ }
+ 
+ void unloadStaticPlugins() {
+diff --git a/server/scsynth/CMakeLists.txt b/server/scsynth/CMakeLists.txt
+index 75c228c87672e3e94c40b1e72e800f55e1b78068..ab9d69e1382af6c7cfeb793a14ed550cec8b31a3 100644
+--- a/server/scsynth/CMakeLists.txt
++++ b/server/scsynth/CMakeLists.txt
+@@ -234,6 +234,55 @@ endif()
+ 
+ if(STATIC_PLUGINS)
+     target_compile_definitions(libscsynth PRIVATE "-DSTATIC_PLUGINS")
++    # norns-js: tells SC_StaticPlugins.h to declare and call the sc3-plugins
++    # load functions. Same variable the plugins directory tests, so the two
++    # cannot disagree about whether they were built.
++    if(SC3_PLUGINS_DIR AND EXISTS "${SC3_PLUGINS_DIR}")
++        target_compile_definitions(libscsynth PRIVATE "-DSC3_PLUGINS")
++        if(SC3_FAUST_WRAPPER_DIR AND EXISTS "${SC3_FAUST_WRAPPER_DIR}")
++            target_compile_definitions(libscsynth PRIVATE "-DSC3_FAUST_PLUGINS")
++        endif()
++        # norns-js E9-29: PitchDetection and NCAnalysisUGens, which exist
++        # only when a wasm fftw3f was built. Same variable the plugins
++        # directory tests, for the same reason as above.
++        if(FFTW3F_LIB AND EXISTS "${FFTW3F_LIB}")
++            target_compile_definitions(libscsynth PRIVATE "-DSC3_FFTW")
++        endif()
++        # norns-js E9-30: StkUGens and StkInst, from the STK that
++        # sc3-plugins vendors. Tested on the same file the plugins
++        # directory tests.
++        if(EXISTS "${SC3_PLUGINS_DIR}/../external_libraries/stk/include/Stk.h")
++            target_compile_definitions(libscsynth PRIVATE "-DSC3_STK")
++        endif()
++    endif()
++    # norns-js E9-36/E9-40: the single-plugin repositories -- the three
++    # PTR oscillators and ByteBeat -- vendored one directory each.
++    if(SC_EXTRA_DIR AND EXISTS "${SC_EXTRA_DIR}")
++        target_compile_definitions(libscsynth PRIVATE "-DSC_EXTRA_PLUGINS")
++    endif()
++    # norns-js E9-35: PortedPlugins, its own checkout and its own variable.
++    if(PORTED_PLUGINS_DIR AND EXISTS "${PORTED_PLUGINS_DIR}")
++        target_compile_definitions(libscsynth PRIVATE "-DPORTED_PLUGINS")
++        # E9-58: fourteen of its plugins want a library of their own, and
++        # the declarations below must agree with what was actually built —
++        # so each is tested by the same file the plugins directory tests.
++        if(DAISYSP_DIR AND EXISTS "${DAISYSP_DIR}/Source/daisysp.h")
++            target_compile_definitions(libscsynth PRIVATE "-DPP_DAISYSP")
++        endif()
++        if(EIGEN_DIR AND EXISTS "${EIGEN_DIR}/Eigen/Dense")
++            target_compile_definitions(libscsynth PRIVATE "-DPP_EIGEN")
++        endif()
++    endif()
++    # norns-js: mi-UGens, same arrangement and the same variable.
++    if(MI_UGENS_DIR AND EXISTS "${MI_UGENS_DIR}")
++        target_compile_definitions(libscsynth PRIVATE "-DMI_UGENS")
++        # MiBraids rides on its own submodule. Tested here by the same file
++        # the plugins directory tests, so the declaration and the archive
++        # cannot disagree about whether MiBraids was built.
++        if(EXISTS "${MI_UGENS_DIR}/projects/MiBraids/libsamplerate/src/samplerate.c")
++            target_compile_definitions(libscsynth PRIVATE "-DMI_BRAIDS")
++        endif()
++    endif()
+     # add plugin archives
+     target_link_libraries(libscsynth PRIVATE ${static_plugins})
+ endif()
+@@ -326,8 +375,41 @@ elseif(AUDIOAPI STREQUAL webaudio)
+         --bind -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME='ScSynth'
+         --pre-js "${CMAKE_SOURCE_DIR}/platform/wasm/scsynth.pre.js"
+         -sEXPORTED_FUNCTIONS=['_malloc','_free','_webOscBindingAnchor']
+-        -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','UTF8ToString']
++        # norns-js E9-30: FS as well. This list OVERRIDES the global
++        # `-sEXPORTED_RUNTIME_METHODS=FS,HEAPU8` in CMAKE_EXE_LINKER_FLAGS,
++        # so without naming FS here the server's filesystem is unreachable
++        # from the page — and STK's wavetables have to be written into the
++        # SERVER's filesystem, not sclang's, because the UGen that reads
++        # them runs there.
++        -sEXPORTED_RUNTIME_METHODS=['ccall','cwrap','HEAPU8','UTF8ToString','FS']
++        # norns-js E9-40: exception CATCHING, for ByteBeat and nothing
++        # else. Emscripten links libc++ and libc++abi in their -noexcept
++        # variants by default, so a throw in any translation unit ends at
++        # abort() whatever that unit was compiled with -- measured: one
++        # malformed bytebeat expression took the whole DSP graph down,
++        # a plain sine included, while sclang went on answering.
++        #
++        # It costs nothing elsewhere: only the files compiled with
++        # -fexceptions -- ByteBeat.cpp, lex.cpp, parse.cpp -- get landing
++        # pads, and scsynth's own throw on an unknown UGen still reaches
++        # no handler and still aborts, exactly as before.
++        -fexceptions
+     )
++    # norns-js: scsynth's heap is FIXED — the memory is shared with the audio
++    # worklet, so initial and maximum are the same and it cannot grow. The
++    # emscripten default is 16 MB, which has to hold 2.7 MB of code and
++    # static data, realTimeMemorySize (norns asks for 8 MB), 1024 buffers and
++    # every sample a script loads. It was already tight before sc3-plugins
++    # was compiled in; afterwards it aborts with OOM on every boot.
++    #
++    # It cannot be raised at instantiation: the module declares its maximum
++    # at link time, and a larger Memory fails validation with
++    # "memory import has a larger maximum size 2048 than the module's
++    # declared maximum 256". So it is set here, and only when asked for, so
++    # an unconfigured build is exactly what upstream produces.
++    if(SC_WASM_INITIAL_MEMORY)
++        target_link_options(scsynth PRIVATE "-sINITIAL_MEMORY=${SC_WASM_INITIAL_MEMORY}")
++    endif()
+     if(WASM_DEBUG)
+         target_compile_options(scsynth PRIVATE -pthread -g)
+         target_compile_options(libscsynth PRIVATE -pthread -g)
+diff --git a/server/scsynth/SC_WebAudio.cpp b/server/scsynth/SC_WebAudio.cpp
+index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..bd6eeab7f915add4156def407be6ea94ba68d7f0 100644
+--- a/server/scsynth/SC_WebAudio.cpp
++++ b/server/scsynth/SC_WebAudio.cpp
+@@ -137,6 +137,18 @@ private:
+     static constexpr size_t WASM_SAMPLERATE = 48000;
+     // whether mOSCbuftime has been initialized with wall-clock time
+     bool mInitializedOSCTime = false;
++
++    // --- CPU load measurement (norns-js local patch, E0-35) --------------
++    // There is no high-resolution clock on the audio worklet thread. Built
++    // with -sAUDIO_WORKLET, emscripten probes for performance.now() once per
++    // scope and falls back to Date.now() when it is missing - and it is
++    // missing in an AudioWorkletGlobalScope. 1 ms of resolution cannot time a
++    // single 2.67 ms callback, so accumulate over a window of callbacks and
++    // derive the load from the total. The quantisation error is zero-mean and
++    // uncorrelated with the DSP work, so the windowed mean is unbiased.
++    static constexpr int kCPUWindowBlocks = 64;
++    double mCPUBusyMs = 0.0;
++    int mCPUBlocks = 0;
+ };
+ 
+ SC_AudioDriver* SC_NewAudioDriver(World* inWorld) { return new SC_WebAudioDriver(inWorld); }
+@@ -151,6 +163,8 @@ static bool scsynthProcessCallback(int numInputs, const AudioSampleFrame* inputs
+ 
+ bool SC_WebAudioDriver::processBlock(int numInputs, const AudioSampleFrame* inputs, int numOutputs,
+                                      AudioSampleFrame* outputs) {
++    // time the whole callback, as SC_CoreAudioDriver::Run does
++    const double cpuT0 = emscripten_get_now();
+     World* world = mWorld;
+ 
+     // see SC_PortAudioDriver
+@@ -215,6 +229,28 @@ bool SC_WebAudioDriver::processBlock(int numInputs, const AudioSampleFrame* inpu
+         oscTime = mOSCbuftime = nextTime;
+     }
+ 
++    // Date.now() is wall-clock and not monotonic: a clock step can make the
++    // delta negative. Drop those samples rather than corrupt the accumulator.
++    const double cpuDeltaMs = emscripten_get_now() - cpuT0;
++    if (cpuDeltaMs > 0.0)
++        mCPUBusyMs += cpuDeltaMs;
++
++    if (++mCPUBlocks >= kCPUWindowBlocks) {
++        // Same formula as the native drivers - seconds in the callback times
++        // callbacks per second - but with the mean taken over the window.
++        const double calcTime = (mCPUBusyMs * 0.001) / mCPUBlocks;
++        const double cpuUsage = calcTime * mBuffersPerSecond * 100.;
++        mAvgCPU = mAvgCPU + 0.5 * (cpuUsage - mAvgCPU);
++        // NOTE: the worst WINDOW in the last second, not the worst single
++        // callback - the available clock cannot resolve one callback.
++        if (cpuUsage > mPeakCPU || (mPeakCounter -= mCPUBlocks) <= 0) {
++            mPeakCPU = cpuUsage;
++            mPeakCounter = mMaxPeakCounter;
++        }
++        mCPUBusyMs = 0.0;
++        mCPUBlocks = 0;
++    }
++
+     // this wakes up the NRT pthread!
+     mAudioSync.Signal();
+ 

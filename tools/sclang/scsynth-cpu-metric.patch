@@ -1,0 +1,61 @@
+diff --git a/server/scsynth/SC_WebAudio.cpp b/server/scsynth/SC_WebAudio.cpp
+index 4a2cb66..bd6eeab 100644
+--- a/server/scsynth/SC_WebAudio.cpp
++++ b/server/scsynth/SC_WebAudio.cpp
+@@ -137,6 +137,18 @@ private:
+     static constexpr size_t WASM_SAMPLERATE = 48000;
+     // whether mOSCbuftime has been initialized with wall-clock time
+     bool mInitializedOSCTime = false;
++
++    // --- CPU load measurement (norns-js local patch, E0-35) --------------
++    // There is no high-resolution clock on the audio worklet thread. Built
++    // with -sAUDIO_WORKLET, emscripten probes for performance.now() once per
++    // scope and falls back to Date.now() when it is missing - and it is
++    // missing in an AudioWorkletGlobalScope. 1 ms of resolution cannot time a
++    // single 2.67 ms callback, so accumulate over a window of callbacks and
++    // derive the load from the total. The quantisation error is zero-mean and
++    // uncorrelated with the DSP work, so the windowed mean is unbiased.
++    static constexpr int kCPUWindowBlocks = 64;
++    double mCPUBusyMs = 0.0;
++    int mCPUBlocks = 0;
+ };
+ 
+ SC_AudioDriver* SC_NewAudioDriver(World* inWorld) { return new SC_WebAudioDriver(inWorld); }
+@@ -151,6 +163,8 @@ static bool scsynthProcessCallback(int numInputs, const AudioSampleFrame* inputs
+ 
+ bool SC_WebAudioDriver::processBlock(int numInputs, const AudioSampleFrame* inputs, int numOutputs,
+                                      AudioSampleFrame* outputs) {
++    // time the whole callback, as SC_CoreAudioDriver::Run does
++    const double cpuT0 = emscripten_get_now();
+     World* world = mWorld;
+ 
+     // see SC_PortAudioDriver
+@@ -215,6 +229,28 @@ bool SC_WebAudioDriver::processBlock(int numInputs, const AudioSampleFrame* inpu
+         oscTime = mOSCbuftime = nextTime;
+     }
+ 
++    // Date.now() is wall-clock and not monotonic: a clock step can make the
++    // delta negative. Drop those samples rather than corrupt the accumulator.
++    const double cpuDeltaMs = emscripten_get_now() - cpuT0;
++    if (cpuDeltaMs > 0.0)
++        mCPUBusyMs += cpuDeltaMs;
++
++    if (++mCPUBlocks >= kCPUWindowBlocks) {
++        // Same formula as the native drivers - seconds in the callback times
++        // callbacks per second - but with the mean taken over the window.
++        const double calcTime = (mCPUBusyMs * 0.001) / mCPUBlocks;
++        const double cpuUsage = calcTime * mBuffersPerSecond * 100.;
++        mAvgCPU = mAvgCPU + 0.5 * (cpuUsage - mAvgCPU);
++        // NOTE: the worst WINDOW in the last second, not the worst single
++        // callback - the available clock cannot resolve one callback.
++        if (cpuUsage > mPeakCPU || (mPeakCounter -= mCPUBlocks) <= 0) {
++            mPeakCPU = cpuUsage;
++            mPeakCounter = mMaxPeakCounter;
++        }
++        mCPUBusyMs = 0.0;
++        mCPUBlocks = 0;
++    }
++
+     // this wakes up the NRT pthread!
+     mAudioSync.Signal();
+ 

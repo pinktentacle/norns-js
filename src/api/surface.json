@@ -1,0 +1,1664 @@
+{
+  "generatedFrom": "third_party/norns/matron/src/weaver.cc",
+  "generatedBy": "tools/extract-api.mjs",
+  "note": "Do not edit by hand. Run `node tools/extract-api.mjs --write`.",
+  "counts": {
+    "direct": 174,
+    "viaTable": 4,
+    "total": 178
+  },
+  "classes": [
+    {
+      "class": "_image_class_name",
+      "line": 565,
+      "methods": [
+        {
+          "name": "__gc",
+          "symbol": "_image_free"
+        },
+        {
+          "name": "__tostring",
+          "symbol": "_image_tostring"
+        },
+        {
+          "name": "__eq",
+          "symbol": "_image_equals"
+        },
+        {
+          "name": "_context_focus",
+          "symbol": "_image_context_focus"
+        },
+        {
+          "name": "_context_defocus",
+          "symbol": "_image_context_defocus"
+        },
+        {
+          "name": "extents",
+          "symbol": "_image_extents"
+        },
+        {
+          "name": "name",
+          "symbol": "_image_name"
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "adc_rev",
+      "symbol": "_adc_rev",
+      "line": 588,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "arc_all_led",
+      "symbol": "_arc_all_led",
+      "line": 514,
+      "via": "call",
+      "returns": [
+        0
+      ],
+      "aliasOf": "_grid_all_led"
+    },
+    {
+      "name": "arc_set_led",
+      "symbol": "_arc_set_led",
+      "line": 513,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "audio_connect",
+      "symbol": "_audio_connect",
+      "line": 662,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "audio_disconnect",
+      "symbol": "_audio_disconnect",
+      "line": 663,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "audio_get_cpu_load",
+      "symbol": "_audio_get_cpu_load",
+      "line": 656,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "audio_get_input_ports",
+      "symbol": "_audio_get_input_ports",
+      "line": 659,
+      "via": "call",
+      "returns": [
+        1
+      ],
+      "aliasOf": "_push_port_list"
+    },
+    {
+      "name": "audio_get_output_ports",
+      "symbol": "_audio_get_output_ports",
+      "line": 660,
+      "via": "call",
+      "returns": [
+        1
+      ],
+      "aliasOf": "_push_port_list"
+    },
+    {
+      "name": "audio_get_port_connections",
+      "symbol": "_audio_get_port_connections",
+      "line": 661,
+      "via": "call",
+      "returns": [
+        1
+      ],
+      "aliasOf": "_push_port_list"
+    },
+    {
+      "name": "audio_get_xrun_count",
+      "symbol": "_audio_get_xrun_count",
+      "line": 657,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "audio_pitch_off",
+      "symbol": "_set_audio_pitch_off",
+      "line": 626,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "audio_pitch_on",
+      "symbol": "_set_audio_pitch_on",
+      "line": 625,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_cancel",
+      "symbol": "_clock_cancel",
+      "line": 639,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_crow_in_div",
+      "symbol": "_clock_crow_in_div",
+      "line": 643,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_get_tempo",
+      "symbol": "_clock_get_tempo",
+      "line": 654,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "clock_get_time_beats",
+      "symbol": "_clock_get_time_beats",
+      "line": 653,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "clock_internal_set_tempo",
+      "symbol": "_clock_internal_set_tempo",
+      "line": 640,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_internal_start",
+      "symbol": "_clock_internal_start",
+      "line": 641,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_internal_stop",
+      "symbol": "_clock_internal_stop",
+      "line": 642,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_link_get_number_of_peers",
+      "symbol": "_clock_link_get_number_of_peers",
+      "line": 647,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "clock_link_set_quantum",
+      "symbol": "_clock_link_set_quantum",
+      "line": 646,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_link_set_start_stop_sync",
+      "symbol": "_clock_link_set_start_stop_sync",
+      "line": 650,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_link_set_tempo",
+      "symbol": "_clock_link_set_tempo",
+      "line": 645,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_link_set_transport_start",
+      "symbol": "_clock_link_set_transport_start",
+      "line": 648,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_link_set_transport_stop",
+      "symbol": "_clock_link_set_transport_stop",
+      "line": 649,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_schedule_sleep",
+      "symbol": "_clock_schedule_sleep",
+      "line": 637,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_schedule_sync",
+      "symbol": "_clock_schedule_sync",
+      "line": 638,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "clock_set_source",
+      "symbol": "_clock_set_source",
+      "line": 652,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "comp_mix",
+      "symbol": "_set_comp_mix",
+      "line": 441,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "comp_off",
+      "symbol": "_set_comp_off",
+      "line": 439,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "comp_on",
+      "symbol": "_set_comp_on",
+      "line": 438,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "comp_param",
+      "symbol": "_set_comp_param",
+      "line": 440,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cpu_time_get_delta",
+      "symbol": "_cpu_time_get_delta",
+      "line": 666,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "cpu_time_start_timer",
+      "symbol": "_cpu_time_start_timer",
+      "line": 665,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "crow_send",
+      "symbol": "_crow_send",
+      "line": 494,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_clear",
+      "symbol": "_cut_buffer_clear",
+      "line": 475,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_clear_channel",
+      "symbol": "_cut_buffer_clear_channel",
+      "line": 476,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_clear_region",
+      "symbol": "_cut_buffer_clear_region",
+      "line": 477,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_clear_region_channel",
+      "symbol": "_cut_buffer_clear_region_channel",
+      "line": 478,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_copy_mono",
+      "symbol": "_cut_buffer_copy_mono",
+      "line": 479,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_copy_stereo",
+      "symbol": "_cut_buffer_copy_stereo",
+      "line": 480,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_read_mono",
+      "symbol": "_cut_buffer_read_mono",
+      "line": 481,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_read_stereo",
+      "symbol": "_cut_buffer_read_stereo",
+      "line": 482,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_render",
+      "symbol": "_cut_buffer_render",
+      "line": 485,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_write_mono",
+      "symbol": "_cut_buffer_write_mono",
+      "line": 483,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_buffer_write_stereo",
+      "symbol": "_cut_buffer_write_stereo",
+      "line": 484,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_enable",
+      "symbol": "_cut_enable",
+      "line": 474,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_param",
+      "symbol": "_set_cut_param",
+      "line": 488,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_param_ii",
+      "symbol": "_set_cut_param_ii",
+      "line": 489,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_param_iif",
+      "symbol": "_set_cut_param_iif",
+      "line": 490,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_query_position",
+      "symbol": "_cut_query_position",
+      "line": 486,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "cut_reset",
+      "symbol": "_cut_reset",
+      "line": 487,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "execute",
+      "symbol": "_execute",
+      "line": 503,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "free_engine",
+      "symbol": "_free_engine",
+      "line": 603,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "gain_hp",
+      "symbol": "_gain_hp",
+      "line": 587,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "get_time",
+      "symbol": "_get_time",
+      "line": 614,
+      "via": "call",
+      "returns": [
+        2
+      ]
+    },
+    {
+      "name": "grid_all_led",
+      "symbol": "_grid_all_led",
+      "line": 507,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "grid_cols",
+      "symbol": "_grid_cols",
+      "line": 509,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "grid_rows",
+      "symbol": "_grid_rows",
+      "line": 508,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "grid_set_led",
+      "symbol": "_grid_set_led",
+      "line": 506,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "grid_set_rotation",
+      "symbol": "_grid_set_rotation",
+      "line": 510,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "grid_tilt_disable",
+      "symbol": "_grid_tilt_disable",
+      "line": 512,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "grid_tilt_enable",
+      "symbol": "_grid_tilt_enable",
+      "line": 511,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_adc",
+      "symbol": "_set_level_adc",
+      "line": 421,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_adc_cut",
+      "symbol": "_set_level_adc_cut",
+      "line": 466,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_cut",
+      "symbol": "_set_level_cut",
+      "line": 471,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_cut_cut",
+      "symbol": "_set_level_cut_cut",
+      "line": 472,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_cut_master",
+      "symbol": "_set_level_cut_master",
+      "line": 470,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_cut_rev",
+      "symbol": "_set_level_cut_rev",
+      "line": 469,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_dac",
+      "symbol": "_set_level_dac",
+      "line": 422,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_ext",
+      "symbol": "_set_level_ext",
+      "line": 423,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_ext_cut",
+      "symbol": "_set_level_ext_cut",
+      "line": 467,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_ext_rev",
+      "symbol": "_set_level_ext_rev",
+      "line": 434,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_input_cut",
+      "symbol": "_set_level_input_cut",
+      "line": 491,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_monitor",
+      "symbol": "_set_level_monitor",
+      "line": 425,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_monitor_rev",
+      "symbol": "_set_level_monitor_rev",
+      "line": 436,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_rev_dac",
+      "symbol": "_set_level_rev_dac",
+      "line": 435,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_tape",
+      "symbol": "_set_level_tape",
+      "line": 424,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_tape_cut",
+      "symbol": "_set_level_tape_cut",
+      "line": 468,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "level_tape_rev",
+      "symbol": "_set_level_tape_rev",
+      "line": 437,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "load_engine",
+      "symbol": "_load_engine",
+      "line": 601,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "metro_set_time",
+      "symbol": "_metro_set_time",
+      "line": 611,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "metro_start",
+      "symbol": "_metro_start",
+      "line": 609,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "metro_stop",
+      "symbol": "_metro_stop",
+      "line": 610,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "midi_clock_receive",
+      "symbol": "_midi_clock_receive",
+      "line": 596,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "midi_send",
+      "symbol": "_midi_send",
+      "line": 595,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "monitor_mix_mono",
+      "symbol": "_set_monitor_mix_mono",
+      "line": 427,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "monitor_mix_stereo",
+      "symbol": "_set_monitor_mix_stereo",
+      "line": 428,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "monome_intensity",
+      "symbol": "_monome_intensity",
+      "line": 516,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "monome_refresh",
+      "symbol": "_monome_refresh",
+      "line": 515,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "osc_send",
+      "symbol": "_osc_send",
+      "line": 591,
+      "via": "call",
+      "returns": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "osc_send_crone",
+      "symbol": "_osc_send_crone",
+      "line": 592,
+      "via": "call",
+      "returns": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "pan_cut",
+      "symbol": "_set_pan_cut",
+      "line": 473,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "platform",
+      "symbol": "_platform",
+      "line": 671,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "platform_factory",
+      "symbol": "_platform_factory",
+      "line": 672,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "platform_shield",
+      "symbol": "_platform_shield",
+      "line": 673,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "poll_start_cut_phase",
+      "symbol": "_poll_start_cut_phase",
+      "line": 460,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "poll_start_tape",
+      "symbol": "_poll_start_tape",
+      "line": 462,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "poll_start_vu",
+      "symbol": "_poll_start_vu",
+      "line": 458,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "poll_stop_cut_phase",
+      "symbol": "_poll_stop_cut_phase",
+      "line": 461,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "poll_stop_tape",
+      "symbol": "_poll_stop_tape",
+      "line": 463,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "poll_stop_vu",
+      "symbol": "_poll_stop_vu",
+      "line": 459,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "report_engines",
+      "symbol": "_request_engine_report",
+      "line": 599,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "request_poll_value",
+      "symbol": "_request_poll_value",
+      "line": 622,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "restart_audio",
+      "symbol": "_restart_audio",
+      "line": 631,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "rev_off",
+      "symbol": "_set_rev_off",
+      "line": 432,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "rev_on",
+      "symbol": "_set_rev_on",
+      "line": 431,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "rev_param",
+      "symbol": "_set_rev_param",
+      "line": 433,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_aa",
+      "symbol": "_screen_aa",
+      "line": 524,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_arc",
+      "symbol": "_screen_arc",
+      "line": 540,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_brightness",
+      "symbol": "_screen_brightness",
+      "line": 526,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_clear",
+      "symbol": "_screen_clear",
+      "line": 550,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_close",
+      "symbol": "_screen_close",
+      "line": 551,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_contrast",
+      "symbol": "_screen_contrast",
+      "line": 527,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_create_image",
+      "symbol": "_screen_create_image",
+      "line": 576,
+      "via": "class:_image_class_name",
+      "returns": [
+        0,
+        1
+      ],
+      "aliasOf": "_image_new"
+    },
+    {
+      "name": "screen_current_point",
+      "symbol": "_screen_current_point",
+      "line": 561,
+      "via": "call",
+      "returns": [
+        2
+      ]
+    },
+    {
+      "name": "screen_curve",
+      "symbol": "_screen_curve",
+      "line": 538,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_curve_rel",
+      "symbol": "_screen_curve_rel",
+      "line": 539,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_display_image",
+      "symbol": "_screen_display_image",
+      "line": 576,
+      "via": "class:_image_class_name",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_display_image_region",
+      "symbol": "_screen_display_image_region",
+      "line": 576,
+      "via": "class:_image_class_name",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_display_png",
+      "symbol": "_screen_display_png",
+      "line": 555,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_export_png",
+      "symbol": "_screen_export_png",
+      "line": 553,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_export_screenshot",
+      "symbol": "_screen_export_screenshot",
+      "line": 554,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_fill",
+      "symbol": "_screen_fill",
+      "line": 543,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_font_face",
+      "symbol": "_screen_font_face",
+      "line": 522,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_font_size",
+      "symbol": "_screen_font_size",
+      "line": 523,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_gamma",
+      "symbol": "_screen_gamma",
+      "line": 525,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_invert",
+      "symbol": "_screen_invert",
+      "line": 528,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_level",
+      "symbol": "_screen_level",
+      "line": 529,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_line",
+      "symbol": "_screen_line",
+      "line": 535,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_line_cap",
+      "symbol": "_screen_line_cap",
+      "line": 531,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_line_join",
+      "symbol": "_screen_line_join",
+      "line": 532,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_line_rel",
+      "symbol": "_screen_line_rel",
+      "line": 537,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_line_width",
+      "symbol": "_screen_line_width",
+      "line": 530,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_load_png",
+      "symbol": "_screen_load_png",
+      "line": 576,
+      "via": "class:_image_class_name",
+      "returns": [
+        0,
+        1
+      ],
+      "aliasOf": "_image_new"
+    },
+    {
+      "name": "screen_miter_limit",
+      "symbol": "_screen_miter_limit",
+      "line": 533,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_move",
+      "symbol": "_screen_move",
+      "line": 534,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_move_rel",
+      "symbol": "_screen_move_rel",
+      "line": 536,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_peek",
+      "symbol": "_screen_peek",
+      "line": 556,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "screen_poke",
+      "symbol": "_screen_poke",
+      "line": 557,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_rect",
+      "symbol": "_screen_rect",
+      "line": 541,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_restore",
+      "symbol": "_screen_restore",
+      "line": 521,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_rotate",
+      "symbol": "_screen_rotate",
+      "line": 558,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_save",
+      "symbol": "_screen_save",
+      "line": 520,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_set_operator",
+      "symbol": "_screen_set_operator",
+      "line": 560,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_stroke",
+      "symbol": "_screen_stroke",
+      "line": 542,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_text",
+      "symbol": "_screen_text",
+      "line": 544,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_text_center",
+      "symbol": "_screen_text_center",
+      "line": 546,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_text_extents",
+      "symbol": "_screen_text_extents",
+      "line": 547,
+      "via": "call",
+      "returns": [
+        2,
+        6
+      ]
+    },
+    {
+      "name": "screen_text_right",
+      "symbol": "_screen_text_right",
+      "line": 545,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_text_trim",
+      "symbol": "_screen_text_trim",
+      "line": 548,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_translate",
+      "symbol": "_screen_translate",
+      "line": 559,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "screen_update",
+      "symbol": "_screen_update",
+      "line": 519,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "send_command",
+      "symbol": "_send_command",
+      "line": 606,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "serial_send",
+      "symbol": "_serial_send",
+      "line": 497,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "set_poll_time",
+      "symbol": "_set_poll_time",
+      "line": 621,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "sound_file_inspect",
+      "symbol": "_sound_file_inspect",
+      "line": 634,
+      "via": "call",
+      "returns": [
+        3
+      ]
+    },
+    {
+      "name": "start_audio",
+      "symbol": "_start_audio",
+      "line": 629,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "start_poll",
+      "symbol": "_start_poll",
+      "line": 619,
+      "via": "call",
+      "returns": [
+        0
+      ],
+      "aliasOf": "poll_set_state"
+    },
+    {
+      "name": "stop_poll",
+      "symbol": "_stop_poll",
+      "line": 620,
+      "via": "call",
+      "returns": [
+        0
+      ],
+      "aliasOf": "poll_set_state"
+    },
+    {
+      "name": "system_action",
+      "symbol": "_system_action",
+      "line": 501,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "system_cmd",
+      "symbol": "_system_cmd",
+      "line": 500,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "system_glob",
+      "symbol": "_system_glob",
+      "line": 502,
+      "via": "call",
+      "returns": [
+        1,
+        2
+      ]
+    },
+    {
+      "name": "tape_loop",
+      "symbol": "_tape_loop",
+      "line": 455,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_pause",
+      "symbol": "_tape_pause",
+      "line": 453,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_play_loop",
+      "symbol": "_tape_play_loop",
+      "line": 452,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_play_open",
+      "symbol": "_tape_play_open",
+      "line": 448,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_play_pause",
+      "symbol": "_tape_play_pause",
+      "line": 450,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_play_start",
+      "symbol": "_tape_play_start",
+      "line": 449,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_play_stop",
+      "symbol": "_tape_play_stop",
+      "line": 451,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_record_open",
+      "symbol": "_tape_rec_open",
+      "line": 444,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_record_pause",
+      "symbol": "_tape_rec_pause",
+      "line": 446,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_record_start",
+      "symbol": "_tape_rec_start",
+      "line": 445,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_record_stop",
+      "symbol": "_tape_rec_stop",
+      "line": 447,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "tape_resume",
+      "symbol": "_tape_resume",
+      "line": 454,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "usleep",
+      "symbol": "_micro_sleep",
+      "line": 616,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    },
+    {
+      "name": "wall_time_get_delta",
+      "symbol": "_wall_time_get_delta",
+      "line": 668,
+      "via": "call",
+      "returns": [
+        1
+      ]
+    },
+    {
+      "name": "wall_time_start_timer",
+      "symbol": "_wall_time_start_timer",
+      "line": 667,
+      "via": "call",
+      "returns": [
+        0
+      ]
+    }
+  ]
+}

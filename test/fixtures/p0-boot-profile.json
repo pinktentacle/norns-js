@@ -1,0 +1,120 @@
+{
+  "pinned": "ref: refs/heads/main",
+  "apiTotal": 174,
+  "steps": [
+    {
+      "step": "prelude",
+      "ok": true
+    },
+    {
+      "step": "config.lua",
+      "ok": true
+    },
+    {
+      "step": "require core/norns",
+      "ok": true
+    },
+    {
+      "step": "_startup()",
+      "ok": true
+    },
+    {
+      "step": "_post_startup()",
+      "ok": true
+    },
+    {
+      "step": "--mark boot--",
+      "ok": true
+    },
+    {
+      "step": "_norns.stat()",
+      "ok": true
+    },
+    {
+      "step": "_norns.battery()",
+      "ok": true
+    },
+    {
+      "step": "menu mode on",
+      "ok": true
+    },
+    {
+      "step": "_menu.redraw()",
+      "ok": true
+    },
+    {
+      "step": "enc(1,1)",
+      "ok": true
+    },
+    {
+      "step": "key(2,1) key(2,0)",
+      "ok": true
+    },
+    {
+      "step": "_menu.redraw() again",
+      "ok": true
+    }
+  ],
+  "distinctCalled": [
+    "get_time",
+    "adc_rev",
+    "platform",
+    "platform_factory",
+    "platform_shield",
+    "metro_set_time",
+    "screen_save",
+    "audio_connect",
+    "start_audio",
+    "system_glob",
+    "screen_font_face",
+    "screen_font_size",
+    "screen_line_width",
+    "metro_stop",
+    "metro_start",
+    "screen_clear",
+    "screen_move",
+    "screen_level",
+    "screen_text",
+    "screen_brightness",
+    "screen_contrast",
+    "screen_gamma",
+    "screen_update",
+    "audio_get_cpu_load",
+    "audio_get_xrun_count",
+    "screen_text_right"
+  ],
+  "counts": {
+    "screen_move": 36,
+    "screen_text": 28,
+    "screen_level": 18,
+    "screen_text_right": 6,
+    "metro_set_time": 4,
+    "screen_update": 4,
+    "audio_connect": 4,
+    "screen_clear": 4,
+    "metro_start": 3,
+    "get_time": 2,
+    "audio_get_xrun_count": 2,
+    "audio_get_cpu_load": 2,
+    "screen_save": 2,
+    "screen_font_size": 1,
+    "screen_contrast": 1,
+    "adc_rev": 1,
+    "screen_gamma": 1,
+    "screen_line_width": 1,
+    "screen_brightness": 1,
+    "platform": 1,
+    "start_audio": 1,
+    "platform_shield": 1,
+    "metro_stop": 1,
+    "system_glob": 1,
+    "screen_font_face": 1,
+    "platform_factory": 1
+  },
+  "totalCalls": 128,
+  "printOutput": [
+    "error loading keyboard layout, using old value: us",
+    "start_audio(): ",
+    "_norns._post_startup"
+  ]
+}

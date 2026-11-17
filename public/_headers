@@ -1,0 +1,29 @@
+# Cross-origin isolation, which this page cannot run without.
+#
+# scsynth is compiled with pthreads and needs SharedArrayBuffer, and a page
+# only gets SharedArrayBuffer when it is CROSS-ORIGIN ISOLATED. These two
+# headers are what grant that. Without them the page still loads, draws, and
+# runs its menus -- the log simply stops at "loading scsynth.wasm and
+# sclang.wasm ..." and no audio ever arrives. Measured, by serving this exact
+# build with the two lines removed:
+#
+#     crossOriginIsolated   false
+#     SharedArrayBuffer     undefined
+#     audio                 never
+#
+# A page that looks completely fine and is deaf, which is why this file is
+# worth more comment than it is long.
+#
+# FORMAT: Cloudflare Pages and Netlify both read a `_headers` file at the
+# root of the published directory, with the same syntax, so this one file
+# serves either. Vercel wants the same two headers in `vercel.json`, Firebase
+# in `firebase.json`, and GitHub Pages cannot do it at all.
+#
+# It must reach the published root: `public/` is copied into the build
+# wholesale by vite, so this lands at `dist/_headers`. The hosts read it and
+# do not serve it.
+
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin

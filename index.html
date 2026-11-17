@@ -1,0 +1,1566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>norns-js</title>
+<style>
+  /*
+    The devices are drawn to look like the hardware, from the photographs on
+    monome.org. That is not decoration: norns has three keys and three
+    encoders in a particular arrangement, and a script's instructions ("hold
+    K1, turn E3") only make sense if the thing on screen is laid out the way
+    the thing on the desk is.
+
+    Proportions come from the product photographs — the body's aspect ratio,
+    where the screen sits in it, which controls are large and which are
+    small. Everything is positioned in PERCENTAGES of the body, so the whole
+    device scales to its container and the arrangement survives.
+  */
+  :root {
+    color-scheme: dark;
+    --bg: #0e0e0f;
+    --text: #d8d8d8;
+    --dim: #6f6f6f;
+
+    /*
+      Measured off monome's own photographs rather than guessed. The
+      anodised aluminium samples around rgb(147,141,129) in shadow and
+      rgb(159,155,143) in light: a warm mid grey, markedly darker than the
+      silver people remember it as.
+    */
+    --case: #9f9a8f;
+    --case-lit: #aaa599;
+    --case-dark: #8e897e;
+    --case-edge: #76726a;
+
+    /*
+      The caps, from the same photographs: a nearly FLAT matte face at
+      rgb(30,28,26), a hard near-black edge where the side wall turns away
+      from the light, and a thin catch of light on the far rim. Not a glossy
+      sphere -- a sphere is the thing that makes a rendered knob look fake.
+    */
+    --knob: #1e1c1a;
+    --knob-deep: #08070a;
+    --knob-rim: #3a3b36;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 40px; background: var(--bg); color: var(--text);
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    display: flex; flex-direction: column; align-items: center; gap: 22px;
+  }
+  h1 { font-size: 12px; margin: 0; letter-spacing: .18em; color: var(--dim); font-weight: normal; }
+
+  /* ------------------------------------------------------- the top line */
+
+  .top {
+    width: min(1100px, 100%); display: flex; align-items: center;
+    justify-content: center; gap: 10px; position: relative;
+  }
+  /*
+    THE RAIL, down the right-hand edge. Fixed, so it is in the same place
+    whatever the stage is doing and whatever the page is scrolled to.
+  */
+  .rail {
+    position: fixed; right: 10px; top: 10px; z-index: 26;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .rail-b {
+    position: relative;
+    display: grid; place-items: center; width: 28px; height: 28px; padding: 0;
+    background: #141416; border: 1px solid #2c2c30; border-radius: 5px;
+    color: var(--dim); cursor: pointer;
+  }
+  .rail-b:hover { color: var(--text); border-color: #4d4d52; }
+  .rail-b[aria-expanded="true"], .rail-b[aria-pressed="true"] {
+    color: #e0a040; border-color: #e0a040;
+  }
+  .rail-b svg { display: block; }
+
+  /*
+    THE TOOLTIP. `title` would do the job and would do it badly: the
+    browser's own takes a second to appear, cannot be styled, and would be
+    the one thing on the page in somebody else's font. This is the label
+    the button already carries, shown to the LEFT because the rail is
+    against the right edge.
+  */
+  .rail-b::after {
+    content: attr(data-tip);
+    position: absolute; right: calc(100% + 8px); top: 50%;
+    transform: translateY(-50%);
+    white-space: nowrap; font-size: 11px; padding: 3px 7px; border-radius: 4px;
+    background: #1a1a1e; border: 1px solid #34343a; color: var(--text);
+    opacity: 0; pointer-events: none; transition: opacity .12s ease .2s;
+  }
+  .rail-b:hover::after, .rail-b:focus-visible::after { opacity: 1; }
+
+  /*
+    EACH ICON MOVES, in a way that belongs to it: the gear turns, the pads
+    light in sequence, the speaker's waves spread, the loop goes round, the
+    pencil writes, the caret blinks. One transition each, on hover only, so
+    nothing is moving while you are trying to read the screen.
+  */
+  .rail-b svg g, .rail-b svg path, .rail-b svg rect { transition: all .25s ease; }
+  #gear:hover svg { transform: rotate(30deg); transition: transform .25s ease; }
+
+  .i-dev .p1, .i-dev .p2, .i-dev .p3, .i-dev .p4 { opacity: .55; }
+  .rail-b:hover .i-dev .p1 { opacity: 1; transition-delay: 0s; }
+  .rail-b:hover .i-dev .p2 { opacity: 1; transition-delay: .06s; }
+  .rail-b:hover .i-dev .p4 { opacity: 1; transition-delay: .12s; }
+  .rail-b:hover .i-dev .p3 { opacity: 1; transition-delay: .18s; }
+
+  /* The slash is drawn when the output is muted, which is `aria-pressed=false`. */
+  .i-snd .slash { opacity: 0; }
+  #sound[aria-pressed="false"] .i-snd .slash { opacity: 1; }
+  #sound[aria-pressed="false"] .i-snd .w1,
+  #sound[aria-pressed="false"] .i-snd .w2 { opacity: 0; }
+  .rail-b:hover .i-snd .w1 { transform: translateX(1px); }
+  .rail-b:hover .i-snd .w2 { transform: translateX(2px); }
+
+  .rail-b:hover .i-edit .nib { transform: translate(1px, -1px); }
+
+  .i-con .caret { opacity: 1; }
+  .rail-b:hover .i-con .caret { animation: blink .9s steps(1) infinite; }
+  /* The restart arrow goes round, which is the one thing it means. */
+  .i-rst { transform-origin: 12px 12px; }
+  .rail-b:hover .i-rst { animation: spin 1.1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ---------------------------------------------------------- the stage */
+
+  /*
+    The devices are absolutely positioned in here, at a place and a size the
+    page remembers. The stage's own height is set in script, because its
+    children are out of flow and it would otherwise collapse to nothing.
+  */
+  .stage { position: relative; width: min(1100px, 100%); }
+  .device { position: absolute; left: 0; top: 0; }
+  .device > .size { display: none; }
+
+  /*
+    Arrange mode. The contents go inert -- the whole surface of a norns is
+    controls, so there is no safe corner to grab instead -- and each device
+    gets an outline and a handle. See src/ui/stage.ts.
+  */
+  .stage[data-arrange="true"] .device {
+    cursor: move; outline: 1px dashed #4a4a50; outline-offset: 3px;
+  }
+  .stage[data-arrange="true"] .device:focus-visible { outline: 2px solid #e0a040; }
+  .stage[data-arrange="true"] .device > *:not(.size) { pointer-events: none; }
+  .stage[data-arrange="true"] .device.dragging { outline-color: #e0a040; }
+  .stage[data-arrange="true"] .device > .size {
+    display: block; position: absolute; right: -7px; bottom: -7px;
+    width: 15px; height: 15px; border-radius: 3px; cursor: nwse-resize;
+    background: #e0a040; box-shadow: 0 0 0 2px var(--bg);
+  }
+
+  /* ---------------------------------------------------------------- norns */
+
+  /*
+    Body proportions are the photograph's, measured rather than estimated:
+    the face spans 437 by 285 pixels in monome's own norns-grey.jpeg, and
+    every control below is placed from the same measurement. The jacks sit
+    on the top edge and are drawn above it.
+  */
+  .norns {
+    position: relative; width: 100%; aspect-ratio: 437 / 285;
+    /*
+      A container, so the control labels can be sized as a fraction of the
+      DEVICE rather than of the page. The norns is resizable and lives at
+      anything from a phone's width to half a Steam Deck, and a label in
+      fixed pixels is either unreadable at one end or shouting at the other.
+    */
+    container-type: inline-size;
+    border-radius: 6px;
+    background:
+      linear-gradient(177deg, var(--case-lit) 0%, var(--case) 18%, var(--case-dark) 92%, var(--case-edge) 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.55),
+      inset 0 -1px 0 rgba(0,0,0,.25),
+      0 18px 30px -16px rgba(0,0,0,.8);
+  }
+  /*
+    The fine grain of the anodising. Two very low-contrast gradients at
+    different angles read as texture without becoming a pattern.
+  */
+  .norns::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background:
+      repeating-linear-gradient(91deg, rgba(255,255,255,.018) 0 1px, transparent 1px 4px),
+      repeating-linear-gradient(1deg, rgba(0,0,0,.012) 0 1px, transparent 1px 6px);
+  }
+  /* Five jacks along the top edge, behind the body. */
+  .jacks {
+    position: absolute; left: 13%; right: 30%; top: -5px; height: 7px;
+    display: flex; justify-content: space-between; z-index: -1;
+  }
+  .jacks i {
+    width: 3.2%; min-width: 7px; height: 7px; border-radius: 2px 2px 0 0;
+    background: linear-gradient(#3a3a3d, #202023);
+  }
+
+  /*
+    A control. `--d` is its diameter as a percentage of the body WIDTH, so
+    the sizes stay in proportion at any scale.
+
+    THE CAP IS SMOKED PLASTIC, NOT GLASS. Sampling a norns encoder across
+    its face gives rgb(30,28,26) from edge to edge -- flat, matte, no
+    specular dot anywhere. What reads as a button in the photograph is the
+    EDGE: a hard black line on the lit side where the wall turns away, a
+    thin pale catch on the far side, and a contact shadow on the case. The
+    translucency shows as a soft inner lift near the top of the cap, light
+    entering the plastic and scattering, which is why it is broad and dim
+    rather than small and bright.
+  */
+  .ctl {
+    position: absolute; border-radius: 50%; cursor: pointer; user-select: none;
+    transform: translate(-50%, -50%);
+    width: var(--d); aspect-ratio: 1;
+    /*
+      The face is FLAT for most of its width and only turns dark in the last
+      tenth, because that is what a profile across a real cap measures:
+      rgb(30,28,26) from -15 to +18, rgb(8,7,5) at the left edge, rgb(55,56,51)
+      at the right. A gradient that starts falling off at the centre is a
+      sphere, and a sphere is what makes a rendered knob look like a bead.
+    */
+    background:
+      radial-gradient(circle at 50% 50%,
+        #232120 0%, #232120 86%, #1b1819 93%, #100e11 97%, var(--knob-deep) 100%);
+    box-shadow:
+      /*
+        The wall is drawn as THREADS, not as blurred shadows: a blurred
+        inset at this size shades half the face and the cap turns into a
+        bead. One dark pixel on the near side and one pale pixel on the far
+        side is all the photograph actually shows.
+      */
+      inset 0 0 0 1px rgba(0,0,0,.6),
+      inset 1px 1px 0 rgba(0,0,0,.55),
+      inset -1px -1px 0 rgba(212,210,203,.32),
+      /* the cap standing on the case */
+      0 1px 0 rgba(255,255,255,.22),
+      0 2px 3px rgba(0,0,0,.38),
+      0 5px 9px -5px rgba(0,0,0,.5);
+    transition: transform .05s, filter .08s;
+  }
+  .ctl::after {
+    /*
+      The light that gets INTO the cap and scatters. Broad, dim, off-centre:
+      the whole of the translucency. A smoked cap glows faintly; it does not
+      glint, and a glint is the other thing that gives a fake knob away.
+    */
+    content: ""; position: absolute; inset: 14%;
+    border-radius: 50%; pointer-events: none;
+    background: radial-gradient(70% 58% at 44% 32%,
+      rgba(220,222,230,.11) 0%, rgba(150,152,162,.04) 55%, transparent 80%);
+  }
+  /*
+    THE NAME OF EACH CONTROL, under it (user, 2026-11-10).
+    
+    Taken from `title`, which already held it, so there is one place to be
+    wrong rather than two. Lower-cased in CSS because norns' own silkscreen
+    is lower case, and `2.1cqi` means 2.1% of the device's width — the whole
+    reason the device is a container.
+
+    It is NOT a hit target: pointer-events stay off, so a label under K2 can
+    never eat the press meant for K2.
+  */
+  .ctl::before {
+    content: attr(title);
+    position: absolute; top: 108%; left: 50%;
+    transform: translateX(-50%);
+    font-size: 2.1cqi; line-height: 1;
+    letter-spacing: .06em; text-transform: lowercase;
+    color: rgba(28, 26, 24, .62);
+    text-shadow: 0 1px 0 rgba(255, 255, 255, .22);
+    pointer-events: none; user-select: none; white-space: nowrap;
+  }
+
+  .ctl.enc { cursor: ew-resize; }
+
+  /*
+    THE ROTATION ARC, and it is feedback rather than hardware.
+
+    A norns encoder carries NO MARK: it is a smooth cap on a detented shaft,
+    and you feel the turn rather than see it. So nothing here may look like a
+    position indicator. What is drawn instead is the GESTURE — an arc from
+    twelve o'clock round to where the turn has reached, which fades as soon
+    as the hand stops.
+
+    It exists because a screen gives nothing back: a turn a script ignores
+    looks exactly like a page that stopped listening. The arc answers that
+    one question and no other -- it does not claim the knob is anywhere, and
+    `_norns.enc` carries a relative movement with no position in it at all.
+  */
+  .ctl.enc > svg.turn {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; overflow: visible;
+    opacity: 0; transition: opacity .32s ease .12s;
+  }
+  .ctl.enc.turning > svg.turn { opacity: 1; transition: opacity .05s ease; }
+  .ctl.enc > svg.turn path {
+    fill: none;
+    stroke: rgba(255, 206, 128, .95);
+    stroke-width: 7;
+    stroke-linecap: round;
+    filter: drop-shadow(0 0 3px rgba(224, 160, 64, .55));
+  }
+
+  .ctl.down, .ctl:active { filter: brightness(1.75); transform: translate(-50%, -50%) scale(.97); }
+  .ctl:focus-visible { outline: 2px solid #e0a040; outline-offset: 3px; }
+
+  /*
+    The screen: a 2:1 OLED behind a dark window, set into the case. The
+    canvas inside it is the real 128x64 framebuffer.
+  */
+  .screen-well {
+    position: absolute; left: 8.2%; top: 56.5%; width: 43.7%; aspect-ratio: 191 / 99;
+    background: #0a0a0c; border-radius: 2px;
+    box-shadow:
+      inset 0 0 0 1px rgba(0,0,0,.55),
+      inset 0 2px 5px rgba(0,0,0,.85),
+      0 1px 0 rgba(255,255,255,.4);
+    display: grid; place-items: center; overflow: hidden; cursor: crosshair;
+  }
+  /*
+    The canvas sizes ITSELF to the largest whole multiple of 128x64 that
+    fits, because a non-integer scale turns a one-pixel line into a grey
+    smear. The well centres whatever it produces.
+  */
+  .screen-well canvas { display: block; }
+
+  /* --------------------------------------------------------------- devices */
+
+  /*
+    The grid and the arc: a pale slab with the lit surface drawn into one
+    canvas (not 256 elements — see src/grid/view.ts). The canvas is
+    transparent and this is the body under it.
+  */
+  .slab {
+    position: relative; border-radius: 7px; padding: 3%;
+    background:
+      linear-gradient(176deg, #c6c4bf 0%, #b9b7b2 22%, #a6a49e 95%, #8f8d87 100%);
+    box-shadow:
+      inset 0 1px 0 rgba(255,255,255,.6),
+      inset 0 -1px 0 rgba(0,0,0,.22),
+      0 16px 26px -14px rgba(0,0,0,.8);
+  }
+  .slab::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background: repeating-linear-gradient(91deg, rgba(255,255,255,.016) 0 1px, transparent 1px 4px);
+  }
+  #grid, #arc { display: block; width: 100%; position: relative; z-index: 1; }
+  /*
+    Four knobs in a row, as an arc's four encoders are, and the slab is
+    barely wider than they are: on the hardware they nearly touch.
+  */
+  #arc { aspect-ratio: 4 / 1.18; }
+
+  /* ------------------------------------------------- the devices panel */
+
+  /*
+    Where the bottom row's buttons went. Anchored under the rail rather
+    than centred, because it belongs to the icon that opened it and a
+    panel that appears somewhere else is a panel you have to go and find.
+  */
+  .dv {
+    /*
+      ABOVE THE RAIL, not below it: the tooltips are drawn to the left of
+      their buttons and this panel is in exactly that space, so a tooltip
+      would print itself across the grid sizes. The panel is what you are
+      using while it is open.
+    */
+    position: fixed; right: 50px; top: 46px; z-index: 27;
+    display: flex; flex-direction: column; gap: 7px;
+    padding: 10px 12px;
+    background: #141416; border: 1px solid #34343a; border-radius: 7px;
+    box-shadow: 0 18px 40px -16px rgba(0,0,0,.9);
+    color: var(--dim); font-size: 11px;
+  }
+  .dv[hidden] { display: none; }
+  .dv-row { display: flex; gap: 4px; align-items: center; }
+  .dv-label { width: 46px; letter-spacing: .06em; }
+  .dv button {
+    font: inherit; font-size: 11px; padding: .25rem .6rem; cursor: pointer;
+    color: var(--text); background: #1b1b1e; border: 1px solid #343438; border-radius: 3px;
+  }
+  .dv button:hover { border-color: #4d4d52; }
+  .dv button[aria-pressed="true"] { background: #e0a040; border-color: #e0a040; color: #121212; }
+
+  /*
+    The level, which is the one control here that is not a button.
+
+    A RANGE INPUT, styled only as far as the track and the thumb: the
+    browser's own is keyboard-accessible, understands a drag, and a
+    hand-drawn fader would be a day's work to make worse. The readout is
+    monospace and a fixed width so the panel does not twitch as the number
+    changes from "-6" to "-12".
+  */
+  /* Under its own icon: the devices panel hangs off the second button in
+     the rail and this one off the third, because a panel that appears
+     somewhere else is a panel you have to go and find. */
+  #soundpanel { top: 80px; }
+  /* The zoom sits under the sound, so it is the fourth icon and everything
+     below it moved down one place: 34px of rail per button. */
+  #zoompanel { top: 114px; }
+  /* Under the eighth icon, which is the last one in the rail. */
+  #restartpanel { top: 216px; max-width: 250px; }
+  #restartpanel .dv-note { margin: 0; }
+  .dv-vol { width: 132px; accent-color: #e0a040; cursor: pointer; }
+  .dv-db { width: 44px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+  .dv-note { color: #6e6e76; font-size: 10px; max-width: 210px; line-height: 1.35; }
+
+  /* --------------------------------------------------------------- console */
+
+  /*
+    THE GESTURE GATE. Chrome will not start an AudioContext before a user
+    gesture, and it does not reject the resume() either -- it leaves the
+    promise pending for ever. So the page waits, and without this it waits
+    looking exactly like a page that has crashed.
+
+    It dims rather than hides what is behind: the norns is already drawing by
+    then, and covering it up would make the wait look like a failure instead
+    of a pause. Nothing here swallows the click -- pointer-events stay off,
+    so the gesture reaches the page and whatever is under the cursor.
+  */
+  #gate {
+    position: fixed; inset: 0; z-index: 50;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  /*
+    TWO STATES, ONE ELEMENT.
+
+    `loading` is OPAQUE and is in the markup rather than switched on by
+    script, so it covers the very first paint: without it the first thing
+    anyone sees is a grey rectangle and a toolbar reading `grid none 64`,
+    which is the instrument's furniture arriving before the instrument.
+
+    `gesture` is the one that waits for a click (see below) and is
+    translucent, because by then the norns is drawing and covering it would
+    make a pause look like a failure.
+
+    Neither takes the pointer. The `gesture` state is asking for a click; it
+    must not be the thing that receives it.
+  */
+  #gate[data-state="loading"] { background: #000; }
+  #gate[data-state="gesture"] {
+    background: rgba(8, 8, 10, .72);
+    backdrop-filter: saturate(.35) blur(1.5px);
+    animation: gate-in .18s ease-out;
+  }
+  #gate[data-state="off"] { display: none; }
+  #gate[data-state="loading"] .gate-card,
+  #gate[data-state="gesture"] .gate-loading { display: none; }
+  .gate-loading {
+    font-size: 13px; letter-spacing: .06em; color: var(--dim);
+    animation: gate-pulse 1.8s ease-in-out infinite;
+  }
+  @keyframes gate-in { from { opacity: 0 } to { opacity: 1 } }
+  .gate-card {
+    text-align: center; padding: 1.4rem 2rem;
+    border: 1px solid #3a3a40; border-radius: 6px;
+    background: #141418;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, .6);
+  }
+  .gate-title {
+    font-size: 15px; letter-spacing: .04em; color: var(--text);
+    animation: gate-pulse 1.8s ease-in-out infinite;
+  }
+  .gate-sub { font-size: 11px; color: var(--dim); margin-top: .5rem; }
+  @keyframes gate-pulse { 0%, 100% { opacity: 1 } 50% { opacity: .55 } }
+  @media (prefers-reduced-motion: reduce) {
+    #gate { animation: none }
+    .gate-title, .gate-loading { animation: none }
+  }
+
+  /*
+    WIDTH FROM THE STAGE, not from here: the console is a device now, and
+    the stage is what decides how wide a device is. Whether it is shown at
+    all is `#consolebox[hidden]`, which is also what the stage reads.
+  */
+  #console {
+    position: relative;
+    width: 100%; display: flex; flex-direction: column; gap: 8px;
+  }
+  /*
+    Over the log's top-right corner, clear of the scrollbar by a hair. Dim
+    until the pointer is in the console, so it is there when wanted and not
+    a button sitting on the output the rest of the time.
+  */
+  #logcopy {
+    /* 22px clears a 17px Windows scrollbar with a few to spare; on a
+       platform with overlay scrollbars it simply sits a little further in. */
+    position: absolute; top: 5px; right: 22px; z-index: 2;
+    font: inherit; font-size: 10px; line-height: 1;
+    padding: .2rem .4rem; border-radius: 3px; cursor: pointer;
+    color: var(--dim); background: #16161a; border: 1px solid #2c2c30;
+    opacity: .45; transition: opacity .12s, color .12s, border-color .12s;
+  }
+  #console:hover #logcopy { opacity: 1; }
+  #logcopy:hover { color: var(--text); border-color: #4d4d52; }
+  #logcopy.done { color: #7aa060; border-color: #44603a; opacity: 1; }
+  #logcopy.failed { color: #c08a50; border-color: #6a4f2e; opacity: 1; }
+  pre {
+    background: #070708; border: 1px solid #1e1e20; border-radius: 4px;
+    padding: 8px 10px; width: 100%; max-height: 220px; overflow: auto;
+    margin: 0; color: var(--dim); font-size: 11px; white-space: pre-wrap;
+  }
+
+  /* ----------------------------------------------------- community panel */
+
+  /*
+    Bigger than the gear and in the middle, because it is a catalogue of
+    three hundred and fifty entries rather than a handful of settings. It
+    scrolls on its own so a short window still reaches the list.
+  */
+  /*
+    MAIDEN. The arrangement is maiden's own -- an activity rail, a file
+    tree, tabs, the editor, a status line -- because the people who would
+    use this already know where everything is.
+
+    The colours are Ace's `tomorrow_night`, which is what maiden's
+    `norns_dark` turned out to be: every hex in that file is one of this
+    theme's. The gutter is the one thing maiden darkened, so that is the
+    one thing overridden here.
+  */
+  #maidenpanel {
+    position: fixed; inset: 0; z-index: 40;
+    display: grid; grid-template-columns: 44px 230px 1fr;
+    background: #1D1F21; color: #C5C8C6;
+    font-size: 12px;
+  }
+  #maidenpanel[hidden] { display: none; }
+  .mdn-rail {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 6px 0; background: #171819; border-right: 1px solid #0f1011;
+  }
+  .mdn-act {
+    width: 34px; height: 34px; display: grid; place-items: center;
+    background: none; border: none; border-radius: 4px; cursor: pointer;
+    color: #6f7276; padding: 0;
+  }
+  .mdn-act:hover:not(:disabled) { color: #C5C8C6; background: #232629; }
+  .mdn-act[aria-pressed="true"] { color: #e0a040; }
+  .mdn-act:disabled { opacity: .35; cursor: default; }
+  .mdn-spacer { flex: 1 1 auto; }
+
+  .mdn-side {
+    display: flex; flex-direction: column; min-height: 0;
+    background: #202326; border-right: 1px solid #0f1011;
+  }
+  .mdn-side-head {
+    padding: 8px 10px; letter-spacing: .16em; text-transform: uppercase;
+    font-size: 10px; color: #6f7276; border-bottom: 1px solid #16181a;
+  }
+  .mdn-side-head { display: flex; align-items: center; gap: 6px; }
+  .mdn-side-tools { margin-left: auto; display: flex; gap: 2px; }
+  .mdn-side-act {
+    font: inherit; font-size: 9px; letter-spacing: .04em; padding: 2px 4px;
+    border-radius: 2px; cursor: pointer;
+    color: #9a9d9f; background: #2b2e31; border: 1px solid #34383c;
+  }
+  .mdn-side-act:hover:not(:disabled) { background: #373B41; color: #C5C8C6; }
+  .mdn-side-act:disabled { opacity: .35; cursor: default; }
+
+  /* The bar the file actions ask through. */
+  .mdn-ask {
+    display: flex; align-items: center; gap: 5px; padding: 6px 8px;
+    background: #282A2E; border-bottom: 1px solid #16181a; font-size: 11px;
+  }
+  .mdn-ask[hidden] { display: none; }
+  /*
+    The panel-level question: leaving with a restart owed.
+
+    IN THE MIDDLE AND IN FRONT (user, 2026-11-13). It was a strip along the
+    bottom, in the ask bar's own 11px, and at the foot of a full-screen
+    panel that is a place the eye does not go — the first version of it was
+    invisible because it was inside a hidden sidebar, and the second was
+    merely easy to miss.
+
+    THE BACKDROP IS A BOX-SHADOW and not a second element, which is the one
+    trick here: a wrapper div would have to be hidden and shown in step with
+    this one, and two things that must agree about being hidden eventually
+    disagree. A spread of 100vmax puts one shadow over everything outside
+    the box, so the dimming follows `hidden` for free.
+  */
+  .mdn-exit-ask {
+    position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 6;
+    flex-wrap: wrap; justify-content: flex-end; gap: 8px;
+    width: min(430px, calc(100% - 48px));
+    padding: 18px 20px;
+    background: #282A2E;
+    border: 1px solid #4B4E55; border-radius: 6px;
+    box-shadow: 0 0 0 100vmax rgba(0,0,0,.62), 0 26px 60px -22px rgba(0,0,0,.9);
+  }
+  .mdn-exit-ask .mdn-ask-text {
+    flex: 1 1 100%; color: #C5C8C6; font-size: 13px; line-height: 1.5;
+  }
+  .mdn-exit-ask .mdn-ask-go, .mdn-exit-ask .mdn-ask-no {
+    font-size: 12px; padding: 5px 13px;
+  }
+  .mdn-ask-text { color: #969896; }
+  .mdn-ask-input {
+    flex: 1 1 auto; min-width: 0; font: inherit; font-size: 11px;
+    color: #C5C8C6; background: #1D1F21;
+    border: 1px solid #4B4E55; border-radius: 2px; padding: 2px 4px;
+  }
+  .mdn-ask-go, .mdn-ask-no {
+    font: inherit; font-size: 10px; padding: 2px 6px; border-radius: 2px; cursor: pointer;
+    border: 1px solid #4B4E55; background: #2b2e31; color: #C5C8C6;
+  }
+  .mdn-ask-go { background: #B5BD68; color: #1D1F21; border-color: #99a04f; }
+
+  .mdn-tree { flex: 1 1 auto; overflow: auto; padding: 4px 0; }
+  .mdn-row {
+    display: flex; align-items: center; gap: 4px;
+    padding: 2px 8px 2px 6px; cursor: pointer; white-space: nowrap;
+  }
+  .mdn-row:hover { background: #282A2E; }
+  .mdn-row.on { background: #373B41; }
+  /* Selected is what the actions act on; open is what you are editing. */
+  .mdn-row.sel { box-shadow: inset 2px 0 0 #e0a040; }
+  .mdn-twist { width: 10px; color: #6f7276; }
+  .mdn-name { overflow: hidden; text-overflow: ellipsis; }
+  .mdn-tag {
+    margin-left: auto; font-size: 10px; padding: 0 5px; border-radius: 8px;
+  }
+  /* Not here is not an error, so it is dim rather than red. */
+  .mdn-remote { color: #6f7276; border: 1px solid #343a3f; }
+  .mdn-mine { color: #1D1F21; background: #B5BD68; }
+
+  /* The repl activity has no file tree, so the sidebar column goes. */
+  #maidenpanel[data-activity="repl"], #maidenpanel[data-side="off"] {
+    grid-template-columns: 44px 1fr;
+  }
+  #maidenpanel[data-activity="repl"] .mdn-side,
+  #maidenpanel[data-activity="project"] .mdn-side,
+  #maidenpanel[data-activity="config"] .mdn-side { display: none; }
+  #maidenpanel[data-activity="config"],
+  #maidenpanel[data-activity="project"] { grid-template-columns: 44px 1fr; }
+  .mdn-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .mdn-edit { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+  .mdn-edit[hidden] { display: none; }
+
+  /*
+    THE CONSOLES. maiden's arrangement: tabs across the top, the active one
+    below, and a narrow tool bar on the right holding a single `clear`.
+  */
+  .mdn-repl { display: grid; grid-template-columns: 1fr 56px; grid-template-rows: 30px 1fr; flex: 1 1 auto; min-height: 0; }
+  .mdn-repl[hidden] { display: none; }
+  .mdn-repl-tabs {
+    grid-column: 1 / 3; display: flex; gap: 1px;
+    background: #171819; border-bottom: 1px solid #0f1011;
+  }
+  .mdn-repl-tab {
+    font: inherit; font-size: 11px; padding: 0 14px; cursor: pointer;
+    background: #1D1F21; color: #6f7276; border: none; border-bottom: 2px solid transparent;
+  }
+  .mdn-repl-tab[aria-pressed="true"] { color: #C5C8C6; border-bottom-color: #e0a040; }
+  .mdn-repl-body { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .mdn-repl-out {
+    /*
+      `max-height: none` because the page's own `pre` rule caps every one of
+      them at 220px for the console panel -- which left this console a
+      fifth of its pane with the rest of the panel black beneath it.
+    */
+    flex: 1 1 auto; max-height: none; margin: 0; padding: 8px 10px; overflow: auto;
+    font: inherit; font-size: 12px; line-height: 1.45;
+    white-space: pre-wrap; word-break: break-word; color: #C5C8C6;
+  }
+  .mdn-repl-line {
+    display: flex; align-items: center; gap: 6px; padding: 0 10px;
+    height: 30px; background: #171819; border-top: 1px solid #0f1011;
+  }
+  .mdn-repl-prompt { color: #B5BD68; }
+  .mdn-repl-input {
+    flex: 1 1 auto; background: none; border: none; outline: none;
+    font: inherit; font-size: 12px; color: #C5C8C6;
+  }
+  .mdn-repl-tools { border-left: 1px solid #0f1011; background: #202326; padding: 6px 4px; }
+  .mdn-repl-clear {
+    width: 100%; font: inherit; font-size: 10px; padding: 3px 0; cursor: pointer;
+    color: #C5C8C6; background: #2b2e31; border: 1px solid #34383c; border-radius: 3px;
+  }
+  .mdn-repl-clear:hover { background: #373B41; }
+  .mdn-tabs {
+    display: flex; gap: 1px; height: 28px; align-items: stretch;
+    background: #171819; border-bottom: 1px solid #0f1011;
+  }
+  .mdn-tab {
+    display: flex; align-items: center; gap: 6px; padding: 0 8px 0 12px;
+    background: #202326; color: #6f7276; max-width: 240px; cursor: pointer;
+    overflow: hidden; white-space: nowrap;
+  }
+  .mdn-tab.on { background: #1D1F21; color: #C5C8C6; }
+  .mdn-tab > span { overflow: hidden; text-overflow: ellipsis; }
+  .mdn-tab-shut {
+    font: inherit; font-size: 13px; line-height: 1; padding: 0 2px;
+    background: none; border: none; color: inherit; cursor: pointer; opacity: .5;
+  }
+  .mdn-tab-shut:hover { opacity: 1; }
+
+  /*
+    THE PROJECT ACTIVITY. maiden's two tabs -- installed and available --
+    over the catalogue the community panel already read.
+  */
+  .mdn-proj { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+  .mdn-proj[hidden] { display: none; }
+  .mdn-proj-tabs {
+    display: flex; gap: 1px; height: 30px;
+    background: #171819; border-bottom: 1px solid #0f1011;
+  }
+  .mdn-proj-tab {
+    font: inherit; font-size: 11px; padding: 0 14px; cursor: pointer;
+    background: #1D1F21; color: #6f7276; border: none; border-bottom: 2px solid transparent;
+  }
+  .mdn-proj-tab[aria-pressed="true"] { color: #C5C8C6; border-bottom-color: #e0a040; }
+  .mdn-proj-bar {
+    display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+    border-bottom: 1px solid #16181a;
+  }
+  .mdn-proj-search, .mdn-proj-url {
+    font: inherit; font-size: 11px; color: #C5C8C6; background: #171819;
+    border: 1px solid #34383c; border-radius: 3px; padding: 3px 6px;
+  }
+  .mdn-proj-search { width: 180px; }
+  .mdn-proj-url { flex: 1 1 auto; min-width: 0; }
+  .mdn-proj-go {
+    font: inherit; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer;
+    color: #1D1F21; background: #B5BD68; border: 1px solid #99a04f;
+  }
+  .mdn-proj-go:disabled { background: #2b2e31; color: #6f7276; border-color: #34383c; cursor: default; }
+  .mdn-proj-ask {
+    display: flex; align-items: center; gap: 6px; padding: 7px 12px;
+    background: #282A2E; border-bottom: 1px solid #16181a; font-size: 11px;
+  }
+  .mdn-proj-ask[hidden] { display: none; }
+  .mdn-proj-ask-text { flex: 1 1 auto; color: #F0C674; }
+  /*
+    The downloads, pinned under the tabs.
+
+    AT THE TOP AND NOT IN THE LIST (user, 2026-11-13): the list shows what
+    matches the search, not what is happening, so queueing four scripts and
+    then typing to find a fifth took all four off the screen. This does not
+    move.
+  */
+  .mdn-proj-jobs {
+    display: flex; flex-direction: column; gap: 2px;
+    padding: 7px 12px; background: #202225;
+    border-bottom: 1px solid #16181a; font-size: 11px;
+  }
+  .mdn-proj-jobs[hidden] { display: none; }
+  .mdn-proj-job { display: flex; align-items: center; gap: 8px; }
+  .mdn-proj-job-name { color: #C5C8C6; min-width: 9em; }
+  .mdn-proj-job-state { color: #8a8a90; font-variant-numeric: tabular-nums; flex: 1 1 auto; }
+  .mdn-proj-job-state[data-state="running"] { color: #e0a040; }
+  .mdn-proj-job-state[data-state="done"] { color: #B5BD68; }
+  .mdn-proj-job-state[data-state="failed"] { color: #CC6666; }
+  .mdn-proj-short {
+  /* E9-39 — what a catalogue script is missing here. Set apart from the
+     description because it is about THIS machine, not about the script. */
+  display: block;
+  color: var(--warn, #c8a24a);
+  font-size: 0.92em;
+}
+.mdn-proj-need {
+  /* E9-32 — the line that says what a script still needs. Set apart from
+     the download rows above it because it is a QUESTION, not a state:
+     those rows report, this one asks. */
+  border-top: 1px solid var(--line, #333);
+  gap: 0.5em;
+}
+.mdn-proj-need .mdn-proj-job-name {
+  color: var(--fg, #ddd);
+  flex: 1 1 auto;
+  white-space: normal;
+}
+.mdn-proj-job-x {
+    font: inherit; font-size: 10px; padding: 1px 7px; cursor: pointer;
+    color: #C5C8C6; background: #2b2e31;
+    border: 1px solid #4B4E55; border-radius: 2px;
+  }
+  .mdn-proj-job-x:hover { border-color: #6a6e76; }
+  .mdn-proj-note { padding: 6px 12px; color: #6f7276; font-size: 11px; min-height: 14px; }
+  .mdn-proj-list { flex: 1 1 auto; overflow: auto; padding: 0 12px 16px; }
+  .mdn-proj-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; border-bottom: 1px solid #25282c;
+  }
+  .mdn-proj-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+  .mdn-proj-name { color: #C5C8C6; }
+  .mdn-proj-by { color: #969896; font-size: 11px; }
+  .mdn-proj-desc {
+    color: #6f7276; font-size: 11px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mdn-proj-link { color: #81A2BE; font-size: 11px; text-decoration: none; }
+  .mdn-proj-link:hover { text-decoration: underline; }
+  .mdn-proj-act {
+    font: inherit; font-size: 10px; padding: 3px 9px; border-radius: 3px; cursor: pointer;
+    color: #C5C8C6; background: #2b2e31; border: 1px solid #34383c;
+  }
+  /* A row that is downloading or waiting says so in its own button. */
+  .mdn-proj-act[data-state="running"] { background: #e0a040; border-color: #e0a040; color: #121212; }
+  .mdn-proj-act[data-state="queued"] { color: #8a8a90; border-style: dashed; }
+  .mdn-proj-act:hover:not(:disabled) { background: #373B41; }
+  .mdn-proj-act:disabled { opacity: .4; cursor: default; }
+  .mdn-proj-del { color: #CC6666; }
+  .mdn-proj-empty { padding: 16px 0; color: #6f7276; font-size: 11px; }
+
+  /* The configure activity. */
+  .mdn-config { flex: 1 1 auto; overflow: auto; padding: 18px 20px; max-width: 560px; }
+  .mdn-config[hidden] { display: none; }
+  .mdn-config-row { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .mdn-config-name { width: 76px; color: #969896; font-size: 11px; }
+  .mdn-config-opt {
+    font: inherit; font-size: 11px; padding: 3px 9px; border-radius: 3px; cursor: pointer;
+    color: #C5C8C6; background: #2b2e31; border: 1px solid #34383c;
+  }
+  .mdn-config-opt[aria-pressed="true"] {
+    background: #e0a040; color: #1D1F21; border-color: #a97c2b;
+  }
+  .mdn-config-note { color: #6f7276; font-size: 11px; max-width: 42em; margin-top: 18px; }
+  .mdn-tools { margin-left: auto; display: flex; align-items: center; padding: 0 6px; }
+  .mdn-play {
+    display: flex; align-items: center; gap: 5px;
+    font: inherit; font-size: 11px; padding: 3px 10px;
+    border-radius: 3px; cursor: pointer;
+    color: #1D1F21; background: #B5BD68; border: 1px solid #99a04f;
+  }
+  .mdn-play:hover:not(:disabled) { background: #c6ce79; }
+  .mdn-play:disabled { background: #2b2e31; color: #6f7276; border-color: #34383c; cursor: default; }
+  .mdn-editor { flex: 1 1 auto; min-height: 0; }
+  /* An error marker in the gutter, on the line that raised it. */
+  #maidenpanel .ace_gutter-cell.ace_error {
+    background-color: #CC6666; color: #1D1F21; background-image: none;
+  }
+  .mdn-status {
+    height: 24px; display: flex; align-items: center; padding: 0 10px;
+    background: #171819; border-top: 1px solid #0f1011; color: #969896;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* maiden's one departure from tomorrow_night: a darker gutter. */
+  #maidenpanel .ace_gutter { background: #25282c; }
+
+  /* --------------------------------------------------------------- panel */
+
+  /*
+    Floating, not modal: arranging needs this open AND the devices
+    reachable. It scrolls on its own so a short window does not hide the
+    layout section behind the fold.
+  */
+  .sp {
+    /*
+      CLEAR OF THE RAIL, at the same `right` as the popovers (E9-93).
+      It was at 14px, which is INSIDE the rail: the rail is at right 10px
+      and 28px wide, and it has the higher z-index, so it was drawn over
+      the panel's top-right corner and the × that closes it could not be
+      clicked. 10 + 28 + 12 = 50, which is where `.dv` already sat.
+    */
+    position: fixed; right: 50px; top: 52px; z-index: 20;
+    width: min(330px, calc(100vw - 64px)); max-height: calc(100vh - 70px);
+    overflow: auto; padding: 12px 13px 14px;
+    background: #141416; border: 1px solid #34343a; border-radius: 7px;
+    box-shadow: 0 16px 34px -14px rgba(0,0,0,.9);
+    font-size: 11px; color: var(--text);
+  }
+  .sp[hidden] { display: none; }
+  .sp-head { display: flex; align-items: center; justify-content: space-between; }
+  .sp-head strong { font-weight: normal; letter-spacing: .14em; color: var(--dim); }
+  .sp-x {
+    background: none; border: 0; color: var(--dim); font: inherit; font-size: 15px;
+    cursor: pointer; line-height: 1; padding: 0 2px;
+  }
+  .sp-x:hover { color: var(--text); }
+  .sp-section { margin-top: 14px; }
+  .sp-section-head { display: flex; align-items: baseline; justify-content: space-between; }
+  .sp h2 {
+    font-size: 11px; font-weight: normal; margin: 0 0 7px;
+    letter-spacing: .1em; color: #8a8a90;
+  }
+  .sp-reset, .sp-toggle, .sp-add, .sp-chip {
+    font: inherit; cursor: pointer; border-radius: 3px;
+    color: var(--text); background: #1e1e22; border: 1px solid #343438;
+  }
+  .sp-reset { padding: .1rem .45rem; color: var(--dim); }
+  .sp-reset:hover, .sp-toggle:hover, .sp-add:hover { border-color: #4d4d52; color: var(--text); }
+  .sp-toggle { padding: .3rem .6rem; }
+  .sp-toggle[aria-pressed="true"] { background: #e0a040; border-color: #e0a040; color: #121212; }
+  .sp-rows { display: flex; flex-direction: column; gap: 4px; }
+  .sp-row { display: flex; align-items: center; gap: 7px; }
+  .sp-act { width: 34px; flex: none; color: #9a9aa0; }
+  .sp-chips { display: flex; flex-wrap: wrap; gap: 4px; flex: 1 1 auto; }
+  .sp-none { color: #5a5a60; font-style: italic; }
+  .sp-chip { display: inline-flex; align-items: center; gap: 5px; padding: .08rem .3rem; }
+  .sp-chip kbd { font: inherit; color: var(--text); }
+  .sp-chip-x { color: #6c6c74; }
+  .sp-chip:hover { border-color: #a05454; }
+  .sp-chip:hover .sp-chip-x { color: #d08080; }
+  .sp-add { flex: none; min-width: 22px; padding: .08rem .35rem; color: var(--dim); }
+  .sp-add.capturing { background: #e0a040; border-color: #e0a040; color: #121212; }
+  .sp-url {
+    flex: 1 1 auto; min-width: 0; font: inherit; font-size: 11px;
+    padding: .25rem .4rem; border-radius: 3px;
+    color: var(--text); background: #0d0d0f; border: 1px solid #343438;
+  }
+  .sp-url:focus { outline: none; border-color: #e0a040; }
+  /* A count, not a url: wide enough for five digits and no wider. */
+  .sp-count {
+    flex: 0 0 auto; width: 5.5em; font: inherit; font-size: 11px;
+    padding: .25rem .4rem; border-radius: 3px;
+    color: var(--text); background: #0d0d0f; border: 1px solid #343438;
+  }
+  .sp-count:focus { outline: none; border-color: #e0a040; }
+  .sp-about { margin: 0; color: #9a9aa0; line-height: 1.5; }
+  .sp-about strong { color: var(--text); font-weight: normal; }
+  .sp-link { color: #e0a040; }
+  .sp-nosource { color: #c08a50; }
+  /*
+    THE MIDI KEYBOARD.
+
+    Same case as the norns and the grid -- it sits in the same `.slab` -- so
+    the keys have to read as parts of one instrument rather than as a piano
+    pasted onto it. White keys are the brushed aluminium of the grid's pads,
+    not white; black keys are the knob caps' near-black. The only bright
+    thing on the whole device is a pressed key, which is the one piece of
+    information it carries.
+
+    Everything is a percentage of the keyboard's width, so it stays itself at
+    any size the stage gives it.
+  */
+  .kb { display: flex; flex-direction: column; gap: 3%; }
+  .kb-bar {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    font-size: 11px; color: #4a4843;
+  }
+  .kb-oct {
+    font: inherit; font-size: 13px; line-height: 1;
+    width: 1.6em; height: 1.6em; padding: 0;
+    border-radius: 3px; cursor: pointer;
+    color: #2c2a27;
+    background: linear-gradient(180deg, #d2d0cb 0%, #b4b2ac 100%);
+    border: 1px solid #8e8c86;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.7), 0 1px 2px rgba(0,0,0,.3);
+  }
+  .kb-oct:hover:not(:disabled) { background: linear-gradient(180deg, #dedcd7 0%, #c0beb8 100%); }
+  .kb-oct:active:not(:disabled) { box-shadow: inset 0 1px 3px rgba(0,0,0,.4); }
+  .kb-oct:disabled { opacity: .35; cursor: default; }
+  .kb-label {
+    min-width: 3.2em; text-align: center; letter-spacing: .08em;
+    font-variant-numeric: tabular-nums;
+  }
+  .kb-vel { min-width: 2.4em; }
+  /* A word, not an icon: "vel" is two controls' worth of ambiguity saved. */
+  .kb-cap { margin-left: 10px; color: #6a675f; letter-spacing: .1em; }
+  /*
+    `touch-action: none` is not decoration: without it a drag across the keys
+    scrolls the page on a touchscreen and the pointer stream stops dead, so a
+    glissando becomes one note and a stuck one.
+  */
+  .kb-keys {
+    position: relative; display: flex; width: 100%;
+    aspect-ratio: 7 / 2; touch-action: none; user-select: none;
+  }
+  .kb-key { position: relative; border-radius: 0 0 3px 3px; }
+  .kb-white {
+    height: 100%;
+    background: linear-gradient(180deg, #e8e6e1 0%, #d6d4cf 72%, #bcbab4 100%);
+    border: 1px solid #94928c; border-top: none;
+    box-shadow: inset 0 -2px 3px rgba(0,0,0,.14);
+  }
+  .kb-white + .kb-white { margin-left: -1px; }
+  .kb-black {
+    position: absolute; top: 0; height: 62%; z-index: 2;
+    background: linear-gradient(180deg, #37353a 0%, #232126 60%, #141216 100%);
+    border: 1px solid #0d0c0f; border-top: none;
+    box-shadow: 0 2px 3px rgba(0,0,0,.45), inset 0 -1px 0 rgba(255,255,255,.12);
+  }
+  .kb-white.down {
+    background: linear-gradient(180deg, #f0c07a 0%, #e0a040 70%, #c98c33 100%);
+    box-shadow: inset 0 2px 5px rgba(0,0,0,.3);
+  }
+  .kb-black.down {
+    background: linear-gradient(180deg, #a8762c 0%, #8a5f20 70%, #6d4a18 100%);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.5);
+  }
+
+  /*
+    FADERS. Sixteen slots machined into the panel: the slot is a milled
+    channel with a shadow in it, the cap is a piece of the same brushed
+    aluminium as the grid's pads and the keyboard's white keys. Two
+    materials, both of them metal, which is what keeps it a face of the
+    same instrument rather than a picture of somebody else's hardware.
+
+    `--fb-cap` is the cap's height and the view divides by it: the travel
+    of a fader is the slot MINUS the cap, or 0 would hang half the cap off
+    the bottom and 127 half of it off the top.
+  */
+  .fb { display: flex; flex-direction: column; gap: 4%; --fb-cap: 15px; }
+  .fb-bar {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; color: #4a4843; letter-spacing: .08em;
+  }
+  .fb-row {
+    display: flex; gap: 1.2%; width: 100%;
+    aspect-ratio: 16 / 7; touch-action: none; user-select: none;
+  }
+  .fb-slot { flex: 1 1 0; display: flex; justify-content: center; }
+  /*
+    A MILLED CHANNEL, not a black bar: the walls catch light at the top and
+    the floor stays in shadow, which is the whole difference between a slot
+    cut in metal and a rectangle painted on it.
+  */
+  .fb-track {
+    position: relative; width: 34%; height: 100%; border-radius: 4px;
+    background: linear-gradient(90deg, #9b9993 0%, #5d5b57 24%, #37362f 50%, #5d5b57 76%, #9b9993 100%);
+    box-shadow:
+      inset 0 2px 4px rgba(0,0,0,.55),
+      inset 0 -1px 0 rgba(255,255,255,.25),
+      0 1px 0 rgba(255,255,255,.35);
+  }
+  .fb-cap {
+    position: absolute; left: -58%; width: 216%; height: var(--fb-cap);
+    border-radius: 3px;
+    background: linear-gradient(180deg, #f2f0eb 0%, #dcdad5 42%, #c2c0ba 58%, #9d9b95 100%);
+    border: 1px solid #817f79;
+    box-shadow:
+      0 2px 3px rgba(0,0,0,.45),
+      inset 0 1px 0 rgba(255,255,255,.9),
+      inset 0 -1px 0 rgba(0,0,0,.2);
+  }
+  /* The grip line across the cap, where a thumb would sit. */
+  .fb-cap::after {
+    content: ""; position: absolute; inset: 42% 14% auto 14%; height: 2px;
+    background: linear-gradient(180deg, rgba(0,0,0,.35) 0 1px, rgba(255,255,255,.55) 1px 2px);
+  }
+  .fb-cap.down {
+    background: linear-gradient(180deg, #ffffff 0%, #e8e6e1 42%, #ceccc6 58%, #a9a7a1 100%);
+    box-shadow:
+      0 1px 2px rgba(0,0,0,.5),
+      inset 0 1px 0 rgba(255,255,255,1),
+      0 0 10px rgba(224,160,64,.35);
+  }
+
+  /*
+    KNOBS. Four by four, each a knurled aluminium cap in a machined ring,
+    and the ring IS the value -- there is no separate indicator, because on
+    a knob there is not one either.
+
+    The arc opens at the bottom, 140 degrees either side of straight up, and
+    the cap's engraved mark turns with it so the two always agree. A knob
+    the host has never coloured shows a bright metal arc rather than none:
+    it still has a position.
+  */
+  .kn { display: flex; flex-direction: column; gap: 4%; }
+  .kn-banks { display: flex; gap: 6px; justify-content: center; }
+  .kn-bank {
+    font: inherit; font-size: 11px; line-height: 1;
+    width: 1.8em; height: 1.6em; padding: 0;
+    border-radius: 3px; cursor: pointer; color: #2c2a27;
+    background: linear-gradient(180deg, #e2e0db 0%, #c0beb8 100%);
+    border: 1px solid #8e8c86;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.85), 0 1px 2px rgba(0,0,0,.3);
+  }
+  .kn-bank[aria-pressed="true"] {
+    background: linear-gradient(180deg, #f0c07a 0%, #d79b3c 100%);
+    border-color: #a97c2b;
+  }
+  .kn-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 5%;
+    width: 100%; aspect-ratio: 1 / 1; touch-action: none; user-select: none;
+  }
+  .kn-knob { position: relative; aspect-ratio: 1 / 1; }
+  /* The machined recess the knob sits in. */
+  .kn-knob::before {
+    content: ""; position: absolute; inset: -4%; border-radius: 50%;
+    background: radial-gradient(circle at 50% 35%, #a8a6a0 0%, #8b8983 60%, #6f6d68 100%);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,.45), 0 1px 0 rgba(255,255,255,.4);
+  }
+  .kn-ring {
+    position: absolute; inset: 4%; border-radius: 50%;
+    background: conic-gradient(from 220deg,
+      hsl(var(--kn-hue, 0) var(--kn-sat, 0%) 78%) calc(var(--kn-v, 0) * 280deg),
+      #4a4844 calc(var(--kn-v, 0) * 280deg) 280deg,
+      transparent 280deg);
+    filter: drop-shadow(0 0 3px hsl(var(--kn-hue, 0) var(--kn-sat, 0%) 60% / .55));
+  }
+  /*
+    A KNURLED CAP. The repeating conic gradient is the milling on the edge of
+    a metal knob; the radial on top is the light coming off its dish.
+  */
+  .kn-cap {
+    position: absolute; inset: 22%; border-radius: 50%;
+    transform: rotate(var(--kn-angle, -140deg));
+    background:
+      radial-gradient(circle at 50% 28%, rgba(255,255,255,.75) 0%, rgba(255,255,255,0) 55%),
+      repeating-conic-gradient(#cfcdc7 0deg 6deg, #a9a7a1 6deg 12deg);
+    border: 1px solid #7e7c76;
+    box-shadow: 0 2px 4px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.6);
+  }
+  /* The engraved mark, which is where the value points. */
+  .kn-mark {
+    position: absolute; left: 50%; top: 8%; width: 2px; height: 32%;
+    margin-left: -1px; border-radius: 1px;
+    background: linear-gradient(180deg, #2c2a27 0%, #55534f 100%);
+    box-shadow: 0 1px 0 rgba(255,255,255,.5);
+  }
+  .kn-knob.down .kn-cap {
+    box-shadow: inset 0 2px 6px rgba(0,0,0,.6), 0 0 8px rgba(224,160,64,.4);
+  }
+
+  /*
+    TABS. The panel grew past the point where scrolling it was navigation,
+    so the strip is the table of contents a long scroll never was. The
+    selected one is underlined rather than filled: a filled tab competes
+    with the amber the toolbar uses for "this is on", and a tab is not a
+    state of the instrument.
+  */
+  /*
+    SIX TABS WRAP RATHER THAN PUSH (E9-93). They are 330px laid end to end
+    and the panel is 302px inside its padding, so `nowrap` made the PANEL
+    wider than itself: a horizontal scrollbar along the bottom of a column
+    of settings, and `about` cut in half at the right edge. Wrapping costs
+    a second row at narrow widths and nothing at all when they fit.
+  */
+  .sp-tabs {
+    display: flex; flex-wrap: wrap; gap: 2px; margin: 0 0 10px;
+    border-bottom: 1px solid #2c2c30;
+  }
+  .sp-tab {
+    font: inherit; font-size: 11px; line-height: 1;
+    padding: 7px 10px; border: none; background: none; cursor: pointer;
+    color: var(--dim); border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .sp-tab:hover { color: var(--text); }
+  .sp-tab[aria-selected="true"] { color: var(--text); border-bottom-color: #e0a040; }
+  .sp-pane[hidden] { display: none; }
+
+  .sp-sub { margin: 10px 0 4px; color: #8a8a90; }
+  /* The device profile: four small toggles, and a line saying what was
+     detected and why — a guess the user can see is a guess they can judge. */
+  /* The two ends of a slider's range, shown rather than discovered by
+     pushing a button until it refuses. */
+  .sp-lim {
+    font-size: 10px; color: #6a6a70; font-variant-numeric: tabular-nums;
+    min-width: 2.2em; text-align: center;
+  }
+  .sp-choice { flex-wrap: wrap; gap: 6px; }
+  .sp-note { font-size: 10px; color: var(--dim); margin: .3rem 0 .2rem; line-height: 1.4; }
+  .sp-range { flex: 1 1 auto; min-width: 0; accent-color: #e0a040; }
+  .sp-num { flex: 0 0 auto; width: 34px; text-align: right; color: var(--dim); }
+  .sp-hint { margin: 8px 0 0; color: #6c6c74; line-height: 1.45; }
+  .sp-warn { margin: 12px 0 0; color: #c08a50; line-height: 1.45; }
+
+  /*
+    The device pickers (E9-15).
+
+    A NATIVE <select>, styled only as far as its box: a sound card list can
+    be two entries or fifteen, it has to work with a finger and with a
+    keyboard, and the browser's own already does both. `max-width` because a
+    Windows device name runs to "Speakers (High Definition Audio Device)"
+    and the panel is 300-odd pixels wide.
+  */
+  .sp-dev {
+    flex: 1 1 auto; min-width: 0; max-width: 100%;
+    font: inherit; font-size: 11px; padding: .25rem .4rem;
+    color: var(--text); background: #1b1b1e;
+    border: 1px solid #343438; border-radius: 3px;
+  }
+  .sp-dev:disabled { color: #5a5a60; }
+  /* The MIDI ports: a list to read, not a list to choose from. */
+  .sp-ports { margin: 6px 0 0; padding: 0; list-style: none; line-height: 1.6; }
+  .sp-ports li { color: var(--text); display: flex; gap: 8px; }
+  .sp-ports .sp-dir { color: #6a6a70; width: 3.2em; flex: 0 0 auto; }
+  .sp-ports .sp-none { color: #6a6a70; }
+</style>
+</head>
+<body>
+  <header class="top">
+    <h1>norns-js</h1>
+    <!--
+      The gear. Eight teeth and a hole, drawn rather than fetched: one icon
+      is not worth a font or a sprite sheet, and `currentColor` means it
+      follows the text it sits beside.
+    -->
+    <!--
+      THE RAIL. Every control the page has, as icons down the right-hand
+      edge, because a row of words across the bottom was a row of words:
+      you read it every time instead of recognising it. Fixed rather than
+      in the flow, so it is in the same place whatever the stage is doing.
+
+      Each icon is drawn here rather than fetched -- six icons are not
+      worth a font or a sprite sheet -- uses `currentColor` so it follows
+      the state of its button, and moves on hover the way the gear does.
+      The label is a `data-tip`, shown by CSS to the left.
+    -->
+    <div class="rail">
+      <button id="gear" class="rail-b" aria-expanded="false" aria-label="settings" data-tip="settings">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">
+        <path fill="currentColor" fill-rule="evenodd"
+          d="M12 5a7 7 0 1 0 0 14a7 7 0 1 0 0-14ZM12 9a3 3 0 1 1 0 6a3 3 0 1 1 0-6Z"/>
+        <g fill="currentColor">
+          <rect x="10.7" y="1.4" width="2.6" height="4" rx="1"/>
+          <rect x="10.7" y="1.4" width="2.6" height="4" rx="1" transform="rotate(45 12 12)"/>
+          <rect x="10.7" y="1.4" width="2.6" height="4" rx="1" transform="rotate(90 12 12)"/>
+          <rect x="10.7" y="1.4" width="2.6" height="4" rx="1" transform="rotate(135 12 12)"/>
+          <rect x="10.7" y="1.4" width="2.6" height="4" rx="1" transform="rotate(180 12 12)"/>
+          <rect x="10.7" y="1.4" width="2.6" height="4" rx="1" transform="rotate(225 12 12)"/>
+          <rect x="10.7" y="1.4" width="2.6" height="4" rx="1" transform="rotate(270 12 12)"/>
+          <rect x="10.7" y="1.4" width="2.6" height="4" rx="1" transform="rotate(315 12 12)"/>
+        </g>
+      </svg>
+      </button>
+
+      <!-- The monome and MIDI hardware: what is plugged in. -->
+      <button id="devices" class="rail-b" aria-expanded="false" aria-label="devices" data-tip="devices">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" class="i-dev">
+          <g fill="currentColor">
+            <rect class="p1" x="3" y="3" width="7" height="7" rx="1.5"/>
+            <rect class="p2" x="14" y="3" width="7" height="7" rx="1.5"/>
+            <rect class="p3" x="3" y="14" width="7" height="7" rx="1.5"/>
+            <rect class="p4" x="14" y="14" width="7" height="7" rx="1.5"/>
+          </g>
+        </svg>
+      </button>
+
+      <!--
+        The output: a level and a mute, behind one icon.
+
+        IT OPENS A PANEL NOW RATHER THAN TOGGLING THE MUTE, which costs one
+        click on the thing people press most and buys the control that was
+        missing entirely. The icon still carries the state — amber when the
+        output is live, with the slash drawn when it is not — so the glance
+        that used to be worth a click is still worth a glance.
+      -->
+      <button id="sound" class="rail-b" aria-pressed="false" aria-expanded="false" aria-label="sound" data-tip="sound">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" class="i-snd">
+          <path fill="currentColor" d="M4 9.5h3.5L12 5.5v13L7.5 14.5H4z"/>
+          <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path class="w1" d="M15 9.5a4 4 0 0 1 0 5"/>
+            <path class="w2" d="M17.8 7a8 8 0 0 1 0 10"/>
+          </g>
+          <path class="slash" fill="none" stroke="currentColor" stroke-width="1.8"
+            stroke-linecap="round" d="M15 8l6 8"/>
+        </svg>
+      </button>
+
+      <!--
+        Zoom, under the sound.
+
+        IT IS THE PAGE'S ZOOM AND NOT THE DEVICE'S: the rail, the panels and
+        maiden scale with it, because a person who wants the norns bigger
+        wants the editor's text bigger too and a zoom that stopped at the
+        edge of the stage would be a second, smaller zoom to find. Ctrl and
+        the wheel, or a pinch, do the same thing without opening anything.
+      -->
+      <button id="zoom" class="rail-b" aria-expanded="false" aria-label="zoom" data-tip="zoom">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" class="i-zoom">
+          <circle cx="10.5" cy="10.5" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+            d="M15 15l4.5 4.5M7.8 10.5h5.4M10.5 7.8v5.4"/>
+        </svg>
+      </button>
+
+      <!--
+        THE MIDI LOOPBACK USED TO BE HERE and is in the gear's `midi` tab
+        now (user, 2026-11-13). Its icon was a cable looping back on
+        itself, which read as a circular arrow — and the restart button
+        added below is a circular arrow. Two round arrows in one column of
+        six is a rail you have to read instead of recognise, which is the
+        whole argument for icons in the first place. The loopback is also
+        the rarer of the two and a setting rather than a gesture, so it
+        went and the restart stayed.
+      -->
+
+      <!-- maiden: the editor. -->
+      <button id="maiden" class="rail-b" aria-expanded="false" aria-label="edit" data-tip="edit">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" class="i-edit">
+          <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 19h4l9-9-4-4-9 9z"/>
+            <path class="nib" d="M14 6l4 4"/>
+          </g>
+        </svg>
+      </button>
+
+      <!-- The console. The caret blinks when you reach for it. -->
+      <button id="consoletoggle" class="rail-b" aria-pressed="false" aria-label="console" data-tip="console">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" class="i-con">
+          <rect x="3" y="4.5" width="18" height="15" rx="2" fill="none"
+            stroke="currentColor" stroke-width="1.8"/>
+          <path d="M7 9.5l3 2.5-3 2.5" fill="none" stroke="currentColor"
+            stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <rect class="caret" x="12.5" y="14" width="4.5" height="1.8" rx=".9" fill="currentColor"/>
+        </svg>
+      </button>
+
+      <!--
+        RESTART, which on hardware is a menu away and here is a page reload.
+
+        It is in the rail because in a browser tab you can reload the tab
+        and in the application you cannot — there is no address bar, and
+        SYSTEM > RESTART is four key presses into a menu. It is LAST in the
+        rail because it is the one control that stops the music.
+      -->
+      <button id="restart" class="rail-b" aria-expanded="false" aria-label="restart" data-tip="restart">
+        <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true" class="i-rst">
+          <g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">
+            <path d="M20 12a8 8 0 1 1-2.6-5.9"/>
+          </g>
+          <path d="M20.4 3.4v4.3h-4.3z" fill="currentColor"/>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!--
+    The stage. The three devices are absolutely positioned inside it and the
+    page remembers where: see src/ui/stage.ts for why arranging is a mode.
+  -->
+  <div class="stage" id="stage" data-arrange="false">
+
+  <!--
+    norns. The arrangement is the hardware's: K1 and E1 above the screen on
+    the left, the screen lower left, E2 and E3 upper right with K2 and K3
+    below and between them. Every number here is a percentage of the body,
+    read off monome's own norns-grey.jpeg -- the three encoders are the same
+    size as each other (42px in that photograph) and so are the three keys
+    (29px), which is not obvious by eye and was wrong before it was
+    measured.
+  -->
+  <div class="device" id="nornsbox">
+    <div class="norns" id="norns">
+      <div class="jacks"><i></i><i></i><i></i><i></i><i></i></div>
+
+      <div class="ctl key" id="k1" style="--d:6.6%; left:11.4%; top:40.1%" title="K1"></div>
+      <div class="ctl enc" id="e1" style="--d:9.6%; left:22.6%; top:40.1%" title="E1"></div>
+
+      <div class="screen-well" id="screen"></div>
+
+      <div class="ctl enc" id="e2" style="--d:9.6%; left:70.5%; top:66.5%" title="E2"></div>
+      <div class="ctl enc" id="e3" style="--d:9.6%; left:86.5%; top:66.5%" title="E3"></div>
+      <div class="ctl key" id="k2" style="--d:6.6%; left:62.4%; top:86.2%" title="K2"></div>
+      <div class="ctl key" id="k3" style="--d:6.6%; left:78.5%; top:86.2%" title="K3"></div>
+    </div>
+    <i class="size" title="resize"></i>
+  </div>
+
+  <!--
+    The grid. Hidden entirely when nothing is connected: a norns with no grid
+    plugged in does not show an empty slab.
+  -->
+  <div class="device" id="gridbox">
+    <div class="slab"><canvas id="grid"></canvas></div>
+    <i class="size" title="resize"></i>
+  </div>
+
+  <!-- The arc, same rule. -->
+  <div class="device" id="arcbox" hidden>
+    <div class="slab"><canvas id="arc"></canvas></div>
+    <i class="size" title="resize"></i>
+  </div>
+
+  <!--
+    A two-octave MIDI keyboard, in the same metal case as the rest. Built by
+    src/ui/keyboard-view.ts rather than written out here: 24 keys with the
+    black ones positioned over the gaps is arithmetic, and arithmetic in
+    markup is a table of magic percentages nobody can check.
+  -->
+  <div class="device" id="keysbox" hidden>
+    <div class="slab"><div id="keys"></div></div>
+    <i class="size" title="resize"></i>
+  </div>
+
+  <!--
+    The two controllers, built by their own views for the same reason the
+    keyboard is: sixteen tracks and sixteen rings are arithmetic, and
+    arithmetic in markup is a table of magic numbers nobody can check.
+  -->
+  <div class="device" id="fadersbox" hidden>
+    <div class="slab"><div id="faders"></div></div>
+    <i class="size" title="resize"></i>
+  </div>
+
+  <div class="device" id="knobsbox" hidden>
+    <div class="slab"><div id="knobs"></div></div>
+    <i class="size" title="resize"></i>
+  </div>
+
+  <!--
+    THE CONSOLE IS A DEVICE TOO, so that `arrange devices` can move and
+    size it like the rest. It is the only one that is not a piece of
+    hardware, and it is the one most likely to be in the way: a log under
+    a norns on a 800-pixel screen is a log you scroll to.
+  -->
+  <div class="device" id="consolebox" hidden>
+    <div id="console">
+      <!--
+        Tucked against the log's scrollbar, because the one time anyone wants
+        this is when something has gone wrong and the whole log has to go
+        somewhere else.
+      -->
+      <button id="logcopy" title="copy the console to the clipboard">copy</button>
+      <pre id="log"></pre>
+    </div>
+    <i class="size" title="resize"></i>
+  </div>
+
+  </div><!-- /stage -->
+
+  <!--
+    THE DEVICES PANEL. The same buttons the bottom row had, with their ids
+    and their `data-size` intact, so nothing that drives them had to
+    change: this is where they live now, not what they are.
+  -->
+  <!--
+    The output panel, under the speaker in the rail.
+
+    The level is in DECIBELS because the thing it adjusts is a sound: half
+    the amplitude is −6 dB, and a fader that reads 50% there is telling you
+    a number with no relation to what you hear.
+
+    IT GOES ABOVE ZERO, which a master fader normally should not. The
+    reason is measured rather than stylistic: `amen` arrives about 17 dB
+    quieter from the engine in the desktop shell than in a tab (E9-13), and
+    a control that stopped at unity could not make it audible. The panel
+    says what that costs.
+  -->
+  <div class="dv" id="soundpanel" hidden>
+    <div class="dv-row">
+      <span class="dv-label">level</span>
+      <input class="dv-vol" id="volume" type="range" min="-60" max="12" step="1" value="0"
+             aria-label="master level in decibels">
+      <span class="dv-db" id="volumedb">0 dB</span>
+    </div>
+    <!--
+      `reset`, not `0 dB`, and the rename is a user's question answered
+      (2026-11-16): "what is the 0 dB next to on/off, the value changes
+      sometimes?". It never changed — it is a button that SETS the level to
+      zero — but the readout at the end of the row above says `0 dB` too
+      whenever the level is at unity, and two identical labels an inch
+      apart, one of which moves, read as one label that sometimes moves.
+      The number belongs to the level; the button says what it does.
+    -->
+    <div class="dv-row">
+      <span class="dv-label">output</span>
+      <button id="mute" aria-pressed="true">on</button>
+      <button id="volume0" title="set the level back to 0 dB">reset</button>
+    </div>
+    <div class="dv-note" id="volumenote"></div>
+  </div>
+
+  <!--
+    The zoom panel, under the magnifier.
+
+    A BAR AND NOT A PAIR OF BUTTONS, because zoom is a thing you overshoot
+    and come back from: a slider you can drag past the right answer and
+    settle on beats pressing + until it looks right. The percentage is
+    monospace and fixed width so the panel does not twitch while dragging,
+    and `reset` is the way back to 100% without aiming.
+  -->
+  <div class="dv" id="zoompanel" hidden>
+    <div class="dv-row">
+      <span class="dv-label">zoom</span>
+      <input class="dv-vol" id="zoomrange" type="range" min="50" max="250" step="5" value="100"
+             aria-label="page zoom, in percent">
+      <span class="dv-db" id="zoomval">100%</span>
+    </div>
+    <!--
+      `reset`, not `100%`, for the reason the level button was renamed the
+      day before (2026-11-16, and the same user): the readout at the end of
+      the row above says `100%` too whenever the zoom is at unity, and two
+      identical labels an inch apart — one of which moves — read as one
+      label that sometimes moves. The number belongs to the slider; the
+      button says what it does.
+    -->
+    <div class="dv-row">
+      <span class="dv-label">page</span>
+      <button id="zoomreset" title="set the zoom back to 100%">reset</button>
+    </div>
+    <div class="dv-note">ctrl and the wheel, or a pinch, do the same thing.</div>
+  </div>
+
+  <!--
+    The restart confirmation.
+
+    A CONFIRMATION AND NOT A BARE CLICK, even though the point of the button
+    is to save you a trip through the menus: this is the one control in the
+    rail that stops whatever is playing, and SYSTEM > RESTART asks too. One
+    click and one confirm is still three fewer than the menu.
+
+    It says what survives, because that is the only thing anyone wants to
+    know before pressing it.
+  -->
+  <div class="dv" id="restartpanel" hidden>
+    <div class="dv-row"><span id="restartwhy" class="dv-note"></span></div>
+    <div class="dv-row">
+      <button id="restartgo">restart</button>
+      <button id="restartno">cancel</button>
+    </div>
+  </div>
+
+  <div class="dv" id="devicespanel" hidden>
+    <div class="dv-row">
+      <span class="dv-label">grid</span>
+      <button data-size="0">none</button>
+      <button data-size="64">64</button>
+      <button data-size="128">128</button>
+      <button data-size="256">256</button>
+      <button id="gridrot">rotate</button>
+    </div>
+    <div class="dv-row">
+      <span class="dv-label">monome</span>
+      <button id="arcattach" aria-pressed="false">arc</button>
+    </div>
+    <!--
+      Three MIDI controllers of our own. The buttons say what they are; on
+      the wire the last two answer "16n" and "Midi Fighter Twister", which
+      is what `flora` and `cheat_codes_2` compare against to set themselves
+      up. All off and hidden until asked for.
+    -->
+    <div class="dv-row">
+      <span class="dv-label">midi</span>
+      <button id="keysattach" aria-pressed="false">keyboard</button>
+      <button id="fadersattach" aria-pressed="false">faders</button>
+      <button id="knobsattach" aria-pressed="false">knobs</button>
+    </div>
+  </div>
+
+  <!-- Built by src/ui/settings-panel.ts; empty until then. -->
+  <div class="sp" id="settings" hidden></div>
+
+  <!--
+    The community catalogue, built by src/ui/community-panel.ts. Read live
+    from norns.community's own data file; nothing of it is kept here.
+  -->
+  <!--
+    maiden. An overlay rather than a second window: everything it reaches
+    lives in this page's heap, and a second tab would mean a last-writer
+    race over OPFS and a channel invented to talk to ourselves. Built by
+    src/ui/maiden-panel.ts; see docs/08-MAIDEN.md.
+  -->
+  <div id="maidenpanel" hidden></div>
+
+  <!--
+    Shown only when the browser is holding the audio engine until somebody
+    touches the page. A line in a console nobody has opened is not an answer
+    to a page that looks stalled, so the page says it itself.
+  -->
+  <div id="gate" data-state="loading">
+    <div class="gate-loading">Loading, please wait&hellip;</div>
+    <div class="gate-card">
+      <div class="gate-title">click anywhere to start</div>
+      <div class="gate-sub">your browser will not start an audio engine until you do</div>
+    </div>
+  </div>
+
+  <!--
+    The `process` and `Buffer` globals fengari needs before it will load are
+    installed by src/lua/browser-globals.ts, imported first by src/main.ts.
+  -->
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

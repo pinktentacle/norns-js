@@ -1,0 +1,138 @@
+# E0-17c -- which pixman paths cairo 1.16.0 actually takes for norns' screen
+#
+# Produced by:
+#   bash tools/screen/trace-pixman.sh
+#   node tools/screen/fingerprint.mjs --pxtrace > /dev/null 2> trace.raw
+#
+# trace-pixman.sh builds an instrumented copy of pixman 0.42.2 (printf()s only)
+# and relinks the SAME fingerprint.c against the SAME libcairo.a. Its stdout was
+# checked byte-identical to tools/screen/fp-wasm.txt, so the instrumentation
+# changed no pixels and this is a trace of the real pipeline.
+#
+# This file is the aggregated form of trace.raw (2667 lines). Regenerate the raw
+# trace with the two commands above.
+#
+# Format codes are pixman's: 00010000 = PIXMAN_solid, 08018000 = PIXMAN_a8,
+# 01011000 = PIXMAN_a1, 20028888 = PIXMAN_a8r8g8b8, 00000000 = PIXMAN_null.
+# Ops: 3 = PIXMAN_OP_OVER, 12 = PIXMAN_OP_ADD. op=-1 marks pixman_fill, whose
+# "src" column carries bpp instead.
+
+== 1. entry points reached, over the whole fingerprint run ==
+   1140 composite32
+    231 pixman_fill
+
+   NEVER REACHED, although instrumented:
+     pixman_blt
+     pixman_composite_glyphs           (pixman's own glyph cache)
+     pixman_composite_glyphs_no_mask
+     pixman_add_traps
+     pixman_rasterize_trapezoid
+     pixman_add_triangles
+     pixman_composite_trapezoids
+   i.e. cairo's image surface never uses pixman's trapezoid rasterizer or its
+   glyph cache at this size/format. It uses the SPANS compositor
+   (cairo-image-surface.c:176) and computes coverage itself in
+   cairo-tor-scan-converter.c.
+
+== 2. composite fast paths selected (_pixman_implementation_lookup_composite) ==
+    571 PICK  imp=fast       op=3   src=00010000 mask=08018000 dst=20028888 sflags=00076a7f mflags=02874a7f dflags=02074a7f
+    437 PICK  imp=fast       op=3   src=00010000 mask=01011000 dst=20028888 sflags=00076a7f mflags=02874a7f dflags=02074a7f
+    132 PICK  imp=fast       op=12  src=08018000 mask=00000000 dst=08018000 sflags=02874a7f mflags=00002002 dflags=02074a7f
+
+   Resolved against the one-shot dump of each implementation's fast-path table
+   (TABLE lines in trace.raw), which gives the index into pixman-fast-path.c's
+   c_fast_paths[]:
+
+     imp=fast #4   OVER solid a8 -> a8r8g8b8   fast_composite_over_n_8_8888
+                                               (pixman-fast-path.c:1821)
+     imp=fast #8   OVER solid a1 -> a8r8g8b8   fast_composite_over_n_1_8888
+                                               (pixman-fast-path.c:1825)
+     imp=fast #34  ADD  a8  null -> a8         fast_composite_add_8_8
+                                               (pixman-fast-path.c:1851)
+
+   Three composite kernels, plus pixman_fill. That is the entire pixman
+   surface area of the norns screen.
+
+== 3. per-scene attribution ==
+   The trace is sliced at each 128x64 pixman_fill, which is screen_clear()
+   (CAIRO_OPERATOR_CLEAR + cairo_paint). 195 such slices:
+
+     1-23     emit_probes()
+     24       levels aa=1      110      levels aa=0
+     25       geom   aa=1      111      geom   aa=0
+     26       text   aa=1      112      text   aa=0
+     27-109   84 glyphs aa=1   113-195  84 glyphs aa=0
+
+   83 slices for 84 glyphs, and no empty slice: the blank glyph draws no ink,
+   so the surface is still flagged clear when the next screen_clear() runs and
+   cairo elides that paint. (screen_init()'s own clear is elided the same way,
+   on a freshly allocated surface, which is why slice 1 is already a probe.)
+
+block  24 : 16 calls
+              16  pixman_fill op=-1 8x64 src=00000020 mask=00000000 dst=00000000
+block  25 : 2 calls
+               1  pixman_fill op=-1 40x10 src=00000020 mask=00000000 dst=00000000
+               1  pixman_fill op=-1 19x6 src=00000020 mask=00000000 dst=00000000
+block  26 : 96 calls
+               3  composite32 op=3 5x5 src=00010000 mask=08018000 dst=20028888
+               2  composite32 op=3 3x1 src=00010000 mask=08018000 dst=20028888
+               2  composite32 op=3 5x4 src=00010000 mask=08018000 dst=20028888
+               2  composite32 op=3 2x7 src=00010000 mask=08018000 dst=20028888
+               5  composite32 op=3 3x4 src=00010000 mask=08018000 dst=20028888
+               3  composite32 op=3 3x3 src=00010000 mask=08018000 dst=20028888
+               1  composite32 op=3 1x3 src=00010000 mask=08018000 dst=20028888
+              13  composite32 op=3 3x5 src=00010000 mask=08018000 dst=20028888
+               1  composite32 op=3 1x1 src=00010000 mask=08018000 dst=20028888
+               6  composite32 op=3 1x5 src=00010000 mask=08018000 dst=20028888
+               1  composite32 op=3 1x4 src=00010000 mask=08018000 dst=20028888
+              32  composite32 op=3 4x5 src=00010000 mask=08018000 dst=20028888
+              14  composite32 op=3 4x4 src=00010000 mask=08018000 dst=20028888
+               7  composite32 op=3 4x6 src=00010000 mask=08018000 dst=20028888
+               1  composite32 op=3 2x2 src=00010000 mask=08018000 dst=20028888
+               3  composite32 op=3 2x5 src=00010000 mask=08018000 dst=20028888
+block 110 : 16 calls
+              16  pixman_fill op=-1 8x64 src=00000020 mask=00000000 dst=00000000
+block 111 : 2 calls
+               1  pixman_fill op=-1 21x7 src=00000020 mask=00000000 dst=00000000
+               1  pixman_fill op=-1 40x10 src=00000020 mask=00000000 dst=00000000
+block 112 : 96 calls
+               3  composite32 op=3 5x5 src=00010000 mask=01011000 dst=20028888
+               2  composite32 op=3 3x1 src=00010000 mask=01011000 dst=20028888
+               2  composite32 op=3 5x4 src=00010000 mask=01011000 dst=20028888
+               2  composite32 op=3 2x7 src=00010000 mask=01011000 dst=20028888
+               1  composite32 op=3 1x1 src=00010000 mask=01011000 dst=20028888
+               5  composite32 op=3 3x4 src=00010000 mask=01011000 dst=20028888
+               3  composite32 op=3 3x3 src=00010000 mask=01011000 dst=20028888
+               1  composite32 op=3 1x3 src=00010000 mask=01011000 dst=20028888
+              13  composite32 op=3 3x5 src=00010000 mask=01011000 dst=20028888
+               6  composite32 op=3 1x5 src=00010000 mask=01011000 dst=20028888
+               1  composite32 op=3 1x4 src=00010000 mask=01011000 dst=20028888
+              32  composite32 op=3 4x5 src=00010000 mask=01011000 dst=20028888
+              14  composite32 op=3 4x4 src=00010000 mask=01011000 dst=20028888
+               7  composite32 op=3 4x6 src=00010000 mask=01011000 dst=20028888
+               1  composite32 op=3 2x2 src=00010000 mask=01011000 dst=20028888
+               3  composite32 op=3 2x5 src=00010000 mask=01011000 dst=20028888
+
+   Read that as:
+
+     levels  (16 solid rects, integer-aligned, opaque)  -> 16x pixman_fill, nothing else
+     geom    (2 line strokes, 1 arc stroke, 1 curve stroke,
+              1 integer rect fill, 1 fractional rect fill, ANTIALIASED)
+                                                        -> 2x pixman_fill, NOTHING ELSE
+     text    (4 lines of norns.ttf at 8px, 96 glyphs)   -> 96 composites, one per glyph
+                                                           a8 mask at aa=1, a1 mask at aa=0
+
+   The geom scene never reaches a pixman compositor at all. Every antialiased
+   edge in it is blended by cairo itself, in _fill_xrgb32_lerp_spans /
+   _inplace_spans (cairo-image-compositor.c:2360-2405), which write the
+   destination with lerp8x4() without calling pixman. pixman only gets the two
+   fully-covered interior boxes, as solid 32-bit fills.
+
+   (19x6 at aa=1 vs 21x7 at aa=0 is the fractional rectangle at
+   70.25,50.5,20.5,6.75: antialiased, cairo hands pixman only the fully
+   covered interior; unantialiased, it hands over the whole snapped box.)
+
+== 4. which archive was linked ==
+   From `bash tools/screen/build-pixman-0400.sh`:
+     libpixman-1-0400.a   -> pixman_version_string 0.40.0
+     libpixman-1.a        -> pixman_version_string 0.42.2

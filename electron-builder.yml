@@ -1,0 +1,74 @@
+# D-03 — the Windows artefacts.
+#
+#   npm run desktop:dist      # -> desktop/out
+#
+# TWO TARGETS, because they answer two different questions. `nsis` is an
+# installer: a Start-menu entry, an uninstaller, and a settled place on the
+# disk. `portable` is one .exe that runs from anywhere, including a stick —
+# which is how the rest of this project has always been handed to another
+# machine (E7-14), and how it gets tried without being installed.
+#
+# WHAT GOES IN THE PACKAGE IS NOT THIS CHECKOUT. `files` starts by excluding
+# everything and names the four things the shell needs, so the 300 MB of
+# node_modules and the sources of the page do not travel: the page is already
+# BUILT, and it travels as `extraResources` instead.
+#
+# `desktop/payload/app` IS THE PORTABLE COPY'S OWN FOLDER, assembled by
+# tools/build-portable.mjs. That matters for two reasons and neither is
+# convenience:
+#
+#   * it is PRUNED — `build-portable` strips the dust tree of everything
+#     under `code/`, so no one else's scripts or samples are redistributed.
+#     Seventeen of the thirty-five scripts this project tested with carry no
+#     licence at all, which means all rights reserved.
+#   * it carries `source/` INSIDE itself. norns-js is AGPL-3.0-or-later and
+#     a distributed binary is conveying under §6, so the source has to be
+#     offered with it. The running app serves it at `/source/`, which is
+#     where the gear's "about" panel points, and that link only works if the
+#     tree is inside the served root — a folder beside it is a 404, which is
+#     what the first portable archive shipped (E7-18).
+#
+# NOT SIGNED. An unsigned .exe gets a SmartScreen warning on first run on
+# Windows, and the alternative is a certificate. `signExecutable: false` and
+# NOT `signAndEditExecutable: false`, which was the first attempt: that one
+# also skips the resource EDITING, so the build came out carrying Electron's
+# own icon and Electron's own version metadata. The builder says so in one
+# line that is easy to read past. Icon and metadata applied, signature not.
+
+appId: org.nornsjs.desktop
+productName: norns-js
+copyright: AGPL-3.0-or-later
+
+directories:
+  buildResources: desktop/resources
+  output: desktop/out
+
+files:
+  - "!**/*"
+  - desktop/main.js
+  - desktop/probe.js
+  - tools/serve.mjs
+  - package.json
+
+extraResources:
+  - from: desktop/payload/app
+    to: app
+
+win:
+  target:
+    - nsis
+    - portable
+  icon: desktop/resources/icon.png
+  signExecutable: false
+  artifactName: ${productName}-${version}-setup.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: norns-js
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}

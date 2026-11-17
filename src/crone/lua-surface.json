@@ -1,0 +1,1205 @@
+{
+  "generatedFrom": [
+    "matron/src/weaver.cc",
+    "matron/src/oracle.cc"
+  ],
+  "generatedBy": "tools/extract-crone-lua.mjs",
+  "note": "The `_norns` functions whose oracle call reaches crone. `args` is from lua_check_num_args; a function without one takes none.",
+  "count": 62,
+  "functions": [
+    {
+      "name": "comp_mix",
+      "symbol": "_set_comp_mix",
+      "args": 1,
+      "oracle": [
+        "o_set_comp_mix"
+      ],
+      "crone": [
+        "crone_set_level_compressor_mix"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_compressor_mix",
+            "queue": "mixer",
+            "id": "SET_LEVEL_INS_MIX",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "comp_off",
+      "symbol": "_set_comp_off",
+      "args": 0,
+      "oracle": [
+        "o_set_comp_off"
+      ],
+      "crone": [
+        "crone_set_enabled_compressor"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_enabled_compressor",
+            "queue": "mixer",
+            "id": "SET_ENABLED_COMPRESSOR",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "comp_on",
+      "symbol": "_set_comp_on",
+      "args": 0,
+      "oracle": [
+        "o_set_comp_on"
+      ],
+      "crone": [
+        "crone_set_enabled_compressor"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_enabled_compressor",
+            "queue": "mixer",
+            "id": "SET_ENABLED_COMPRESSOR",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "comp_param",
+      "symbol": "_set_comp_param",
+      "args": 2,
+      "oracle": [
+        "o_set_comp_param"
+      ],
+      "crone": [
+        "crone_set_compressor_param"
+      ],
+      "via": {
+        "kind": "dispatch",
+        "family": "compressor"
+      }
+    },
+    {
+      "name": "cut_buffer_clear",
+      "symbol": "_cut_buffer_clear",
+      "args": 0,
+      "oracle": [
+        "o_cut_buffer_clear"
+      ],
+      "crone": [
+        "crone_cut_buffer_clear"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_clear_channel",
+      "symbol": "_cut_buffer_clear_channel",
+      "args": 1,
+      "oracle": [
+        "o_cut_buffer_clear_channel"
+      ],
+      "crone": [
+        "crone_cut_buffer_clear_channel"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_clear_region",
+      "symbol": "_cut_buffer_clear_region",
+      "args": 4,
+      "oracle": [
+        "o_cut_buffer_clear_region"
+      ],
+      "crone": [
+        "crone_cut_buffer_clear_region"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_clear_region_channel",
+      "symbol": "_cut_buffer_clear_region_channel",
+      "args": 5,
+      "oracle": [
+        "o_cut_buffer_clear_region_channel"
+      ],
+      "crone": [
+        "crone_cut_buffer_clear_region_channel"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_copy_mono",
+      "symbol": "_cut_buffer_copy_mono",
+      "args": 8,
+      "oracle": [
+        "o_cut_buffer_copy_mono"
+      ],
+      "crone": [
+        "crone_cut_buffer_copy_mono"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_copy_stereo",
+      "symbol": "_cut_buffer_copy_stereo",
+      "args": 6,
+      "oracle": [
+        "o_cut_buffer_copy_stereo"
+      ],
+      "crone": [
+        "crone_cut_buffer_copy_stereo"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_read_mono",
+      "symbol": "_cut_buffer_read_mono",
+      "args": 8,
+      "oracle": [
+        "o_cut_buffer_read_mono"
+      ],
+      "crone": [
+        "crone_cut_buffer_read_mono"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_read_stereo",
+      "symbol": "_cut_buffer_read_stereo",
+      "args": 6,
+      "oracle": [
+        "o_cut_buffer_read_stereo"
+      ],
+      "crone": [
+        "crone_cut_buffer_read_stereo"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_render",
+      "symbol": "_cut_buffer_render",
+      "args": 4,
+      "oracle": [
+        "o_cut_buffer_render"
+      ],
+      "crone": [
+        "crone_cut_buffer_render"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_write_mono",
+      "symbol": "_cut_buffer_write_mono",
+      "args": 4,
+      "oracle": [
+        "o_cut_buffer_write_mono"
+      ],
+      "crone": [
+        "crone_cut_buffer_write_mono"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_buffer_write_stereo",
+      "symbol": "_cut_buffer_write_stereo",
+      "args": 3,
+      "oracle": [
+        "o_cut_buffer_write_stereo"
+      ],
+      "crone": [
+        "crone_cut_buffer_write_stereo"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_enable",
+      "symbol": "_cut_enable",
+      "args": 2,
+      "oracle": [
+        "o_cut_enable"
+      ],
+      "crone": [
+        "crone_set_enabled_cut"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_enabled_cut",
+            "queue": "softcut",
+            "id": "SET_ENABLED_CUT",
+            "argc": 2,
+            "arity": "if",
+            "forwarded": [
+              "arg0",
+              "arg1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "cut_param",
+      "symbol": "_set_cut_param",
+      "args": 3,
+      "oracle": [
+        "o_set_cut_param"
+      ],
+      "crone": [
+        "crone_set_cut_param"
+      ],
+      "via": {
+        "kind": "dispatch",
+        "family": "cut"
+      }
+    },
+    {
+      "name": "cut_param_ii",
+      "symbol": "_set_cut_param_ii",
+      "args": 3,
+      "oracle": [
+        "o_set_cut_param_ii"
+      ],
+      "crone": [
+        "crone_set_cut_param_ii"
+      ],
+      "via": {
+        "kind": "dispatch",
+        "family": "cut_ii"
+      }
+    },
+    {
+      "name": "cut_param_iif",
+      "symbol": "_set_cut_param_iif",
+      "args": 4,
+      "oracle": [
+        "o_set_cut_param_iif"
+      ],
+      "crone": [
+        "crone_set_cut_param_iif"
+      ],
+      "via": {
+        "kind": "dispatch",
+        "family": "cut_iif"
+      }
+    },
+    {
+      "name": "cut_query_position",
+      "symbol": "_cut_query_position",
+      "args": 1,
+      "oracle": [
+        "o_cut_query_position"
+      ],
+      "crone": [
+        "crone_cut_query_position"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "cut_reset",
+      "symbol": "_cut_reset",
+      "args": 0,
+      "oracle": [
+        "o_cut_reset"
+      ],
+      "crone": [
+        "crone_cut_reset"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "level_adc",
+      "symbol": "_set_level_adc",
+      "args": 1,
+      "oracle": [
+        "o_set_level_adc"
+      ],
+      "crone": [
+        "crone_set_level_adc"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_adc",
+            "queue": "mixer",
+            "id": "SET_LEVEL_ADC",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_adc_cut",
+      "symbol": "_set_level_adc_cut",
+      "args": 1,
+      "oracle": [
+        "o_set_level_adc_cut"
+      ],
+      "crone": [
+        "crone_set_level_adc_cut"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_adc_cut",
+            "queue": "mixer",
+            "id": "SET_LEVEL_ADC_CUT",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_cut",
+      "symbol": "_set_level_cut",
+      "args": 2,
+      "oracle": [
+        "o_set_level_cut"
+      ],
+      "crone": [
+        "crone_set_level_cut"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_cut",
+            "queue": "softcut",
+            "id": "SET_LEVEL_CUT",
+            "argc": 2,
+            "arity": "if",
+            "forwarded": [
+              "arg0",
+              "arg1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_cut_cut",
+      "symbol": "_set_level_cut_cut",
+      "args": 3,
+      "oracle": [
+        "o_set_level_cut_cut"
+      ],
+      "crone": [
+        "crone_set_level_cut_cut"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_cut_cut",
+            "queue": "softcut",
+            "id": "SET_LEVEL_CUT_CUT",
+            "argc": 3,
+            "arity": "iif",
+            "forwarded": [
+              "arg0",
+              "arg1",
+              "arg2"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_cut_master",
+      "symbol": "_set_level_cut_master",
+      "args": 1,
+      "oracle": [
+        "o_set_level_cut_master"
+      ],
+      "crone": [
+        "crone_set_level_cut_master"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_cut_master",
+            "queue": "mixer",
+            "id": "SET_LEVEL_CUT_MASTER",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_cut_rev",
+      "symbol": "_set_level_cut_rev",
+      "args": 1,
+      "oracle": [
+        "o_set_level_cut_rev"
+      ],
+      "crone": [
+        "crone_set_level_cut_rev"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_cut_rev",
+            "queue": "mixer",
+            "id": "SET_LEVEL_CUT_AUX",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_dac",
+      "symbol": "_set_level_dac",
+      "args": 1,
+      "oracle": [
+        "o_set_level_dac"
+      ],
+      "crone": [
+        "crone_set_level_dac"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_dac",
+            "queue": "mixer",
+            "id": "SET_LEVEL_DAC",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_ext",
+      "symbol": "_set_level_ext",
+      "args": 1,
+      "oracle": [
+        "o_set_level_ext"
+      ],
+      "crone": [
+        "crone_set_level_ext"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_ext",
+            "queue": "mixer",
+            "id": "SET_LEVEL_EXT",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_ext_cut",
+      "symbol": "_set_level_ext_cut",
+      "args": 1,
+      "oracle": [
+        "o_set_level_ext_cut"
+      ],
+      "crone": [
+        "crone_set_level_ext_cut"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_ext_cut",
+            "queue": "mixer",
+            "id": "SET_LEVEL_EXT_CUT",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_ext_rev",
+      "symbol": "_set_level_ext_rev",
+      "args": 1,
+      "oracle": [
+        "o_set_level_ext_rev"
+      ],
+      "crone": [
+        "crone_set_level_ext_rev"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_ext_rev",
+            "queue": "mixer",
+            "id": "SET_LEVEL_EXT_AUX",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_input_cut",
+      "symbol": "_set_level_input_cut",
+      "args": 3,
+      "oracle": [
+        "o_set_level_input_cut"
+      ],
+      "crone": [
+        "crone_set_level_in_cut"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_in_cut",
+            "queue": "softcut",
+            "id": "SET_LEVEL_IN_CUT",
+            "argc": 3,
+            "arity": "iif",
+            "forwarded": [
+              "arg0",
+              "arg1",
+              "arg2"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_monitor",
+      "symbol": "_set_level_monitor",
+      "args": 1,
+      "oracle": [
+        "o_set_level_monitor"
+      ],
+      "crone": [
+        "crone_set_level_monitor"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_monitor",
+            "queue": "mixer",
+            "id": "SET_LEVEL_MONITOR",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_monitor_rev",
+      "symbol": "_set_level_monitor_rev",
+      "args": 1,
+      "oracle": [
+        "o_set_level_monitor_rev"
+      ],
+      "crone": [
+        "crone_set_level_monitor_rev"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_monitor_rev",
+            "queue": "mixer",
+            "id": "SET_LEVEL_MONITOR_AUX",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_rev_dac",
+      "symbol": "_set_level_rev_dac",
+      "args": 1,
+      "oracle": [
+        "o_set_level_rev_dac"
+      ],
+      "crone": [
+        "crone_set_level_rev_dac"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_rev_dac",
+            "queue": "mixer",
+            "id": "SET_LEVEL_AUX_DAC",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_tape",
+      "symbol": "_set_level_tape",
+      "args": 1,
+      "oracle": [
+        "o_set_level_tape"
+      ],
+      "crone": [
+        "crone_set_level_tape"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_tape",
+            "queue": "mixer",
+            "id": "SET_LEVEL_TAPE",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_tape_cut",
+      "symbol": "_set_level_tape_cut",
+      "args": 1,
+      "oracle": [
+        "o_set_level_tape_cut"
+      ],
+      "crone": [
+        "crone_set_level_tape_cut"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_tape_cut",
+            "queue": "mixer",
+            "id": "SET_LEVEL_TAPE_CUT",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "level_tape_rev",
+      "symbol": "_set_level_tape_rev",
+      "args": 1,
+      "oracle": [
+        "o_set_level_tape_rev"
+      ],
+      "crone": [
+        "crone_set_level_tape_rev"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_tape_rev",
+            "queue": "mixer",
+            "id": "SET_LEVEL_TAPE_AUX",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "monitor_mix_mono",
+      "symbol": "_set_monitor_mix_mono",
+      "args": 0,
+      "oracle": [
+        "o_set_monitor_mix_mono"
+      ],
+      "crone": [
+        "crone_set_level_monitor_mix"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_monitor_mix",
+            "queue": "mixer",
+            "id": "SET_LEVEL_MONITOR_MIX",
+            "argc": 2,
+            "arity": "if",
+            "forwarded": [
+              "arg0",
+              "arg1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "monitor_mix_stereo",
+      "symbol": "_set_monitor_mix_stereo",
+      "args": 0,
+      "oracle": [
+        "o_set_monitor_mix_stereo"
+      ],
+      "crone": [
+        "crone_set_level_monitor_mix"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_level_monitor_mix",
+            "queue": "mixer",
+            "id": "SET_LEVEL_MONITOR_MIX",
+            "argc": 2,
+            "arity": "if",
+            "forwarded": [
+              "arg0",
+              "arg1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "pan_cut",
+      "symbol": "_set_pan_cut",
+      "args": 2,
+      "oracle": [
+        "o_set_pan_cut"
+      ],
+      "crone": [
+        "crone_set_pan_cut"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_pan_cut",
+            "queue": "softcut",
+            "id": "SET_PAN_CUT",
+            "argc": 2,
+            "arity": "if",
+            "forwarded": [
+              "arg0",
+              "arg1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "poll_start_cut_phase",
+      "symbol": "_poll_start_cut_phase",
+      "args": 0,
+      "oracle": [
+        "o_poll_start_cut_phase"
+      ],
+      "crone": [
+        "crone_poll_start_cut_phase"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "poll_start_tape",
+      "symbol": "_poll_start_tape",
+      "args": 0,
+      "oracle": [
+        "o_poll_start_tape"
+      ],
+      "crone": [
+        "crone_poll_start_tape"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "poll_start_vu",
+      "symbol": "_poll_start_vu",
+      "args": 0,
+      "oracle": [
+        "o_poll_start_vu"
+      ],
+      "crone": [
+        "crone_poll_start_vu"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "poll_stop_cut_phase",
+      "symbol": "_poll_stop_cut_phase",
+      "args": 0,
+      "oracle": [
+        "o_poll_stop_cut_phase"
+      ],
+      "crone": [
+        "crone_poll_stop_cut_phase"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "poll_stop_tape",
+      "symbol": "_poll_stop_tape",
+      "args": 0,
+      "oracle": [
+        "o_poll_stop_tape"
+      ],
+      "crone": [
+        "crone_poll_stop_tape"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "poll_stop_vu",
+      "symbol": "_poll_stop_vu",
+      "args": 0,
+      "oracle": [
+        "o_poll_stop_vu"
+      ],
+      "crone": [
+        "crone_poll_stop_vu"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "rev_off",
+      "symbol": "_set_rev_off",
+      "args": 0,
+      "oracle": [
+        "o_set_rev_off"
+      ],
+      "crone": [
+        "crone_set_enabled_reverb"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_enabled_reverb",
+            "queue": "mixer",
+            "id": "SET_ENABLED_REVERB",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "rev_on",
+      "symbol": "_set_rev_on",
+      "args": 0,
+      "oracle": [
+        "o_set_rev_on"
+      ],
+      "crone": [
+        "crone_set_enabled_reverb"
+      ],
+      "via": {
+        "kind": "post",
+        "posts": [
+          {
+            "fn": "crone_set_enabled_reverb",
+            "queue": "mixer",
+            "id": "SET_ENABLED_REVERB",
+            "argc": 1,
+            "arity": "f",
+            "forwarded": [
+              "arg0"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "rev_param",
+      "symbol": "_set_rev_param",
+      "args": 2,
+      "oracle": [
+        "o_set_rev_param"
+      ],
+      "crone": [
+        "crone_set_reverb_param"
+      ],
+      "via": {
+        "kind": "dispatch",
+        "family": "reverb"
+      }
+    },
+    {
+      "name": "tape_loop",
+      "symbol": "_tape_loop",
+      "args": 1,
+      "oracle": [
+        "o_tape_loop"
+      ],
+      "crone": [
+        "crone_tape_play_loop"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_pause",
+      "symbol": "_tape_pause",
+      "args": 0,
+      "oracle": [
+        "o_tape_pause"
+      ],
+      "crone": [
+        "crone_tape_pause"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_play_loop",
+      "symbol": "_tape_play_loop",
+      "args": 1,
+      "oracle": [
+        "o_tape_play_loop"
+      ],
+      "crone": [
+        "crone_tape_play_loop"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_play_open",
+      "symbol": "_tape_play_open",
+      "args": 1,
+      "oracle": [
+        "o_tape_play_open"
+      ],
+      "crone": [
+        "crone_tape_play_open"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_play_pause",
+      "symbol": "_tape_play_pause",
+      "args": 1,
+      "oracle": [
+        "o_tape_play_pause"
+      ],
+      "crone": [
+        "crone_tape_play_pause"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_play_start",
+      "symbol": "_tape_play_start",
+      "args": 0,
+      "oracle": [
+        "o_tape_play_start"
+      ],
+      "crone": [
+        "crone_tape_play_start"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_play_stop",
+      "symbol": "_tape_play_stop",
+      "args": 0,
+      "oracle": [
+        "o_tape_play_stop"
+      ],
+      "crone": [
+        "crone_tape_play_stop"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_record_open",
+      "symbol": "_tape_rec_open",
+      "args": 1,
+      "oracle": [
+        "o_tape_rec_open"
+      ],
+      "crone": [
+        "crone_tape_rec_open"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_record_pause",
+      "symbol": "_tape_rec_pause",
+      "args": 1,
+      "oracle": [
+        "o_tape_rec_pause"
+      ],
+      "crone": [
+        "crone_tape_rec_pause"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_record_start",
+      "symbol": "_tape_rec_start",
+      "args": 0,
+      "oracle": [
+        "o_tape_rec_start"
+      ],
+      "crone": [
+        "crone_tape_rec_start"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_record_stop",
+      "symbol": "_tape_rec_stop",
+      "args": 0,
+      "oracle": [
+        "o_tape_rec_stop"
+      ],
+      "crone": [
+        "crone_tape_rec_stop"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    },
+    {
+      "name": "tape_resume",
+      "symbol": "_tape_resume",
+      "args": 0,
+      "oracle": [
+        "o_tape_resume"
+      ],
+      "crone": [
+        "crone_tape_resume"
+      ],
+      "via": {
+        "kind": "direct"
+      }
+    }
+  ]
+}

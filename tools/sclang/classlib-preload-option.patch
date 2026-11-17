@@ -1,0 +1,55 @@
+diff --git a/lang/CMakeLists.txt b/lang/CMakeLists.txt
+index 94bdec7..9586385 100644
+--- a/lang/CMakeLists.txt
++++ b/lang/CMakeLists.txt
+@@ -400,6 +400,23 @@ elseif(EMSCRIPTEN)
+     # necessary b/c pthread init is async in emscripten, but sclang needs some threads right away
+     set(PTHREAD_POOL_SIZE "4" CACHE STRING "Number of threads to spawn sclang.wasm at call time")
+ 
++    # The class library can be baked into sclang.data at link time, or
++    # delivered as a compressed archive the host page unpacks into MEMFS
++    # before bootInterpreter(). The archive is ~1.5 MB smaller per cold load
++    # because CDNs do not compress application/octet-stream. ON keeps the
++    # historical behaviour; platform/wasm/sclang/sclang-tests.mjs and the
++    # demo pages assume ON, as they inject nothing of their own.
++    option(SC_WASM_PRELOAD_CLASSLIB
++        "Bake SCClassLibrary into sclang.data with --preload-file" ON)
++    if(SC_WASM_PRELOAD_CLASSLIB)
++        set(SCLANG_CLASSLIB_FLAGS
++            "--preload-file ${CMAKE_SOURCE_DIR}/SCClassLibrary@/sc/SCClassLibrary")
++    else()
++        # --preload-file is what implies -sFORCE_FILESYSTEM (emscripten
++        # tools/link.py:1319-1323). Without it the JS FS helpers go away.
++        set(SCLANG_CLASSLIB_FLAGS "-sFORCE_FILESYSTEM=1")
++    endif()
++
+     set_target_properties(sclang PROPERTIES LINK_FLAGS "\
+         -sAUDIO_WORKLET \
+         --bind \
+@@ -415,7 +432,7 @@ elseif(EMSCRIPTEN)
+         -sMODULARIZE=1 \
+         -sEXPORTED_FUNCTIONS=['_webOscBindingAnchor','_main','_free','_scWasmBindingAnchor'] \
+         -sPTHREAD_POOL_SIZE=${PTHREAD_POOL_SIZE} \
+-        --preload-file ${CMAKE_SOURCE_DIR}/SCClassLibrary@/sc/SCClassLibrary \
++        ${SCLANG_CLASSLIB_FLAGS} \
+         -sSTACK_SIZE=1048576 \
+         -sDEFAULT_PTHREAD_STACK_SIZE=1048576 \
+         -sENVIRONMENT=web,worker,node \
+diff --git a/platform/wasm/CMakeLists.txt b/platform/wasm/CMakeLists.txt
+index c34a2c3..e298c41 100644
+--- a/platform/wasm/CMakeLists.txt
++++ b/platform/wasm/CMakeLists.txt
+@@ -29,8 +29,12 @@ set(EDITOR_WASM_FILES
+     $<TARGET_FILE_DIR:scsynth>/scsynth.wasm
+     $<TARGET_FILE_DIR:sclang>/sclang.js
+     $<TARGET_FILE_DIR:sclang>/sclang.wasm
+-    $<TARGET_FILE_DIR:sclang>/sclang.data
+ )
++# Without --preload-file there is no sclang.data to copy, and
++# copy_if_different fails on a missing source.
++if(SC_WASM_PRELOAD_CLASSLIB)
++    list(APPEND EDITOR_WASM_FILES $<TARGET_FILE_DIR:sclang>/sclang.data)
++endif()
+ add_custom_command(TARGET webeditor POST_BUILD
+     COMMAND ${CMAKE_COMMAND} -E make_directory ${EDITOR_WASM_OUTPUT}
+     COMMAND ${CMAKE_COMMAND} -E copy_if_different

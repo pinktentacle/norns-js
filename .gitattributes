@@ -1,0 +1,82 @@
+# Line endings are not cosmetic here.
+#
+# This project is developed on Windows, where git's default `core.autocrlf=true`
+# rewrites working-tree files to CRLF on checkout. For a shell script that is
+# fatal rather than untidy: Git bash runs `build.sh` and fails on the first line
+# with `\r: command not found`, and the build scripts under tools/ are how every
+# wasm artefact in this repo was produced.
+#
+# So: everything is stored and checked out with LF.
+
+* text=auto eol=lf
+
+# Binary, never touched.
+*.wasm   binary
+*.data   binary
+*.ttf    binary
+*.png    binary
+*.tar.gz binary
+
+# Reference transcripts are diffed byte-for-byte against runs on real norns
+# hardware (E0-17b). A line-ending rewrite would make every line differ.
+tools/screen/fp-*.txt     -text
+spike/probe/runs/*.txt    -text
+
+# =========================================================================
+# E9-78 — WHAT GOES OUT, declared here and nowhere else.
+#
+# `git archive HEAD` is how the published tree is cut (see the publishing
+# runbook, which is itself one of the things that stays behind), and it
+# honours `export-ignore`. So this file is the whole of the decision: the
+# repository keeps everything, and the publish is a filter rather than a
+# second copy somebody has to maintain.
+#
+# THE BAR IS THE AGPL, not taste. Section 13 obliges an offer of the
+# CORRESPONDING SOURCE — what is needed to build and run the thing being
+# served. That is `src/`, `public/`, `patches/`, `tools/` — the wasm
+# builds included — and the files that say which upstream commits
+# they apply to. Everything below is working material: true, useful, and
+# not part of what anybody was handed.
+#
+# TWO THINGS MOVED TO THE ROOT so they could stay while `docs/` goes:
+# `LICENCES.md` and `PINS.md`. PINS is not optional — a patch without the
+# commit it applies to is not source, it is a riddle.
+#
+# `test/` STAYS, which is a judgement and not an obligation. 842 tests are
+# the only evidence for every number in the README, and a clone where
+# `npm test` does nothing is a clone that cannot check a word of it.
+# Delete the line to change that.
+
+docs/           export-ignore
+research/       export-ignore
+.claude/        export-ignore
+
+# E9-85 — `desktop/` and `electron-builder.yml` were export-ignored and are
+# not any more. The Windows app is PUBLISHED now, and a conveyed binary is
+# §6 of the AGPL rather than §13: the source has to go with it. The shell
+# is four files; the page it wraps is the same `src/` as everything else.
+
+# E9-92 — `spike/` IS NOW ALL SPIKE, so it goes whole.
+#
+# The three that were not — the sclang, screen and pack builds — moved to
+# `tools/`, where everything else written after the project had a shape
+# already lived. They were born in `spike/` in the first commit, answering
+# whether SuperCollider could be compiled to wasm at all, and became the
+# build without ever being moved. One line here instead of thirteen.
+spike/          export-ignore
+
+# What came with them, measured rather than assumed: ELEVEN of those files
+# were nearly left behind as “test harnesses”, and two of them —
+# `tools/screen/fingerprint.c` and `screen-test.c` — are COMPILED by
+# `build-cairo.sh`, `build-freetype-2104.sh` and `build-pixman-0400.sh`.
+# Excluding them would have published three build scripts that cannot run.
+#
+# The other nine are named by those same scripts in the lines they print
+# when they finish: `run.mjs`, `fingerprint.mjs`, `osc-test.mjs`,
+# `boot-test.mjs`, the `trace/` sources `trace-pixman.sh` links, and the
+# `fp-*.txt` transcripts the builds tell you to diff their output against.
+# A reference fingerprint is the measurement; without it the build is only
+# a claim. So the whole of `tools/` goes, and the one real exclusion is the
+# dated run logs — the transcript of a build that happened here once.
+tools/**/*.log              export-ignore
+

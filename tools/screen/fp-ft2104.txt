@@ -1,0 +1,629 @@
+# norns screen fingerprint v1
+cairo_runtime 1.16.0
+freetype_build 2.10.4
+freetype_runtime 2.10.4
+surface ARGB32 128x64 stride 512
+readback green_top_nibble (ssd1322.cc)
+font norns.ttf
+
+font_extents ascent 6.000000 descent 2.000000 height 8.000000 max_x_adv 9.000000 max_y_adv 0.000000
+text_extents 0 bx 0.000000 by -5.000000 w 124.000000 h 6.000000 xa 125.000000 ya 0.000000
+text_extents 1 bx 0.000000 by -5.000000 w 118.000000 h 7.000000 xa 119.000000 ya 0.000000
+text_extents 2 bx 0.000000 by -5.000000 w 103.000000 h 6.000000 xa 104.000000 ya 0.000000
+text_extents 3 bx 0.000000 by -5.000000 w 86.000000 h 7.000000 xa 87.000000 ya 0.000000
+ft_face num_glyphs 239 upem 2048 face_flags 0x00000a19
+ft_size x_ppem 8 y_ppem 8 x_scale 16384 y_scale 16384 ascender 384 descender -128 height 512
+
+hint_and_aa_sensitivity
+  probe norns.ttf          size   8.0 aa gray hint def  hash 619516ad8d9fb0a7 ink  312 aa_px    0 width 91.000000
+  probe norns.ttf          size   8.0 aa gray hint none hash 619516ad8d9fb0a7 ink  312 aa_px    0 width 91.000000
+  probe norns.ttf          size   8.0 aa none hint def  hash 619516ad8d9fb0a7 ink  312 aa_px    0 width 91.000000
+  probe norns.ttf          size  16.0 aa gray hint def  hash 847c719629ff5be1 ink  958 aa_px    0 width 182.000000
+  probe norns.ttf          size  16.0 aa gray hint none hash 847c719629ff5be1 ink  958 aa_px    0 width 182.000000
+  probe norns.ttf          size  16.0 aa none hint def  hash 847c719629ff5be1 ink  958 aa_px    0 width 182.000000
+  probe liquid.ttf         size   8.0 aa gray hint def  hash b42d6ee595611510 ink  287 aa_px    0 width 74.000000
+  probe liquid.ttf         size   8.0 aa gray hint none hash b42d6ee595611510 ink  287 aa_px    0 width 74.000000
+  probe liquid.ttf         size   8.0 aa none hint def  hash b42d6ee595611510 ink  287 aa_px    0 width 74.000000
+  probe liquid.ttf         size  16.0 aa gray hint def  hash 1c82ee0558a30bcd ink 1044 aa_px    0 width 148.000000
+  probe liquid.ttf         size  16.0 aa gray hint none hash 1c82ee0558a30bcd ink 1044 aa_px    0 width 148.000000
+  probe liquid.ttf         size  16.0 aa none hint def  hash 1c82ee0558a30bcd ink 1044 aa_px    0 width 148.000000
+  probe Roboto-Regular.ttf size   8.0 aa gray hint def  hash 2f9bed59818f2c1b ink  602 aa_px  602 width 82.000000
+  probe Roboto-Regular.ttf size   8.0 aa gray hint none hash 2f9bed59818f2c1b ink  602 aa_px  602 width 82.000000
+  probe Roboto-Regular.ttf size   8.0 aa none hint def  hash 7b1a37272fe9a1d5 ink  360 aa_px    0 width 82.000000
+  probe Roboto-Regular.ttf size  16.0 aa gray hint def  hash 94b17619bc3a52da ink 1402 aa_px 1120 width 161.000000
+  probe Roboto-Regular.ttf size  16.0 aa gray hint none hash 41ba3c6f49abfa13 ink 1435 aa_px 1174 width 161.000000
+  probe Roboto-Regular.ttf size  16.0 aa none hint def  hash eae245bbe9ce82c4 ink  981 aa_px    0 width 161.000000
+  probe VeraMono.ttf       size   8.0 aa gray hint def  hash 31875ff69dac2af0 ink  573 aa_px  497 width 100.000000
+  probe VeraMono.ttf       size   8.0 aa gray hint none hash 5174441a5863111c ink  640 aa_px  639 width 100.000000
+  probe VeraMono.ttf       size   8.0 aa none hint def  hash dd65304106f6b5e1 ink  368 aa_px    0 width 99.000000
+  probe VeraMono.ttf       size  16.0 aa gray hint def  hash 7405c8e5bb1a44b4 ink 1204 aa_px  848 width 198.000000
+  probe VeraMono.ttf       size  16.0 aa gray hint none hash 7eca7ca7b20c6c89 ink 1300 aa_px  985 width 198.000000
+  probe VeraMono.ttf       size  16.0 aa none hint def  hash 61d01640d02f487d ink  616 aa_px    0 width 198.000000
+
+scene levels aa=1
+  hash4 76df03ef91f08325
+  hash8 71f814964ffa5325
+  hist 0:512 1:512 2:512 3:512 4:512 5:512 6:512 7:512 8:512 9:512 10:512 11:512 12:512 13:512 14:512 15:512
+  row 00 86ddae0a
+  row 01 86ddae0a
+  row 02 86ddae0a
+  row 03 86ddae0a
+  row 04 86ddae0a
+  row 05 86ddae0a
+  row 06 86ddae0a
+  row 07 86ddae0a
+  row 08 86ddae0a
+  row 09 86ddae0a
+  row 10 86ddae0a
+  row 11 86ddae0a
+  row 12 86ddae0a
+  row 13 86ddae0a
+  row 14 86ddae0a
+  row 15 86ddae0a
+  row 16 86ddae0a
+  row 17 86ddae0a
+  row 18 86ddae0a
+  row 19 86ddae0a
+  row 20 86ddae0a
+  row 21 86ddae0a
+  row 22 86ddae0a
+  row 23 86ddae0a
+  row 24 86ddae0a
+  row 25 86ddae0a
+  row 26 86ddae0a
+  row 27 86ddae0a
+  row 28 86ddae0a
+  row 29 86ddae0a
+  row 30 86ddae0a
+  row 31 86ddae0a
+  row 32 86ddae0a
+  row 33 86ddae0a
+  row 34 86ddae0a
+  row 35 86ddae0a
+  row 36 86ddae0a
+  row 37 86ddae0a
+  row 38 86ddae0a
+  row 39 86ddae0a
+  row 40 86ddae0a
+  row 41 86ddae0a
+  row 42 86ddae0a
+  row 43 86ddae0a
+  row 44 86ddae0a
+  row 45 86ddae0a
+  row 46 86ddae0a
+  row 47 86ddae0a
+  row 48 86ddae0a
+  row 49 86ddae0a
+  row 50 86ddae0a
+  row 51 86ddae0a
+  row 52 86ddae0a
+  row 53 86ddae0a
+  row 54 86ddae0a
+  row 55 86ddae0a
+  row 56 86ddae0a
+  row 57 86ddae0a
+  row 58 86ddae0a
+  row 59 86ddae0a
+  row 60 86ddae0a
+  row 61 86ddae0a
+  row 62 86ddae0a
+  row 63 86ddae0a
+
+scene geom aa=1
+  hash4 75b6e2375014ddcb
+  hash8 066df4fc6b68a382
+  hist 0:7045 1:61 2:58 3:78 4:54 5:49 6:121 7:2 8:431 9:59 10:19 11:19 12:132 13:23 14:30 15:11
+  row 00 e85d4337
+  row 01 f8f28b1d
+  row 02 1e7d730b
+  row 03 8a462711
+  row 04 a4740c7a
+  row 05 364ce639
+  row 06 7e66468d
+  row 07 87d7a865
+  row 08 a4445ace
+  row 09 6e248d02
+  row 10 fcbb766b
+  row 11 061494aa
+  row 12 798cfe09
+  row 13 7560a225
+  row 14 202d5871
+  row 15 6d02c5e7
+  row 16 eef25107
+  row 17 730167ad
+  row 18 4e7bb9ef
+  row 19 e30d2397
+  row 20 a2847c5b
+  row 21 a58677f8
+  row 22 f2e861eb
+  row 23 88944e2a
+  row 24 53c78e62
+  row 25 0caa93be
+  row 26 f25c2e92
+  row 27 f4cd986b
+  row 28 6b19138b
+  row 29 64834932
+  row 30 9a8017fb
+  row 31 e85d4337
+  row 32 e85d4337
+  row 33 e85d4337
+  row 34 e85d4337
+  row 35 e85d4337
+  row 36 db3ef72c
+  row 37 db3ef72c
+  row 38 db3ef72c
+  row 39 db3ef72c
+  row 40 23e5c52f
+  row 41 6a863d33
+  row 42 0d44b877
+  row 43 4ea84d8e
+  row 44 09d689a0
+  row 45 76e9fc39
+  row 46 95c11203
+  row 47 6df11cd4
+  row 48 e85d4337
+  row 49 e85d4337
+  row 50 e31590cb
+  row 51 8b8727b9
+  row 52 3032f9ba
+  row 53 26b25420
+  row 54 e2378bb2
+  row 55 8a248047
+  row 56 11e8b51c
+  row 57 8b17afe6
+  row 58 dbe853bc
+  row 59 dd70a604
+  row 60 5c27ac44
+  row 61 e85d4337
+  row 62 e85d4337
+  row 63 e85d4337
+
+scene text aa=1
+  hash4 317833d5f3f505e3
+  hash8 921ae3c622ab08a3
+  hist 0:7382 1:0 2:0 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:810
+  row 00 e85d4337
+  row 01 e85d4337
+  row 02 e85d4337
+  row 03 e85d4337
+  row 04 e85d4337
+  row 05 243369ac
+  row 06 b56c162d
+  row 07 45781cdc
+  row 08 3de80e97
+  row 09 36d24443
+  row 10 e0404bf1
+  row 11 e85d4337
+  row 12 e85d4337
+  row 13 e85d4337
+  row 14 e85d4337
+  row 15 e4a42d91
+  row 16 c1dd99a2
+  row 17 d64fa916
+  row 18 e09ff415
+  row 19 6d2277e9
+  row 20 1dc856ba
+  row 21 36b8e38e
+  row 22 e85d4337
+  row 23 e85d4337
+  row 24 e85d4337
+  row 25 a8f783db
+  row 26 39f69467
+  row 27 4263a6c4
+  row 28 9076004b
+  row 29 8e7d7958
+  row 30 a54ae43d
+  row 31 e85d4337
+  row 32 e85d4337
+  row 33 e85d4337
+  row 34 e85d4337
+  row 35 0294f808
+  row 36 c6d4ddea
+  row 37 e9571a68
+  row 38 757d39b7
+  row 39 4c9e51e0
+  row 40 6b36d2a0
+  row 41 b9162ef8
+  row 42 e85d4337
+  row 43 e85d4337
+  row 44 e85d4337
+  row 45 e85d4337
+  row 46 e85d4337
+  row 47 e85d4337
+  row 48 e85d4337
+  row 49 e85d4337
+  row 50 e85d4337
+  row 51 e85d4337
+  row 52 e85d4337
+  row 53 e85d4337
+  row 54 e85d4337
+  row 55 e85d4337
+  row 56 e85d4337
+  row 57 e85d4337
+  row 58 e85d4337
+  row 59 e85d4337
+  row 60 e85d4337
+  row 61 e85d4337
+  row 62 e85d4337
+  row 63 e85d4337
+
+glyphs aa=1 font_size=8.0
+  g  65 A hash 2aa9bac32e70cdfd adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  66 B hash fd18dc1c033fd714 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  67 C hash bfdce5028d985282 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  68 D hash 002847fc599575fb adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  69 E hash 9d460d18f9dfbf78 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  70 F hash 143fe6465a1dd3c6 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  71 G hash 66a9efdd72616c61 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  72 H hash 7fc8a5a9cd8d2f39 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  73 I hash 04c7898f1a2fed90 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  74 J hash 2e2cd1ca17f367bb adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  75 K hash e631357cffa55647 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  76 L hash adc89a23d83a5014 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  77 M hash f2a827bc1e6c77c2 adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  78 N hash 423a1ea5db3b6d8d adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  79 O hash 26b2c16dc051ab73 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  80 P hash bb824b823d9c1dce adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  81 Q hash ae823c7504e59732 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 6.000000
+  g  82 R hash 36817e5c4781bee7 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  83 S hash 41f5806e10b1633f adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  84 T hash e3741ffae35ade54 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  85 U hash f92d8ef95c06e2ef adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  86 V hash 7e5d7556498105ac adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  87 W hash d04e6ca2459b7e52 adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  88 X hash 76f183cd1dad36cf adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  89 Y hash 5361b308efa15435 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  90 Z hash 5ce2701c6deef994 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  97 a hash 22285bf40fa7be99 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g  98 b hash 319e17250c9d1a96 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  99 c hash a722cf232d0c0eb9 adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 4.000000
+  g 100 d hash 8253aff99aa5f704 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g 101 e hash 11d79925cb92505e adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 102 f hash 326de4ee374a9186 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g 103 g hash f9b0ec09a36462de adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 6.000000
+  g 104 h hash 579667e60009a611 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g 105 i hash 5fda0cd319ed5535 adv 2.000000 bx 0.000000 by -5.000000 w 1.000000 h 5.000000
+  g 106 j hash 8c48ee7fd83e2f6f adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 7.000000
+  g 107 k hash 58e5ba553634767f adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g 108 l hash af4c01bd93a74202 adv 2.000000 bx 0.000000 by -5.000000 w 1.000000 h 5.000000
+  g 109 m hash 4ea7224b524d0d5e adv 6.000000 bx 0.000000 by -4.000000 w 5.000000 h 4.000000
+  g 110 n hash dd31ac3132cc050e adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 111 o hash c662925d81fa3ca5 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 112 p hash 05b3a5bcf020c0e9 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 6.000000
+  g 113 q hash c44ddbcd41cba8a9 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 6.000000
+  g 114 r hash 97a44be569783bd3 adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 4.000000
+  g 115 s hash f5c38b40473363af adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 116 t hash 317dbe927a6af74e adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g 117 u hash c9ffd629b7910874 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 118 v hash 39a4416f2dd43194 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 119 w hash 52f4a5a56afc0245 adv 6.000000 bx 0.000000 by -4.000000 w 5.000000 h 4.000000
+  g 120 x hash 2a5066996de6f505 adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 4.000000
+  g 121 y hash 42b4f25f12a67603 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 6.000000
+  g 122 z hash 536ff5704ec4bf7b adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g  48 0 hash 26b2c16dc051ab73 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  49 1 hash c2f6e689073877db adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  50 2 hash 06c5c59232f4b950 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  51 3 hash 370942a5fdb60497 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  52 4 hash 79c41c105b08d00f adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  53 5 hash 7271a39c0f027ff7 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  54 6 hash 5b6fb36db1290579 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  55 7 hash 98e25846051aac5b adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  56 8 hash 9efc483566ee8ed7 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  57 9 hash eeb8eb79fa5918d9 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  32 _ hash ec32669a74fcae65 adv 4.000000 bx 0.000000 by 0.000000 w 0.000000 h 0.000000
+  g  46 . hash 60cb3b9be6e8ca22 adv 2.000000 bx 0.000000 by -1.000000 w 1.000000 h 1.000000
+  g  44 , hash 180cae30cac69d1f adv 3.000000 bx 0.000000 by -1.000000 w 2.000000 h 2.000000
+  g  58 : hash 547d9d721e93f145 adv 2.000000 bx 0.000000 by -4.000000 w 1.000000 h 3.000000
+  g  59 ; hash c916727390800d02 adv 2.000000 bx 0.000000 by -4.000000 w 1.000000 h 4.000000
+  g  33 ! hash e4cea984de359035 adv 2.000000 bx 0.000000 by -5.000000 w 1.000000 h 5.000000
+  g  63 ? hash b8a0b93411f3bdda adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  45 - hash 9088ad71d049bbd4 adv 4.000000 bx 0.000000 by -3.000000 w 3.000000 h 1.000000
+  g  43 + hash 1876452d3fdeef1c adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 3.000000
+  g  42 * hash bfb5d16c2a02d748 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 3.000000
+  g  47 / hash 8fa09de13fee4e56 adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  61 = hash c0d25a990007d685 adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 3.000000
+  g  60 < hash 7f8d6ffdae431d86 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  62 > hash 7d5ee5ffae1e071e adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  40 ( hash bb82137d6431fdce adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  41 ) hash 3655022aa36deacc adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  91 [ hash 00865b5b7d595802 adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  93 ] hash 366d13b9c46d25b8 adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  35 # hash f86f2818ffd177fd adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  37 % hash 477f79dee080764a adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  38 & hash e012ee76dd836bf2 adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  64 @ hash 211c016a32e44d7c adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+
+scene levels aa=0
+  hash4 76df03ef91f08325
+  hash8 71f814964ffa5325
+  hist 0:512 1:512 2:512 3:512 4:512 5:512 6:512 7:512 8:512 9:512 10:512 11:512 12:512 13:512 14:512 15:512
+  row 00 86ddae0a
+  row 01 86ddae0a
+  row 02 86ddae0a
+  row 03 86ddae0a
+  row 04 86ddae0a
+  row 05 86ddae0a
+  row 06 86ddae0a
+  row 07 86ddae0a
+  row 08 86ddae0a
+  row 09 86ddae0a
+  row 10 86ddae0a
+  row 11 86ddae0a
+  row 12 86ddae0a
+  row 13 86ddae0a
+  row 14 86ddae0a
+  row 15 86ddae0a
+  row 16 86ddae0a
+  row 17 86ddae0a
+  row 18 86ddae0a
+  row 19 86ddae0a
+  row 20 86ddae0a
+  row 21 86ddae0a
+  row 22 86ddae0a
+  row 23 86ddae0a
+  row 24 86ddae0a
+  row 25 86ddae0a
+  row 26 86ddae0a
+  row 27 86ddae0a
+  row 28 86ddae0a
+  row 29 86ddae0a
+  row 30 86ddae0a
+  row 31 86ddae0a
+  row 32 86ddae0a
+  row 33 86ddae0a
+  row 34 86ddae0a
+  row 35 86ddae0a
+  row 36 86ddae0a
+  row 37 86ddae0a
+  row 38 86ddae0a
+  row 39 86ddae0a
+  row 40 86ddae0a
+  row 41 86ddae0a
+  row 42 86ddae0a
+  row 43 86ddae0a
+  row 44 86ddae0a
+  row 45 86ddae0a
+  row 46 86ddae0a
+  row 47 86ddae0a
+  row 48 86ddae0a
+  row 49 86ddae0a
+  row 50 86ddae0a
+  row 51 86ddae0a
+  row 52 86ddae0a
+  row 53 86ddae0a
+  row 54 86ddae0a
+  row 55 86ddae0a
+  row 56 86ddae0a
+  row 57 86ddae0a
+  row 58 86ddae0a
+  row 59 86ddae0a
+  row 60 86ddae0a
+  row 61 86ddae0a
+  row 62 86ddae0a
+  row 63 86ddae0a
+
+scene geom aa=0
+  hash4 dc9650aa0dfbdf52
+  hash8 7142975639a3e902
+  hist 0:7311 1:0 2:0 3:0 4:0 5:0 6:107 7:0 8:400 9:0 10:76 11:0 12:147 13:0 14:0 15:151
+  row 00 e85d4337
+  row 01 e85d4337
+  row 02 9a851cb2
+  row 03 eca45fa9
+  row 04 dbe4ddcf
+  row 05 5dfdc9f0
+  row 06 4d62bfe2
+  row 07 2f11aef4
+  row 08 7333e0c6
+  row 09 e3c7dc94
+  row 10 e61ad31a
+  row 11 905269d9
+  row 12 f14ccf69
+  row 13 42fbb0d3
+  row 14 db22c40c
+  row 15 81d8d20e
+  row 16 230315bd
+  row 17 710b71ab
+  row 18 9e55f850
+  row 19 cd8216cc
+  row 20 c8357c71
+  row 21 aa767453
+  row 22 de964692
+  row 23 7610530a
+  row 24 f7368146
+  row 25 8eb96b8a
+  row 26 c7a76aeb
+  row 27 d6f918b0
+  row 28 450976c5
+  row 29 e987dd23
+  row 30 e85d4337
+  row 31 e85d4337
+  row 32 e85d4337
+  row 33 e85d4337
+  row 34 e85d4337
+  row 35 e85d4337
+  row 36 db3ef72c
+  row 37 db3ef72c
+  row 38 db3ef72c
+  row 39 db3ef72c
+  row 40 43ca93c9
+  row 41 db3ef72c
+  row 42 1c248f93
+  row 43 55ee404b
+  row 44 a6efca6f
+  row 45 8e8e9b2c
+  row 46 1cddbca7
+  row 47 b1666dc1
+  row 48 e85d4337
+  row 49 e85d4337
+  row 50 3ddfa138
+  row 51 42d24777
+  row 52 e11bc60d
+  row 53 979fbc08
+  row 54 3a4a83a1
+  row 55 92b61b11
+  row 56 dcec4bac
+  row 57 cfad12f8
+  row 58 42360f9d
+  row 59 bb2f7ee9
+  row 60 e85d4337
+  row 61 e85d4337
+  row 62 e85d4337
+  row 63 e85d4337
+
+scene text aa=0
+  hash4 317833d5f3f505e3
+  hash8 921ae3c622ab08a3
+  hist 0:7382 1:0 2:0 3:0 4:0 5:0 6:0 7:0 8:0 9:0 10:0 11:0 12:0 13:0 14:0 15:810
+  row 00 e85d4337
+  row 01 e85d4337
+  row 02 e85d4337
+  row 03 e85d4337
+  row 04 e85d4337
+  row 05 243369ac
+  row 06 b56c162d
+  row 07 45781cdc
+  row 08 3de80e97
+  row 09 36d24443
+  row 10 e0404bf1
+  row 11 e85d4337
+  row 12 e85d4337
+  row 13 e85d4337
+  row 14 e85d4337
+  row 15 e4a42d91
+  row 16 c1dd99a2
+  row 17 d64fa916
+  row 18 e09ff415
+  row 19 6d2277e9
+  row 20 1dc856ba
+  row 21 36b8e38e
+  row 22 e85d4337
+  row 23 e85d4337
+  row 24 e85d4337
+  row 25 a8f783db
+  row 26 39f69467
+  row 27 4263a6c4
+  row 28 9076004b
+  row 29 8e7d7958
+  row 30 a54ae43d
+  row 31 e85d4337
+  row 32 e85d4337
+  row 33 e85d4337
+  row 34 e85d4337
+  row 35 0294f808
+  row 36 c6d4ddea
+  row 37 e9571a68
+  row 38 757d39b7
+  row 39 4c9e51e0
+  row 40 6b36d2a0
+  row 41 b9162ef8
+  row 42 e85d4337
+  row 43 e85d4337
+  row 44 e85d4337
+  row 45 e85d4337
+  row 46 e85d4337
+  row 47 e85d4337
+  row 48 e85d4337
+  row 49 e85d4337
+  row 50 e85d4337
+  row 51 e85d4337
+  row 52 e85d4337
+  row 53 e85d4337
+  row 54 e85d4337
+  row 55 e85d4337
+  row 56 e85d4337
+  row 57 e85d4337
+  row 58 e85d4337
+  row 59 e85d4337
+  row 60 e85d4337
+  row 61 e85d4337
+  row 62 e85d4337
+  row 63 e85d4337
+
+glyphs aa=0 font_size=8.0
+  g  65 A hash 2aa9bac32e70cdfd adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  66 B hash fd18dc1c033fd714 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  67 C hash bfdce5028d985282 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  68 D hash 002847fc599575fb adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  69 E hash 9d460d18f9dfbf78 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  70 F hash 143fe6465a1dd3c6 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  71 G hash 66a9efdd72616c61 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  72 H hash 7fc8a5a9cd8d2f39 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  73 I hash 04c7898f1a2fed90 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  74 J hash 2e2cd1ca17f367bb adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  75 K hash e631357cffa55647 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  76 L hash adc89a23d83a5014 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  77 M hash f2a827bc1e6c77c2 adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  78 N hash 423a1ea5db3b6d8d adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  79 O hash 26b2c16dc051ab73 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  80 P hash bb824b823d9c1dce adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  81 Q hash ae823c7504e59732 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 6.000000
+  g  82 R hash 36817e5c4781bee7 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  83 S hash 41f5806e10b1633f adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  84 T hash e3741ffae35ade54 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  85 U hash f92d8ef95c06e2ef adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  86 V hash 7e5d7556498105ac adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  87 W hash d04e6ca2459b7e52 adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  88 X hash 76f183cd1dad36cf adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  89 Y hash 5361b308efa15435 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  90 Z hash 5ce2701c6deef994 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  97 a hash 22285bf40fa7be99 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g  98 b hash 319e17250c9d1a96 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  99 c hash a722cf232d0c0eb9 adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 4.000000
+  g 100 d hash 8253aff99aa5f704 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g 101 e hash 11d79925cb92505e adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 102 f hash 326de4ee374a9186 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g 103 g hash f9b0ec09a36462de adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 6.000000
+  g 104 h hash 579667e60009a611 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g 105 i hash 5fda0cd319ed5535 adv 2.000000 bx 0.000000 by -5.000000 w 1.000000 h 5.000000
+  g 106 j hash 8c48ee7fd83e2f6f adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 7.000000
+  g 107 k hash 58e5ba553634767f adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g 108 l hash af4c01bd93a74202 adv 2.000000 bx 0.000000 by -5.000000 w 1.000000 h 5.000000
+  g 109 m hash 4ea7224b524d0d5e adv 6.000000 bx 0.000000 by -4.000000 w 5.000000 h 4.000000
+  g 110 n hash dd31ac3132cc050e adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 111 o hash c662925d81fa3ca5 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 112 p hash 05b3a5bcf020c0e9 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 6.000000
+  g 113 q hash c44ddbcd41cba8a9 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 6.000000
+  g 114 r hash 97a44be569783bd3 adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 4.000000
+  g 115 s hash f5c38b40473363af adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 116 t hash 317dbe927a6af74e adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g 117 u hash c9ffd629b7910874 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 118 v hash 39a4416f2dd43194 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g 119 w hash 52f4a5a56afc0245 adv 6.000000 bx 0.000000 by -4.000000 w 5.000000 h 4.000000
+  g 120 x hash 2a5066996de6f505 adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 4.000000
+  g 121 y hash 42b4f25f12a67603 adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 6.000000
+  g 122 z hash 536ff5704ec4bf7b adv 5.000000 bx 0.000000 by -4.000000 w 4.000000 h 4.000000
+  g  48 0 hash 26b2c16dc051ab73 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  49 1 hash c2f6e689073877db adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  50 2 hash 06c5c59232f4b950 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  51 3 hash 370942a5fdb60497 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  52 4 hash 79c41c105b08d00f adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  53 5 hash 7271a39c0f027ff7 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  54 6 hash 5b6fb36db1290579 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  55 7 hash 98e25846051aac5b adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  56 8 hash 9efc483566ee8ed7 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  57 9 hash eeb8eb79fa5918d9 adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  32 _ hash ec32669a74fcae65 adv 4.000000 bx 0.000000 by 0.000000 w 0.000000 h 0.000000
+  g  46 . hash 60cb3b9be6e8ca22 adv 2.000000 bx 0.000000 by -1.000000 w 1.000000 h 1.000000
+  g  44 , hash 180cae30cac69d1f adv 3.000000 bx 0.000000 by -1.000000 w 2.000000 h 2.000000
+  g  58 : hash 547d9d721e93f145 adv 2.000000 bx 0.000000 by -4.000000 w 1.000000 h 3.000000
+  g  59 ; hash c916727390800d02 adv 2.000000 bx 0.000000 by -4.000000 w 1.000000 h 4.000000
+  g  33 ! hash e4cea984de359035 adv 2.000000 bx 0.000000 by -5.000000 w 1.000000 h 5.000000
+  g  63 ? hash b8a0b93411f3bdda adv 5.000000 bx 0.000000 by -5.000000 w 4.000000 h 5.000000
+  g  45 - hash 9088ad71d049bbd4 adv 4.000000 bx 0.000000 by -3.000000 w 3.000000 h 1.000000
+  g  43 + hash 1876452d3fdeef1c adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 3.000000
+  g  42 * hash bfb5d16c2a02d748 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 3.000000
+  g  47 / hash 8fa09de13fee4e56 adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  61 = hash c0d25a990007d685 adv 4.000000 bx 0.000000 by -4.000000 w 3.000000 h 3.000000
+  g  60 < hash 7f8d6ffdae431d86 adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  62 > hash 7d5ee5ffae1e071e adv 4.000000 bx 0.000000 by -5.000000 w 3.000000 h 5.000000
+  g  40 ( hash bb82137d6431fdce adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  41 ) hash 3655022aa36deacc adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  91 [ hash 00865b5b7d595802 adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  93 ] hash 366d13b9c46d25b8 adv 3.000000 bx 0.000000 by -5.000000 w 2.000000 h 5.000000
+  g  35 # hash f86f2818ffd177fd adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  37 % hash 477f79dee080764a adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  38 & hash e012ee76dd836bf2 adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+  g  64 @ hash 211c016a32e44d7c adv 6.000000 bx 0.000000 by -5.000000 w 5.000000 h 5.000000
+
+# end

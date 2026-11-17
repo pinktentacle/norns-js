@@ -1,0 +1,71 @@
+diff --git a/source/ChaosUGens/NoiseRing.cpp b/source/ChaosUGens/NoiseRing.cpp
+index 8c3d722040a3672a6be2aac4ee75903e9c1299a8..df78d4dfbe2e8468dc3f91190269fe70aaf000ce 100644
+--- a/source/ChaosUGens/NoiseRing.cpp
++++ b/source/ChaosUGens/NoiseRing.cpp
+@@ -97,7 +97,7 @@ void DNoiseRing_next(DNoiseRing *unit, int inNumSamples)
+ 
+ 
+ //////////////////////////////
+-PluginLoad(Chaos)
++PluginLoad(Sc3ChaosNoiseRing)
+ {
+ 	// InterfaceTable *inTable implicitly given as argument to load function
+ 	ft = inTable;
+diff --git a/source/ChaosUGens/PredPrey.cpp b/source/ChaosUGens/PredPrey.cpp
+index cc99dcf6c3d5ae6f009ef1716369a6273238a3dd..33a20eb834a63bd450fa6fddeae9972579e46c00 100644
+--- a/source/ChaosUGens/PredPrey.cpp
++++ b/source/ChaosUGens/PredPrey.cpp
+@@ -287,7 +287,7 @@ void LotkaVolterra_Ctor(LotkaVolterra* unit){
+ 
+ 
+ // the load function is called by the host when the plug-in is loaded
+-PluginLoad(Chaos)
++PluginLoad(Sc3ChaosPredPrey)
+ {
+ 	ft = inTable;
+ 
+diff --git a/source/GlitchUGens/GlitchUGens.cpp b/source/GlitchUGens/GlitchUGens.cpp
+index d41efd6365786f9185be8ae2823f47d321051415..317947a26f84362108f61662b1dfd43e9eb4f322 100644
+--- a/source/GlitchUGens/GlitchUGens.cpp
++++ b/source/GlitchUGens/GlitchUGens.cpp
+@@ -672,7 +672,7 @@ void GlitchBRF_next_1(GlitchBRF* unit, int inNumSamples)
+ }
+ 
+ ////////////////////////////////////////////////////////////////////////////////////////////////////////
+-PluginLoad(Filter)
++PluginLoad(GlitchFilter)
+ {
+ 	ft = inTable;
+ 
+diff --git a/source/NCAnalysisUGens/SMS.cpp b/source/NCAnalysisUGens/SMS.cpp
+index cf526bcb34566b4998aeda1983f55dbe668959d4..b96fe3640f61e249313d91d3a97050ae9400f53b 100644
+--- a/source/NCAnalysisUGens/SMS.cpp
++++ b/source/NCAnalysisUGens/SMS.cpp
+@@ -439,7 +439,13 @@ void SMS_Ctor(SMS* unit) {
+ 
+ 		int bufnum= (int)fbufnum;
+ 
+-	if(0<=bufnum<= world->mNumSndBufs) {
++	// norns-js E9-29: was `if(0<=bufnum<= world->mNumSndBufs)`, which clang
++	// refuses outright. It parses as `(0<=bufnum) <= mNumSndBufs` — a 0 or
++	// a 1 compared against a buffer COUNT, so it is true for every bufnum
++	// including the out-of-range ones this line exists to reject. The
++	// upper bound is `<`, not `<=`: mNumSndBufs is a count, and the last
++	// valid index is one below it.
++	if(bufnum >= 0 && bufnum < world->mNumSndBufs) {
+ 		SndBuf * buf;
+ 
+ 		buf = world->mSndBufs + bufnum;
+diff --git a/source/Neuromodules/Neuromodules.cpp b/source/Neuromodules/Neuromodules.cpp
+index 0a5a7d244bd5beac25a197f1c68d838bc2fa7be3..3a732e815b4ca25a8884403eec0c3044881a4988 100644
+--- a/source/Neuromodules/Neuromodules.cpp
++++ b/source/Neuromodules/Neuromodules.cpp
+@@ -195,7 +195,7 @@ void Dneuromodule_Dtor(Dneuromodule *unit)
+ 
+ 
+ 
+-PluginLoad(TagSystem)
++PluginLoad(NeuromodulesTagSystem)
+ {
+ 	ft = inTable;
+ 	DefineDtorUnit(Dneuromodule);

@@ -1,0 +1,257 @@
+{
+  "scripts": 35,
+  "redistributable": 18,
+  "byLicence": {
+    "NONE": 17,
+    "MIT": 6,
+    "GPL-3.0": 11,
+    "GPL-2.0": 1
+  },
+  "list": [
+    {
+      "name": "ack",
+      "category": "dependencies",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "amen",
+      "category": "samplers-granular",
+      "licence": "MIT",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "arcologies",
+      "category": "sequencers",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "awake",
+      "category": "sequencers",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "barcode",
+      "category": "loopers-delays",
+      "licence": "MIT",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "beets",
+      "category": "samplers-granular",
+      "licence": "MIT",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "cheat_codes_2",
+      "category": "samplers-granular",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "cranes",
+      "category": "loopers-delays",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "dreamsequence",
+      "category": "sequencers",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "flora",
+      "category": "sequencers",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "foulplay",
+      "category": "sequencers",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "glut",
+      "category": "samplers-granular",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "less_concepts",
+      "category": "sequencers",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "loom",
+      "category": "sequencers",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE.md",
+      "redistributable": true
+    },
+    {
+      "name": "mangl",
+      "category": "samplers-granular",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "mi-eng",
+      "category": "synths",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "midigrid",
+      "category": "fx-utilities",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "mlr",
+      "category": "samplers-granular",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "molly_the_poly",
+      "category": "synths",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE.md",
+      "redistributable": true
+    },
+    {
+      "name": "mx.samples",
+      "category": "samplers-granular",
+      "licence": "MIT",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "n.kria",
+      "category": "sequencers",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "nb",
+      "category": "fx-utilities",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "ndls",
+      "category": "loopers-delays",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "oooooo",
+      "category": "loopers-delays",
+      "licence": "MIT",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "orca",
+      "category": "sequencers",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "otis",
+      "category": "loopers-delays",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "passersby",
+      "category": "synths",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE.md",
+      "redistributable": true
+    },
+    {
+      "name": "passthrough",
+      "category": "fx-utilities",
+      "licence": "GPL-2.0",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "pedalboard",
+      "category": "fx-utilities",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "reels",
+      "category": "loopers-delays",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "rudiments",
+      "category": "synths",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "takt",
+      "category": "sequencers",
+      "licence": "NONE",
+      "evidence": null,
+      "redistributable": false
+    },
+    {
+      "name": "timber",
+      "category": "samplers-granular",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE.md",
+      "redistributable": true
+    },
+    {
+      "name": "wrms",
+      "category": "loopers-delays",
+      "licence": "GPL-3.0",
+      "evidence": "LICENSE",
+      "redistributable": true
+    },
+    {
+      "name": "zxcvbn",
+      "category": "sequencers",
+      "licence": "MIT",
+      "evidence": "LICENSE",
+      "redistributable": true
+    }
+  ]
+}

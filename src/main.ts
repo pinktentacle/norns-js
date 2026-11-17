@@ -1,0 +1,2604 @@
+// E2-03 + E2-05 — norns on a page you can look at and press.
+//
+// Boots the Lua host with the real `lua/core`, binds the wasm screen to it,
+// and wires a keyboard, a mouse and a touch screen to the three keys and three
+// encoders. No audio: that is E4.
+
+// FIRST: fengari reads `process` while it initialises and a browser has
+// none. Static imports run in source order, so this installs the globals
+// before the import below pulls fengari in. This used to be an inline script
+// in index.html; it moved here when a second page needed it, because two
+// copies of a shim is two things to keep in step.
+import "./lua/browser-globals.js";
+import { createHost, boot, type Host } from "./lua/host.js";
+import { loadNornsLuaWeb, loadConfigWeb } from "./lua/host-web.js";
+import menuHereLua from "./lua/norns-js/menu-here.lua?raw";
+import { createScreen, type Screen } from "./screen/screen.js";
+import { loadScreenModuleWeb } from "./screen/screen-web.js";
+import { createScreenCanvas } from "./ui/canvas.js";
+import { createInput, type Side } from "./ui/input.js";
+import { createPadCore, readPad, type PadCore } from "./ui/gamepad.js";
+import { detect, effectiveKind, readSignals, type MachineKind } from "./ui/machine.js";
+import { registerScreenImages } from "./screen/images.js";
+import { registerHardware, type Hardware } from "./norns/hardware.js";
+import { registerOsc } from "./osc/register.js";
+import { exercise, scriptsIn, type ExerciseOptions } from "./exercise/runner.js";
+import { OscRemote } from "./osc/remote.js";
+import { browserStorage, createSettings, dbToGain, type DeviceId } from "./ui/settings.js";
+import { openAudioInput } from "./engine/input.js";
+import {
+  canChooseOutput,
+  grantDeviceAccess,
+  listAudioDevices,
+  setOutputDevice,
+  watchDevices,
+} from "./ui/audio-devices.js";
+import { createStage, type Stage } from "./ui/stage.js";
+import { createSettingsPanel } from "./ui/settings-panel.js";
+import { createMaidenPanel } from "./ui/maiden-panel.js";
+import { createVfsStore } from "./editor/store.js";
+import { createRunner } from "./editor/runner.js";
+import { installFromRepo, parseRepoUrl } from "./community/install.js";
+import { fetchAndStoreCatalogs } from "./community/maiden-catalogs.js";
+import { needsOf } from "./community/needs.js";
+import { declareExtensions } from "./community/extensions.js";
+import { exportTree, fetchArchive, importTree, installScript } from "./fs/transfer.js";
+import { makeCallbacks } from "./norns/callbacks.js";
+import { loadDustWeb } from "./fs/dust-web.js";
+import { registerFs } from "./fs/register.js";
+import { restoreFromOpfs, mirrorToOpfs } from "./fs/opfs.js";
+import { GridManager } from "./grid/manager.js";
+import { registerGrid } from "./grid/register.js";
+import { GridView } from "./grid/view.js";
+import { MidiManager } from "./midi/manager.js";
+import { registerMidi } from "./midi/register.js";
+import { startWebMidi } from "./midi/web.js";
+import { createVirtualMidiPort, type VirtualMidiPort } from "./midi/virtual.js";
+import { createKeyboardMidiPort, type KeyboardMidiPort } from "./midi/keyboard.js";
+import { createKeyboardView, type KeyboardView } from "./ui/keyboard-view.js";
+import { createFadersMidiPort, FADERS_MIDI_NAME, type FadersMidiPort } from "./midi/faders.js";
+import { createFadersView, type FadersView } from "./ui/faders-view.js";
+import { createKnobsMidiPort, KNOBS_MIDI_NAME, type KnobsMidiPort } from "./midi/knobs.js";
+import { createKnobsView, type KnobsView } from "./ui/knobs-view.js";
+import { RemoteGridTransport } from "./grid/remote.js";
+import { ArcManager } from "./arc/manager.js";
+import { registerArc } from "./arc/register.js";
+import { ArcView } from "./arc/view.js";
+import { registerMonome } from "./monome/register.js";
+import { registerSerial } from "./serial/register.js";
+import { MidiClockSource } from "./clock/midi-source.js";
+import type { ClockSource } from "./clock/register.js";
+import type { Clock } from "./clock/clock.js";
+import { createWorkletClock } from "./clock/clock.js";
+import { createEngineHost } from "./engine/host.js";
+import { repairScSource } from "./engine/sc-source.js";
+import { registerEngine } from "./engine/register.js";
+import { createBufferLoader } from "./engine/buffers.js";
+import { parseWavHeader } from "./fs/wav-header.js";
+import { registerClock } from "./clock/register.js";
+import { startCrone } from "./crone/crone.js";
+import {
+  registerCrone,
+  croneEvents,
+  croneFileWriter,
+  croneTapeWriter,
+  createTapePaths,
+} from "./crone/register.js";
+import { captured } from "./engine/capture.js";
+
+const $ = <T extends HTMLElement>(sel: string): T => {
+  const el = document.querySelector<T>(sel);
+  if (!el) throw new Error(`missing element ${sel}`);
+  return el;
+};
+
+const logEl = $<HTMLPreElement>("#log");
+
+/**
+ * The loudest sample in the meter's window, 0..1.
+ *
+ * `getFloatTimeDomainData` is the raw signal, not the spectrum, so this is
+ * the peak you would see on a meter rather than an energy estimate. One
+ * window is 2048 samples — about 43 ms at 48 kHz — which is long enough to
+ * catch a note and short enough to ask for repeatedly.
+ */
+function peakOf(analyser: AnalyserNode): number {
+  const buf = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(buf);
+  let peak = 0;
+  for (const v of buf) {
+    const a = v < 0 ? -v : v;
+    if (a > peak) peak = a;
+  }
+  return peak;
+}
+
+function log(line: string): void {
+  logEl.textContent += line + "\n";
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/**
+ * Baked in by vite (see `define` in vite.config.ts), so a page can say which
+ * build it is. A copy of this runs on other machines, and "the button is not
+ * there" and "there is no sound" are both what an OLD build looks like.
+ */
+declare const __BUILD_ID__: string;
+
+/**
+ * E9-60 — an install gives up rather than hanging for ever.
+ *
+ * `fetch` has no timeout of its own, and a connection the CDN accepts and
+ * then stalls never settles: measured on `graintopia`, which sat at 20 of
+ * its 22 files for four minutes with no traffic at all and could not be
+ * stopped, because there was nothing to stop — the promise simply never
+ * resolved. The retry that fetches a file from a second source cannot help
+ * either, since the first attempt has not failed yet.
+ *
+ * Ten minutes is long on purpose. A repository with 60 MB of samples on a
+ * slow line is a legitimate install, and somebody who has changed their
+ * mind already has a cancel button; this is for the case where nothing is
+ * coming and no one is told.
+ */
+const STALL_MS = 10 * 60 * 1000;
+
+function withStallTimeout(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(STALL_MS);
+  if (!signal) return timeout;
+  // `AbortSignal.any` is the whole of it where it exists; where it does not,
+  // the caller's own signal is still honoured and only the timeout is lost.
+  const any = (AbortSignal as { any?: (s: AbortSignal[]) => AbortSignal }).any;
+  return any ? any([signal, timeout]) : signal;
+}
+
+async function main(): Promise<void> {
+  let dirty = true;
+  log(`norns-js · build ${typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev"}`);
+  log("loading the screen module…");
+  const screen: Screen = await createScreen(loadScreenModuleWeb, {
+    // Upstream's screen_update pushes the surface over SPI. Here it marks the
+    // frame dirty and the next animation frame presents it: drawing straight
+    // from this callback would repaint several times inside one redraw, since
+    // norns calls screen.update() once per page and the menu redraws pages in
+    // sequence.
+    onUpdate: () => void (dirty = true),
+    // cairo trapped and the context was rebuilt (E5-27). Said out loud,
+    // because a lost frame with no explanation is how this went unnoticed
+    // for a whole epic: the screen simply stayed black.
+    onTrap: (name, count) => {
+      dirty = true;
+      log(`screen: ${name} trapped in cairo; context rebuilt (${count})`);
+    },
+    // Past the bound. Rebuilding leaks, so trying for ever ends in a
+    // corrupted heap rather than a working screen; this says the one thing
+    // that helps instead of pretending.
+    onGone: (traps) => {
+      log(
+        `screen: the drawing module is past saving after ${traps} traps. ` +
+          "Everything else still runs; reload the page to get the screen back.",
+      );
+    },
+  });
+
+  // The dust tree has to be in place BEFORE Lua starts: `io.open` and
+  // `loadfile` are synchronous and have nowhere to await, and norns reads its
+  // display settings during `_startup`.
+  log("loading the dust tree…");
+  const vfs = await loadDustWeb();
+
+  // Whatever this origin saved last time, BEFORE Lua starts. `state.resume`
+  // reads `system.state` during `_startup`, so a file that arrives later
+  // arrives after the only moment anything reads it. See src/fs/opfs.ts.
+  log("restoring saved files…");
+  await restoreFromOpfs(vfs, { log: (l) => log(l) });
+
+  // E9-33 — what the server has, said where thirteen scripts look for it.
+  //
+  // BEFORE LUA, because `engine.name` is often decided in a script's main
+  // chunk — `bitters` writes
+  // `util.file_exists(ext.."/PulsePTR/PulsePTR.sc") and … or nil` at the
+  // top of the file — so an answer that arrives after the script loads
+  // arrives after the only moment it is read. Same reason the restore
+  // above runs here.
+  //
+  // After the restore, not before: this writes into the VFS and a restore
+  // landing on top of it would put back whatever a previous session had
+  // there.
+  await declareExtensions(vfs, { log: (l) => log(l) });
+
+  // AN INTERRUPTED DOWNLOAD, SWEPT AT BOOT.
+  //
+  // `installFromRepo` stages into `~/dust/.installing/<name>` and only moves
+  // the files into `code/` when they are all there, so a cancel or a failure
+  // cleans up after itself (E9-19). A CLOSED TAB DOES NOT: the page goes
+  // away mid-download and the sweep never runs, leaving a part of a script
+  // in OPFS — outside `code/`, so nothing lists it, nothing loads it, and
+  // nobody ever finds it. Three were sitting here when this was written,
+  // left by reloads during testing.
+  //
+  // Anything in there is by definition a download that did not finish, so
+  // the boot is the right place and "delete it" is the right answer.
+  const stale = vfs.list("/home/we/dust/.installing").map((e) => e.name);
+  if (stale.length > 0) {
+    for (const p of vfs.walk("/home/we/dust/.installing")) vfs.remove(p);
+    for (const name of stale) vfs.remove(`/home/we/dust/.installing/${name}`);
+    vfs.remove("/home/we/dust/.installing");
+    log(`swept ${stale.length} interrupted download${stale.length === 1 ? "" : "s"}: ${stale.join(", ")}`);
+  }
+  const mirror = mirrorToOpfs(vfs, { log: (l) => log(l) });
+  // A tab being closed is the common case for losing the last write, and
+  // `visibilitychange` is the event that actually fires on mobile. The flush
+  // is not awaited — nothing can await during a teardown — but starting it
+  // is what gives it a chance.
+  globalThis.addEventListener("pagehide", () => void mirror.flush());
+  globalThis.document?.addEventListener("visibilitychange", () => {
+    if (globalThis.document?.hidden) void mirror.flush();
+  });
+
+  const installed = vfs.list("/home/we/dust/code").filter((e) => e.isDir).length;
+
+  /**
+   * A shell command that was refused, said once and in full.
+   *
+   * THE COMMAND, not only the verb. "unsupported shell command: wget" is
+   * true and useless; the thing that explains a script's behaviour is what
+   * it was trying to do — `cd /tmp && wget …tapedeck/releases… && sudo
+   * rsync … Extensions/` says, to anyone who reads it, that the script is
+   * installing a native SuperCollider plugin and that no restart will ever
+   * produce one here.
+   *
+   * Trimmed to one line and 160 characters: `install.sh` scripts run to
+   * hundreds of characters and the console is not a terminal.
+   *
+   * E9-69 — AND A BURST OF THE SAME REFUSAL IS ONE REFUSAL.
+   *
+   * `folio` lists the whole library and asks git for a version of every
+   * entry it lists:
+   *
+   *     e['git_hash'] = run_cmdline('cd '..paths.code..name..' && git describe --always') or ''
+   *
+   * 359 entries, 359 refusals, every one of them a different command and
+   * every one of them the same fact. Measured: a 1397-line log of which
+   * 359 lines were ours saying `cd` is not supported, in a window where
+   * the interesting line was the one before them.
+   *
+   * So the FIRST is said in full, as it always was, and the ones that
+   * follow it in the same burst are counted and reported together when
+   * they stop. Nothing is hidden and no count is lost — an isolated
+   * refusal a minute later is a new burst and is said in full again,
+   * which a per-session cap would not have done.
+   */
+  const bursts = new Map<string, { n: number; latest: string; timer: ReturnType<typeof setTimeout> }>();
+  const refused = (cmd: string, why: string): void => {
+    const one = cmd.replace(/\s+/g, " ").trim();
+    const short = one.length > 160 ? one.slice(0, 157) + "…" : one;
+    const open = bursts.get(why);
+    if (open === undefined) {
+      log(`shell refused: ${why} — ${short}`);
+      bursts.set(why, { n: 0, latest: short, timer: setTimeout(() => bursts.delete(why), 1000) });
+      return;
+    }
+    clearTimeout(open.timer);
+    open.n += 1;
+    open.latest = short;
+    open.timer = setTimeout(() => {
+      bursts.delete(why);
+      log(`shell refused: ${why} — and ${open.n} more like it, last ${open.latest}`);
+    }, 1000);
+  };
+
+  // E9-59 — norns' OWN Lua is on the filesystem too, as it is on hardware.
+  //
+  // The sources are bundled for `require`, which reads them from a map. But
+  // `include` does not use that map: `startup.lua:52` resolves a name with
+  // `util.file_exists(dir .. file .. '.lua')` against the script's path,
+  // `_path.code` and `_path.extn` — and `_path.extn` is
+  // `/home/we/norns/lua/extn/`, which held NOTHING here. So
+  //
+  //     tambla.lua   local sky = include('sky/unstable')
+  //     ### MISSING INCLUDE: sky/unstable
+  //
+  // while `extn/sky/unstable.lua` sat in the bundle the whole time. It is
+  // mounted, not written: a mount is a supplier the base layer answers from,
+  // so the OPFS mirror never sees it and storage does not gain a copy of the
+  // bundle on every boot.
+  const nornsSources = loadNornsLuaWeb();
+  for (const [name, src] of nornsSources) {
+    vfs.mount(`/home/we/norns/lua/${name}.lua`, () => src);
+  }
+
+  // E9-37 — the dependency a script downloads for itself.
+  //
+  // Fourteen scripts do this, and most want a GitHub repository or a
+  // release file. The shell recognised the shape and said no for THIS
+  // run, truthfully; here is where the work actually happens, and the
+  // files are in place the next time the script is loaded.
+  //
+  // Deliberately not awaited and deliberately not retried: the script
+  // has already been told, and a failure says so in the log rather than
+  // leaving a half tree behind — `installFromRepo` stages outside
+  // `code/` and sweeps after itself.
+  //
+  // E9-69 — AND IT IS WIRED TO BOTH DOORS NOW. `registerFs` below takes
+  // the same function: `util.os_capture` is `_norns.execute`, which is
+  // what norns' own Lua gives a script to shell out with, and that door
+  // reported the download and never started it.
+  const startFetch = (f: { kind: "repo" | "file"; url: string; dest: string }): void => {
+    void (async () => {
+      try {
+        if (f.kind === "repo") {
+          const repo = parseRepoUrl(f.url);
+          if (!repo) {
+            log(`fetch: ${f.url} is not a github repository`);
+            return;
+          }
+          const name = f.dest.split("/").filter(Boolean).pop() ?? repo.repo;
+          const r = await installFromRepo(vfs, repo, { name });
+          log(`fetch: ${repo.owner}/${repo.repo} → ${f.dest} (${r.files} files)`);
+        } else {
+          const res = await fetch(f.url);
+          if (!res.ok) {
+            log(`fetch: ${f.url} answered ${res.status}`);
+            return;
+          }
+          const bytes = new Uint8Array(await res.arrayBuffer());
+          vfs.write(f.dest, bytes);
+          log(`fetch: ${f.url} → ${f.dest} (${(bytes.length / 1024).toFixed(0)} KB)`);
+        }
+      } catch (e) {
+        log(`fetch: ${f.url} failed — ${(e as Error).message}`);
+      }
+    })();
+  };
+
+  log("booting norns…");
+  const host: Host = createHost({
+    sources: nornsSources,
+    onPrint: (l) => log(l),
+    vfs,
+    // The OTHER door. `registerFs` below covers what norns core asks for
+    // through `_norns.execute`; this one covers a script's own `os.execute`
+    // and `io.popen`, which reported nothing at all until E9-12.
+    onShellRefused: refused,
+    onShellFetch: startFetch,
+  });
+  screen.register(host.registry);
+  registerFs(host.registry, vfs, {
+    onRefused: refused,
+    onFetch: startFetch,
+    onSystemAction: (action, outcome) => log(`${action}: ${outcome}`),
+    // SELECT answers asynchronously and norns redraws when it does, but the
+    // redraw metro is E3, so the page asks for one itself.
+    onChanged: () => void (dirty = true),
+  });
+
+  // E5-24 — the last fifteen of the 178.
+  //
+  // The screen's image and PNG family, built on peek and poke because there
+  // is no emscripten here to add exports to the screen module.
+  /**
+   * Ask for a redraw from something that is not Lua.
+   *
+   * `dirty` is declared above but the present loop that reads it is set up
+   * after boot, and these registrations happen before it; an indirection is
+   * cheaper than moving the boot.
+   */
+  const dirtyFlag = (): void => void (dirty = true);
+  /** Set once `makeCallbacks` has run, which is after boot. */
+  let cbReady: ReturnType<typeof makeCallbacks> | null = null;
+  const cbLater = (): ReturnType<typeof makeCallbacks> | null => cbReady;
+  registerScreenImages(host.registry, {
+    screen,
+    vfs,
+    log: (l) => log(l),
+    // A PNG decodes after the frame that asked for it. Without this, a
+    // script that drew its picture once in `init` would never show it.
+    onChanged: () => dirtyFlag(),
+  });
+
+  // What machine we say we are, and the two numbers `menu/home.lua` does
+  // arithmetic on. `croneLoad` is read through a closure because the audio
+  // thread comes up long after this.
+  let audioLoad: { meanMs: number; budgetMs: number } | null = null;
+  const hardware: Hardware = registerHardware(host.registry, {
+    load: () => audioLoad,
+    log: (l) => log(l),
+  });
+
+  // OSC leaves through a relay or it does not leave: a browser has no UDP.
+  const oscRelayUrl = new URLSearchParams(location.search).get("osc-relay");
+  const oscRemote =
+    oscRelayUrl !== null && oscRelayUrl !== ""
+      ? new OscRemote({
+          url: oscRelayUrl,
+          onEvent: (path, args, from) => {
+            cbLater()?.oscEvent(path, [...args], [...from]);
+            dirtyFlag();
+          },
+          log: (l) => log(l),
+        })
+      : null;
+  registerOsc(host.registry, { remote: oscRemote, log: (l) => log(l) });
+
+  const err = boot(host, loadConfigWeb());
+  if (err) {
+    log(`ERROR ${err.step}: ${err.error}`);
+    return;
+  }
+
+  // The menu pages that cannot do what they offer, told to say so.
+  //
+  // AFTER boot and not as a patch to norns' own Lua: `_menu.m` is built
+  // while `core/menu` is required, so there is nothing to mutate before
+  // that, and `src/lua/patches.ts` is for crashes and hangs rather than
+  // for wording. Failing here must not stop the page — a menu that reads
+  // slightly wrong is better than no norns at all.
+  const menuErr = host.run(menuHereLua, "=(norns-js menu)");
+  if (menuErr) log(`menu notes: ${menuErr}`);
+
+  const cb = makeCallbacks(host.L);
+  // The callbacks exist only after boot, and the OSC relay may deliver
+  // before then; this is how the handler above reaches them when they do.
+  cbReady = cb;
+
+  // --- presentation ------------------------------------------------------
+  const screenBox = $("#screen");
+  /**
+   * The page zoom, for the canvas, through a box rather than a closure.
+   *
+   * `settings` is built further down — the canvas has to exist before the
+   * first frame and the store before the first setting — and a closure over
+   * it here would be read at the first `resize()`, which happens between
+   * the two. One mutable function, set once the store exists, keeps the
+   * canvas zoom-aware without moving either of them.
+   */
+  let zoomNow = (): number => 1;
+  const canvas = createScreenCanvas(screenBox, { zoom: () => zoomNow() });
+  const grey = new Uint8Array(128 * 64);
+
+  // THE SCALE HAS TO FOLLOW THE WELL. The screen is sized to the largest
+  // whole multiple of 128x64 that fits its container, and the container is a
+  // percentage of a device that resizes with the page -- so a canvas left at
+  // the scale it was born with is clipped the moment the window narrows, and
+  // what gets clipped is the LEFT of the screen, which is where norns draws
+  // almost everything. Resizing a canvas also clears it, hence the redraw.
+  const refit = (): void => {
+    canvas.resize();
+    dirty = true;
+  };
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(refit).observe(screenBox);
+  } else {
+    globalThis.addEventListener("resize", refit);
+  }
+
+  /**
+   * The veil over the first seconds, and the gesture gate, in one element.
+   *
+   * A gesture that is needed WINS over loading: the browser can hold the
+   * audio engine while the screen is still blank, and a page that says
+   * "Loading" while it is in fact waiting for a click waits for ever.
+   */
+  let painted = false;
+  let needsGesture = false;
+  const showGate = (): void => {
+    const gate = document.querySelector("#gate");
+    if (!(gate instanceof HTMLElement)) return;
+    gate.dataset["state"] = needsGesture ? "gesture" : painted ? "off" : "loading";
+  };
+  // A SCREEN THAT NEVER DRAWS MUST NOT LEAVE A BLACK PAGE. If the module
+  // fails, nothing ever paints, and an opaque veil would hide the console
+  // that says why. This lifts it anyway and says so.
+  setTimeout(() => {
+    if (painted) return;
+    painted = true;
+    showGate();
+    log("the screen has not drawn anything yet; showing the page regardless");
+  }, 45_000);
+
+  /**
+   * A Steam Deck's controls, polled.
+   *
+   * The Gamepad API has no events for sticks: a pad is READ, once a frame,
+   * and the frame loop is already here. It stays null on every other
+   * machine, so nothing is polled that nobody asked for.
+   */
+  let pad: PadCore | null = null;
+  let padAt = 0;
+  const padFrame = (now: number): void => {
+    if (pad === null) return;
+    const dt = padAt === 0 ? 16 : Math.min(100, now - padAt);
+    padAt = now;
+    for (const a of pad.frame(readPad(), dt)) {
+      if (a.a === "key") onKeyIn(a.n, a.z);
+      else onEncIn(a.n, a.delta);
+    }
+  };
+
+  /**
+   * THE GLOBAL `refresh()`, which matron fires at 60 Hz and we never did.
+   *
+   * `ssd1322_thread_run` posts `EVENT_SCREEN_REFRESH` every 16.6 ms, and
+   * `w_handle_screen_refresh` calls the Lua global `refresh`. On a norns
+   * that is a free redraw loop for any script that defines one — and
+   * `acrostic` is exactly such a script: `function refresh()` calls
+   * `acrostic:update()` and then `redraw()`, and NOTHING ELSE in it ever
+   * calls `redraw`. Here its screen was blank from the moment it loaded
+   * while the engine played: measured 0 lit pixels, and 489 the instant
+   * `redraw()` was called by hand.
+   *
+   * The callback has existed in `src/norns/callbacks.ts` since E2-04 and
+   * nothing drove it. A defined callback nobody calls is the quietest kind
+   * of missing feature: every test of it passes.
+   *
+   * ON A TIMER AND NOT IN THE FRAME LOOP, which is a deliberate difference
+   * from `present` below. matron's is a thread: it runs whether or not
+   * anybody is looking at the screen. `requestAnimationFrame` stops when
+   * the page is not being composited — which is not a theoretical
+   * concern, it is how a sweep of 25 scripts came to report four of them
+   * frozen. A script's redraw loop must not depend on whether the window
+   * is in front.
+   *
+   * `refresh` is `norns.none` outside play mode, so this costs one Lua
+   * call into an empty function for the whole time the menu is up.
+   */
+  const REFRESH_MS = 1000 / 60;
+  let refreshSaid = false;
+  setInterval(() => {
+    const err = cb.refresh();
+    // ONCE. A script whose `refresh` raises would otherwise write sixty
+    // lines a second into the log, which is both useless and slow enough
+    // to look like a hang — matron says nothing at all here.
+    if (err !== null && !refreshSaid) {
+      refreshSaid = true;
+      log(`refresh: ${err.message} (said once)`);
+    }
+  }, REFRESH_MS);
+
+  const present = (now: number): void => {
+    padFrame(now);
+    if (dirty) {
+      dirty = false;
+      screen.greyscale(grey);
+      canvas.draw(grey, screen.panel());
+      // THE LOADING VEIL LIFTS ON THE FIRST FRAME THAT HAS SOMETHING IN IT.
+      //
+      // Not on the first frame: a blank one is still the instrument's
+      // furniture with nothing behind it. Not on `audio ready` either, which
+      // is a further twenty seconds of staring at a black rectangle when the
+      // menu has been usable the whole time. The scan stops happening the
+      // moment it succeeds.
+      if (!painted) {
+        for (const v of grey) {
+          if (v !== 0) {
+            painted = true;
+            showGate();
+            break;
+          }
+        }
+      }
+    }
+    requestAnimationFrame(present);
+  };
+  requestAnimationFrame(present);
+
+  // --- what this browser remembers (E6-10) --------------------------------
+  //
+  // Created BEFORE the input, because the input reads the keymap out of it.
+  const settings = createSettings(browserStorage());
+  zoomNow = (): number => settings.zoom;
+
+  /**
+   * E9-61 — ONE ZOOM, for the whole page.
+   *
+   * It used to scale the devices on the stage and nothing else, so maiden,
+   * the rail and every panel stayed the size they were. `zoom` on the root
+   * is the browser's own: it is a LAYOUT scale, not a transform, so hit
+   * testing, scrolling and text rendering all follow, and the editor's text
+   * grows with the instrument.
+   *
+   * The screen canvas divides it back out (see `zoom` in CanvasOptions), so
+   * 128x64 still lands on whole device pixels.
+   */
+  const applyZoom = (): void => {
+    const z = settings.zoom;
+    document.documentElement.style.zoom = z === 1 ? "" : String(z);
+  };
+  applyZoom();
+  /** Set once the stage exists; until then nothing can be arranging. */
+  let stage: Stage | null = null;
+  /**
+   * True while the community dialogue is up.
+   *
+   * It takes the keyboard: Escape is K2 on a norns and the digits are the
+   * three keys, so a dialogue that let them through would have the user
+   * playing an instrument they cannot see while typing a search.
+   */
+  let dialogOpen = false;
+  /**
+   * Set once the audio graph exists. Until then there is nothing to mute,
+   * and the toolbar button has to work anyway — it is the first thing
+   * someone reaches for, and a button that silently does nothing until the
+   * engine happens to be up is worse than no button.
+   */
+  let applyMute: (muted: boolean) => void = () => {};
+
+  // --- a restart that is owed (E9-17) -------------------------------------
+  //
+  // sclang compiles its class library ONCE, at boot, from whatever is in
+  // `~/dust/code` at that moment. So a SuperCollider class that arrives
+  // afterwards — installed with a script, or saved in the editor — is on
+  // disk and was never built, and the script that wants it loads, draws,
+  // and has no engine. Nothing else needs a restart: SELECT re-reads the
+  // tree on every scan, so Lua is ready at once.
+  //
+  // THE PAGE REMEMBERS WHAT IT OWES, rather than leaving a sentence behind
+  // in a panel. The names are kept because "restart" with no reason is a
+  // button people learn to ignore.
+  const restartOwed = new Set<string>();
+  /** Answered "later": do not ask again until something new earns it. */
+  let restartDeferred = false;
+  let markRestart: () => void = () => {};
+
+  const restartEarned = (why: string): void => {
+    restartOwed.add(why);
+    restartDeferred = false;
+    markRestart();
+  };
+
+  /**
+   * Restart the way the menu does, and not with a bare reload.
+   *
+   * `_norns.restart` runs the shutdown hooks, clears the script, marks the
+   * shutdown CLEAN, saves the state, and mutes the DAC before asking for
+   * the reset (core/norns.lua:248). Reloading the page instead would skip
+   * all five: the clean-shutdown flag is what `state.resume` reads to
+   * decide whether to come back into the script you were playing, so a
+   * bare reload comes back to an empty SELECT and looks like it lost your
+   * work.
+   */
+  const doRestart = (): void => {
+    log("restart: asked from the rail");
+    host.run("if _norns and _norns.restart then _norns.restart() end");
+  };
+
+  // --- the sound cards (E9-15) -------------------------------------------
+  //
+  // DECLARED HERE, FILLED IN WHEN THE AUDIO GRAPH EXISTS. The gear is built
+  // long before scsynth and crone are up — a panel that waited for them
+  // would be a page with no settings until the engine booted, and the
+  // engine is the thing you most want settings for when it does not boot.
+  // So the panel gets functions, and the functions find out whether there
+  // is anything to talk to yet.
+  let audioContext: AudioContext | null = null;
+  /** Where a microphone goes: crone's input 1, which IS the adc (processor.js:16). */
+  let adcInput: AudioNode | null = null;
+  let liveInput: Awaited<ReturnType<typeof openAudioInput>> | null = null;
+  /** What went wrong last, shown under the pickers rather than only logged. */
+  let audioError = "";
+  /** The live Web MIDI access, once it exists. Null before, and when refused. */
+  let webMidiAccess: Awaited<ReturnType<typeof startWebMidi>> = null;
+
+  /**
+   * Every MIDI port, for the gear to show.
+   *
+   * READ FROM THE LIVE `MIDIAccess`, not from the device manager: the
+   * manager keeps norns DEVICES, which are bidirectional vports paired by
+   * name, and the question the gear is opened for is the other one — is
+   * this interface detected at all, in which direction, and under what
+   * name. A virtual device of our own has no Web MIDI port and is listed
+   * from the manager instead, because it is still something you can play.
+   */
+  const listMidiPorts = (): { name: string; direction: string }[] => {
+    const out: { name: string; direction: string }[] = [];
+    const seen = new Set<string>();
+    const access = webMidiAccess;
+    if (access !== null) {
+      for (const p of access.ports()) {
+        out.push(p);
+        seen.add(p.name);
+      }
+    }
+    for (const d of midiManager.descriptors()) {
+      if (!seen.has(d.name)) out.push({ name: d.name, direction: "here" });
+    }
+    return out;
+  };
+
+  const applyOutputDevice = async (): Promise<void> => {
+    if (!audioContext) return;
+    const r = await setOutputDevice(audioContext, settings.audioOut);
+    audioError = r.ok ? "" : (r.why ?? "the output could not be changed");
+    if (r.ok) log(`audio out: ${settings.audioOut === "" ? "system default" : "chosen device"}`);
+    else log(`audio out: ${audioError}`);
+  };
+
+  const applyInputDevice = async (): Promise<void> => {
+    // ALWAYS STOPPED FIRST, even when turning it on with a new device: two
+    // live capture streams into one input is two microphones summed, and
+    // the second would be the only one anybody noticed.
+    if (liveInput) {
+      liveInput.stop();
+      liveInput = null;
+    }
+    if (!settings.audioInOn || !audioContext || !adcInput) {
+      if (settings.audioInOn && !adcInput) {
+        audioError = "the mixer is not up; there is nowhere for an input to go";
+      }
+      return;
+    }
+    try {
+      liveInput = await openAudioInput({
+        context: audioContext,
+        destination: adcInput,
+        destinationInput: 1,
+        deviceId: settings.audioIn,
+        log: (l) => log(l),
+      });
+      audioError = "";
+    } catch (e) {
+      const err = e as Error;
+      // `OverconstrainedError` is the device being gone, which is the one
+      // worth naming: the picker is offering something that is not there.
+      audioError = `${err.name}: ${err.message}`;
+      log(`audio in: ${audioError}`);
+      settings.setAudio({ inOn: false });
+    }
+  };
+
+  // --- input -------------------------------------------------------------
+  //
+  // Named, because a Steam Deck's gamepad arrives through the frame loop
+  // rather than through an event and has to land in exactly the same place:
+  // one path to norns, whatever moved.
+  function onKeyIn(n: Side, z: 0 | 1): void {
+    const e = cb.key(n, z);
+    if (e) log(`key error: ${e.message}`);
+    dirty = true;
+    $(`#k${n}`).classList.toggle("down", z === 1);
+  }
+  function onEncIn(n: Side, delta: number): void {
+    const e = cb.enc(n, delta);
+    if (e) log(`enc error: ${e.message}`);
+    dirty = true;
+    showTurn(n, delta);
+  }
+
+  const input = createInput({
+    // The user's map, asked for on every keystroke so a rebind takes effect
+    // at once. While the devices are being arranged the map is EMPTY, which
+    // is how the arrows nudge a device instead of turning E2 and E3.
+    keymap: () => (stage?.arranging || dialogOpen ? {} : settings.keymap),
+    // Read per event, so moving the slider changes the feel under the
+    // user's hand rather than at the next page load.
+    sensitivity: () => settings.encoderSensitivity,
+    onKey: (n, z) => onKeyIn(n, z),
+    onEnc: (n, delta) => onEncIn(n, delta),
+  });
+
+  /**
+   * SHOW THAT AN ENCODER TURNED, as a gesture and not as a position.
+   *
+   * A norns encoder carries no mark: it is a smooth cap on a detented
+   * shaft, and you FEEL the turn. So nothing drawn here may look like a
+   * pointer. What is drawn is an arc from twelve o'clock round to where the
+   * turn has reached, which fades as soon as the hand stops.
+   *
+   * It exists because a screen gives nothing back: a turn that a script
+   * ignores looks exactly like a page that stopped listening, and the arc
+   * is the one answer to that. `_norns.enc` carries a RELATIVE movement and
+   * nothing in the protocol says where a knob is, so the angle below is an
+   * accumulator for the eye and is reset the moment the gesture ends.
+   */
+  const turnAngle = new Map<number, number>();
+  const turnTimer = new Map<number, number>();
+  const turnArt = new Map<number, SVGPathElement>();
+
+  /** The arc path, in a 100x100 box, clockwise from the top for a > 0. */
+  const arcPath = (degrees: number): string => {
+    const R = 39;
+    const C = 50;
+    // A full turn cannot be drawn as one arc (start and end coincide), and
+    // beyond one turn there is nothing more to say: the ring is the most
+    // the gesture can read as.
+    const a = Math.max(-359.9, Math.min(359.9, degrees));
+    const rad = ((a - 90) * Math.PI) / 180;
+    const x = C + Math.cos(rad) * R;
+    const y = C + Math.sin(rad) * R;
+    const large = Math.abs(a) > 180 ? 1 : 0;
+    const sweep = a >= 0 ? 1 : 0;
+    return `M ${C} ${C - R} A ${R} ${R} 0 ${large} ${sweep} ${x.toFixed(2)} ${y.toFixed(2)}`;
+  };
+
+  const turnArc = (n: 1 | 2 | 3): SVGPathElement | null => {
+    const existing = turnArt.get(n);
+    if (existing) return existing;
+    const host = document.querySelector<HTMLElement>(`#e${n}`);
+    if (!host) return null;
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("class", "turn");
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    svg.append(path);
+    host.append(svg);
+    turnArt.set(n, path);
+    return path;
+  };
+
+  const showTurn = (n: 1 | 2 | 3, delta: number): void => {
+    const host = document.querySelector<HTMLElement>(`#e${n}`);
+    const path = turnArc(n);
+    if (!host || !path) return;
+    // Six degrees a tick: a detent's worth, and sixty ticks make a turn.
+    const next = (turnAngle.get(n) ?? 0) + delta * 6;
+    turnAngle.set(n, next);
+    path.setAttribute("d", arcPath(next));
+    host.classList.add("turning");
+    const prev = turnTimer.get(n);
+    if (prev !== undefined) clearTimeout(prev);
+    turnTimer.set(
+      n,
+      window.setTimeout(() => {
+        host.classList.remove("turning");
+        turnTimer.delete(n);
+        // The gesture is over, so the next one starts from the top again.
+        // Keeping the angle would make the arc a position, which is the one
+        // thing it must not be.
+        turnAngle.delete(n);
+      }, 320),
+    );
+  };
+
+  input.bindKeyboard(window);
+  input.bindScreen(canvas.canvas);
+  for (const n of [1, 2, 3] as const) {
+    input.bindEncoder($(`#e${n}`), n);
+    input.bindKey($(`#k${n}`), n);
+  }
+
+  // The redraw norns does on its own is driven by metros we have not got yet
+  // (E3), so the page asks for one after every input. Until then the screen
+  // only changes when something is pressed, which is honest rather than
+  // frozen.
+  const redraw = (): void => {
+    host.run(`if _menu.mode then _menu.redraw() end`);
+  };
+  window.addEventListener("keyup", redraw);
+  window.addEventListener("keydown", redraw);
+  window.addEventListener("pointerup", redraw);
+  window.addEventListener("wheel", redraw, { passive: true });
+
+  host.run(`_menu.redraw()`);
+
+  // --- the stat line (E5-24) ---------------------------------------------
+  //
+  // `_norns.stat(disk, temp, cpu, cpu1..4)` is a matron CALLBACK, not one of
+  // the 178 functions, which is why it was still missing after the surface
+  // was complete: matron polls /proc once a second and calls it, and nothing
+  // here was playing that part. `norns.cpu` therefore stayed nil, and
+  // pressing K2 on the main menu — which toggles `_menu.showstats` — raised
+  // `core/menu/home.lua:51: attempt to index a nil value (field 'cpu')`.
+  // Measured, both before and after.
+  //
+  // Only ONE of the seven numbers can be real. A browser has no per-core CPU
+  // load and no temperature sensor, and a zero for either is not "unknown",
+  // it reads as an idle machine running cold -- so the menu overlay in
+  // src/lua/norns-js/menu-here.lua replaces those five with a mark that
+  // cannot be mistaken for a reading. Free disk space it does have:
+  // `navigator.storage.estimate()` is the quota this origin may still use,
+  // which is exactly what "disk" means to someone deciding whether a tape
+  // recording will fit.
+  let freeMb = 0;
+  const pollStat = (): void => {
+    void navigator.storage
+      ?.estimate?.()
+      .then((e) => {
+        const quota = e.quota ?? 0;
+        const usage = e.usage ?? 0;
+        freeMb = Math.max(0, Math.round((quota - usage) / (1024 * 1024)));
+      })
+      .catch(() => {});
+    cb.stat(freeMb, 0, 0, 0, 0, 0, 0);
+  };
+  pollStat();
+  setInterval(pollStat, 1000);
+
+  // --- the battery, when the machine has one -----------------------------
+  //
+  // SYSTEM > SETTINGS > BATTERY WARNING is a real setting with a real
+  // effect — it swaps `screen.update` for the low-battery overlay
+  // (norns.lua:106) — and it could never fire, because nothing here ever
+  // called `_norns.battery`. On a Steam Deck or a laptop that is a loss:
+  // this is a page you run on a handheld, and the warning is exactly the
+  // one piece of hardware news worth having.
+  //
+  // The Battery Status API answers the two things norns asks for. It is
+  // also a known fingerprinting surface, which is why Firefox removed it —
+  // nothing leaves the machine here, the reading is used to call one Lua
+  // function, and a browser that does not offer it simply reports no
+  // battery, which is the honest reason for the setting to sit inert.
+  //
+  // THE SIGN IS THE WHOLE OF `current`. norns reads milliamps; the browser
+  // will not say. `_norns.battery` only ever tests `current < 0`, and
+  // nothing displays the number — the home screen's battery line is behind
+  // `norns.is_norns`, which is false — so a sign is all it can honestly
+  // mean, and all that is needed.
+  type BatteryLike = {
+    level: number;
+    charging: boolean;
+    addEventListener?: (type: string, fn: () => void) => void;
+  };
+  const getBattery = (navigator as unknown as { getBattery?: () => Promise<BatteryLike> })
+    .getBattery;
+  if (typeof getBattery === "function") {
+    void getBattery
+      .call(navigator)
+      .then((b) => {
+        const push = (): void => {
+          cb.battery(Math.round(b.level * 100), b.charging ? 1 : -1);
+        };
+        b.addEventListener?.("levelchange", push);
+        b.addEventListener?.("chargingchange", push);
+        push();
+        log(
+          `battery: ${Math.round(b.level * 100)}%, ${b.charging ? "charging" : "on battery"}`,
+        );
+      })
+      .catch(() => log("battery: no reading — the low-battery warning cannot fire"));
+  } else {
+    log("battery: no reading — the low-battery warning cannot fire");
+  }
+
+  // The boot line goes to the console, not above the device: the page is
+  // meant to look like the hardware, and the hardware does not caption
+  // itself. Open the console to see it.
+  log(`norns · ${installed} scripts · scale ${canvas.scale}× · audio starting…`);
+  // Exposed for the console. A development aid, and the only way to ask the
+  // running system a question without adding a UI for it.
+  // It MERGES. Audio and MIDI arrive on their own schedules and each calls
+  // this when it is ready; a replace would mean whichever finished second
+  // erased the other, and which one that is depends on how fast the machine
+  // is.
+  const expose = (extra: Record<string, unknown> = {}): void => {
+    const w = window as unknown as Record<string, unknown>;
+    const prev = (w["__norns"] as Record<string, unknown> | undefined) ?? {};
+    w["__norns"] = { ...prev, host, vfs, screen, ...extra };
+  };
+  expose();
+
+  // --- the grid (E5-01/02/03/04/05) ------------------------------------
+  //
+  // A device and a view of it. The view is a `GridTransport` like any other,
+  // so a WebSocket grid or a real one over Web Serial attaches beside it
+  // with nothing above having to know.
+  //
+  // It is added BEFORE the script loads, because `startup.lua` builds the
+  // vport table from whatever is present and `Grid.cleanup` walks it on
+  // every script load; a grid that arrives later is a hot-plug, which works
+  // but means the first script to run saw no grid.
+  // ONE id space for every monome device. An arc and a grid are the same
+  // `dev_monome` to matron and are looked up from one table by
+  // `monome_refresh`; two counters would collide as soon as both existed.
+  let nextMonomeId = 0;
+  const mintMonomeId = (): number => nextMonomeId++;
+
+  const gridManager = new GridManager({
+    monomeAdd: (id, serial, name, handle) => {
+      // monome.add, never grid.add: `startup.lua:68-73` is what decides
+      // whether a device is a grid or an arc, by its name. Calling grid.add
+      // from here would bypass that — and is why E5-13 exists.
+      const e = cb.monomeAdd(id, serial, name, handle as never);
+      if (e) log(`monome.add: ${e.message}`);
+      dirty = true;
+    },
+    monomeRemove: (id) => void cb.monomeRemove(id),
+    gridKey: (id, x, y, state) => {
+      const e = cb.gridKey(id, x, y, state);
+      if (e) log(`grid.key: ${e.message}`);
+      dirty = true;
+    },
+    gridTilt: (id, s, x, y, z) => void cb.gridTilt(id, s, x, y, z),
+  }, mintMonomeId);
+  registerGrid(host.registry, gridManager, { log: (l) => log(l) });
+
+  // --- the arc (E5-12 … E5-17) ------------------------------------------
+  //
+  // Added through `monome.add` like the grid, and the NAME is what makes it
+  // an arc: `startup.lua:68-73` routes on the prefix "monome arc" and
+  // nothing else does.
+  const arcManager = new ArcManager(
+    {
+      monomeAdd: (id, serial, name, handle) => {
+        const e = cb.monomeAdd(id, serial, name, handle as never);
+        if (e) log(`monome.add: ${e.message}`);
+        dirty = true;
+      },
+      monomeRemove: (id) => void cb.monomeRemove(id),
+      arcDelta: (id, ring, d) => {
+        const e = cb.arcDelta(id, ring, d);
+        if (e) log(`arc.delta: ${e.message}`);
+        dirty = true;
+      },
+      arcKey: (id, ring, state) => {
+        const e = cb.arcKey(id, ring, state);
+        if (e) log(`arc.key: ${e.message}`);
+        dirty = true;
+      },
+    },
+    mintMonomeId,
+  );
+  registerArc(host.registry, arcManager, { log: (l) => log(l) });
+  // The two functions a grid and an arc share, in one place because a `dev`
+  // handle reaching them may be either.
+  registerMonome(host.registry, [(id) => gridManager.get(id), (id) => arcManager.get(id)]);
+
+  const gridCanvas = $("#grid") as HTMLCanvasElement;
+  const gridBox = $("#gridbox") as HTMLElement;
+  /** 0 means nothing is plugged in, and then there is no device at all. */
+  let gridSize = 128;
+  /**
+   * The grid can be ABSENT, not merely hidden.
+   *
+   * A norns with no grid plugged in has no grid: `grid.devices` is empty and
+   * a script's `grid.connect()` gets a vport with no device behind it. A
+   * page that kept the device and hid the picture would be telling scripts
+   * something different from what it tells the person looking at it.
+   */
+  let gridDevice: ReturnType<GridManager["add"]> | null = null;
+  let gridView: GridView | null = null;
+  /** A second sink, when `?grid-remote=` asked for one. See E5-06. */
+  let remoteGrid: RemoteGridTransport | null = null;
+
+  // Stable identity across a resize: the serial and the name never change,
+  // so the vport binding `system.state` persisted survives. See
+  // src/grid/manager.ts.
+  const attachGrid = (cols: number, rows: number): void => {
+    gridDevice = gridManager.add({
+      serial: "v0001",
+      name: "virtual grid",
+      cols,
+      rows,
+      varibright: true,
+    });
+    gridBox.hidden = false;
+    // `buildGridView` refreshes the stage itself, and in the right order:
+    // the refresh here ran BEFORE the aspect ratio was set, so it measured
+    // the shape the grid was about to stop being.
+    buildGridView();
+  };
+
+  const detachGrid = (): void => {
+    if (gridDevice === null) return;
+    // Unbind while the device is still there, so a finger down across the
+    // unplug reports its lift to a grid Lua still knows about.
+    teardownGridView();
+    gridManager.remove(gridDevice.id);
+    gridDevice = null;
+    gridBox.hidden = true;
+    stage?.refresh();
+  };
+
+  /**
+   * Unbind the current view from the device it is attached to.
+   *
+   * It is called BEFORE the device goes away, never after: `dispose()` lifts
+   * whatever is still held, and a lift delivered to a device matron has
+   * already removed comes back as `grid.key: no entry for grid N` from
+   * `core/grid.lua:230`.
+   *
+   * It is also what makes a rebuild safe at all. The canvas is reused, so a
+   * view that is simply dropped keeps its pointer listeners on it: the old
+   * one and the new one both answer, and each key arrives twice -- once at
+   * the device that no longer exists.
+   */
+  function teardownGridView(): void {
+    if (remoteGrid !== null) gridDevice?.removeTransport(remoteGrid);
+    if (!gridView) return;
+    gridDevice?.removeTransport(gridView);
+    gridView.dispose();
+    gridView = null;
+  }
+
+  function buildGridView(): void {
+    teardownGridView();
+    const d = gridDevice;
+    if (d === null) return;
+    gridCanvas.style.aspectRatio = `${d.cols()} / ${d.rows()}`;
+    // THE SHAPE HAS JUST CHANGED, SO THE LAYOUT HAS TO BE RE-RUN, and here
+    // rather than in each of the three callers: this is the one line that
+    // changes the grid's aspect ratio, and 64, 128, 256 and rotate all come
+    // through it. Without it the box kept the height the old shape gave it
+    // and everything stacked below stayed where it was — a rotated grid was
+    // drawn straight over the keyboard. The read of `aspectRatio` above is
+    // what makes the measurement inside `refresh` the new one.
+    stage?.refresh();
+    gridView = new GridView({
+      canvas: gridCanvas,
+      descriptor: d.descriptor,
+      cols: () => d.cols(),
+      rows: () => d.rows(),
+      onKey: (x, y, state) => d.key(x, y, state),
+    });
+    d.addTransport(gridView);
+    if (remoteGrid !== null) d.addTransport(remoteGrid);
+    // The canvas has just been given a new aspect ratio; its box is only
+    // the right size after layout, so the measurement has to wait a frame.
+    requestAnimationFrame(() => gridView?.layout());
+  }
+  // One is connected by default, as a norns usually has one.
+  attachGrid(16, 8);
+  globalThis.addEventListener("resize", () => gridView?.layout());
+
+  const sizeButtons = [...document.querySelectorAll<HTMLButtonElement>("button[data-size]")];
+  const markSize = (): void => {
+    for (const b of sizeButtons) {
+      b.setAttribute("aria-pressed", String(Number(b.dataset["size"]) === gridSize));
+    }
+  };
+  for (const b of sizeButtons) {
+    b.addEventListener("click", () => {
+      const size = Number(b.dataset["size"]);
+      if (size === gridSize) return;
+      gridSize = size;
+      markSize();
+      if (size === 0) {
+        detachGrid();
+        return;
+      }
+      const cols = size === 64 ? 8 : 16;
+      const rows = size === 256 ? 16 : 8;
+      if (gridDevice === null) {
+        attachGrid(cols, rows);
+        return;
+      }
+      teardownGridView();
+      // A resize is a remove and an add with the SAME serial and name:
+      // `Grid.new` reads the size once, on add, so a device that changed
+      // shape underneath Lua would keep reporting the old one.
+      const next = gridManager.resize(gridDevice.id, cols, rows);
+      if (next) {
+        gridDevice = next;
+        buildGridView();
+      }
+    });
+  }
+  markSize();
+  // A grid somewhere else (E5-06). `?grid-remote=ws://host:port` attaches a
+  // second sink to the SAME device, so the on-screen grid and the remote one
+  // light together — which hardware cannot do.
+  const remoteUrl = new URLSearchParams(location.search).get("grid-remote");
+  if (remoteUrl !== null && remoteUrl !== "") {
+    // The socket is opened ONCE and re-attached on every rebuild, so a
+    // resize or an unplug does not drop the connection. Its callbacks read
+    // the live device rather than closing over one, which is the same
+    // reason: the device is replaced on a resize.
+    remoteGrid = new RemoteGridTransport({
+      url: remoteUrl,
+      descriptor: { serial: "v0001", name: "virtual grid", cols: 16, rows: 8, varibright: true },
+      onKey: (x, y, state) => gridDevice?.key(x, y, state),
+      onTilt: (s, x, y, z) => gridDevice?.tilt(s, x, y, z),
+      log: (l) => log(l),
+    });
+    expose({ gridRemote: remoteGrid });
+    log(`grid remote: connecting to ${remoteUrl}`);
+    buildGridView();
+  }
+
+  $("#gridrot").addEventListener("click", () => {
+    const d = gridDevice;
+    if (d === null) return;
+    d.setRotation((((d.currentRotation + 1) % 4) as 0 | 1 | 2 | 3));
+    buildGridView();
+  });
+
+  // --- one panel at a time (E9-93) ---------------------------------------
+  //
+  // EVERY RAIL PANEL IS REGISTERED HERE, and opening one closes the rest.
+  //
+  // That used to be left to the document click listener further down, which
+  // closes a popover when the click lands outside it — and a click on
+  // another rail button IS outside it, so it worked for the four panels the
+  // listener knew about. It did not know about the gear: the settings panel
+  // is built by `settings-panel.ts` and opened through its own handle, so
+  // settings and the level could be on screen together, overlapping, with
+  // the rail drawn over the settings panel’s close button.
+  //
+  // Registered rather than listed, because the gear is created two hundred
+  // lines after the sound panel and a list written at either end would be
+  // half empty. The array is read when a panel opens, never at declaration.
+  type RailPanel = { readonly isOpen: () => boolean; readonly close: () => void };
+  const railPanels: RailPanel[] = [];
+  /** Close every registered panel but one. Called by each panel as it opens. */
+  const closeOtherPanels = (me: RailPanel | null): void => {
+    for (const p of railPanels) if (p !== me && p.isOpen()) p.close();
+  };
+  /** Register a panel and hand back the token it closes the others with. */
+  const railPanel = (isOpen: () => boolean, close: () => void): RailPanel => {
+    const p: RailPanel = { isOpen, close };
+    railPanels.push(p);
+    return p;
+  };
+
+  // The master mute, which starts OFF: the output is live. A browser will
+  // not start an AudioContext before a user gesture anyway, so a mute as
+  // well was asking permission twice.
+  const soundButton = $("#sound");
+  const soundPanel = $("#soundpanel") as HTMLElement;
+  const volumeInput = $("#volume") as HTMLInputElement;
+  const volumeDb = $("#volumedb");
+  const volumeNote = $("#volumenote");
+  const muteButton = $("#mute");
+  const markSound = (): void => {
+    // The icon carries the state: `aria-pressed` turns it amber and the
+    // CSS draws the slash when it is false. The tooltip says what the
+    // output IS, because pressing it no longer does one thing — it opens
+    // the panel, and the panel holds both the level and the mute.
+    const db = settings.volumeDb;
+    soundButton.setAttribute("aria-pressed", String(!settings.muted));
+    soundButton.dataset["tip"] = settings.muted ? "sound — muted" : `sound — ${db > 0 ? "+" : ""}${db} dB`;
+    volumeInput.value = String(db);
+    volumeDb.textContent = `${db > 0 ? "+" : ""}${db} dB`;
+    muteButton.textContent = settings.muted ? "off" : "on";
+    muteButton.setAttribute("aria-pressed", String(!settings.muted));
+    // The note earns its place only when there is something to say: a
+    // panel that always carries a warning is a panel nobody reads.
+    volumeNote.textContent = settings.muted
+      ? "the output is muted; the level is remembered"
+      : db > 0
+        ? "above 0 dB the output can clip. it is here because some scripts arrive quieter than they should."
+        : "";
+  };
+  /** Push the level at the audio graph, muted or not. */
+  const applyOutput = (): void => applyMute(settings.muted);
+  const showSound = (on: boolean): void => {
+    if (on) closeOtherPanels(soundToken);
+    soundPanel.hidden = !on;
+    soundButton.setAttribute("aria-expanded", String(on));
+  };
+  const soundToken = railPanel(() => soundPanel.hidden === false, () => showSound(false));
+  // NO stopPropagation: the document listener below is what puts a panel
+  // away when the click lands outside it, and it knows to leave alone the
+  // one whose button was just pressed.
+  soundButton.addEventListener("click", () => showSound(soundPanel.hidden === true));
+  volumeInput.addEventListener("input", () => {
+    settings.setVolume(Number(volumeInput.value));
+    applyOutput();
+    markSound();
+  });
+  // Said once per gesture rather than once per pixel of the drag: `input`
+  // fires for every step and a log line each would bury everything else.
+  volumeInput.addEventListener("change", () => log(`audio: level ${settings.volumeDb} dB`));
+  $("#volume0").addEventListener("click", () => {
+    settings.setVolume(0);
+    applyOutput();
+    markSound();
+    log("audio: level 0 dB");
+  });
+  // --- zoom (E9-61) ------------------------------------------------------
+  //
+  // The panel under the magnifier, and the two gestures everybody already
+  // knows. `settings.setZoom` clamps, so every path here can be naive.
+  const zoomButton = $("#zoom");
+  const zoomPanel = $("#zoompanel") as HTMLElement;
+  const zoomRange = $("#zoomrange") as HTMLInputElement;
+  const zoomVal = $("#zoomval");
+  const markZoom = (): void => {
+    const pct = Math.round(settings.zoom * 100);
+    zoomRange.value = String(pct);
+    zoomVal.textContent = `${pct}%`;
+    zoomButton.dataset["tip"] = `zoom — ${pct}%`;
+  };
+  const showZoom = (on: boolean): void => {
+    if (on) closeOtherPanels(zoomToken);
+    zoomPanel.hidden = !on;
+    zoomButton.setAttribute("aria-expanded", String(on));
+  };
+  const zoomToken = railPanel(() => zoomPanel.hidden === false, () => showZoom(false));
+  zoomButton.addEventListener("click", () => showZoom(zoomPanel.hidden === true));
+  zoomRange.addEventListener("input", () => settings.setZoom(Number(zoomRange.value) / 100));
+  zoomRange.addEventListener("change", () => log(`zoom: ${Math.round(settings.zoom * 100)}%`));
+  $("#zoomreset").addEventListener("click", () => {
+    settings.setZoom(1);
+    log("zoom: 100%");
+  });
+  markZoom();
+
+  /** One step of zoom, rounded to whole percents so it cannot drift. */
+  const nudgeZoom = (factor: number): void => {
+    settings.setZoom(Math.round(settings.zoom * factor * 100) / 100);
+  };
+
+  // CTRL AND THE WHEEL. `passive: false`, because the default action is the
+  // browser's own zoom and the whole point is to do ours instead — a
+  // passive listener cannot prevent it. On a trackpad a pinch arrives as
+  // exactly this event with ctrlKey set, which is why the gesture below is
+  // only needed for touch.
+  document.addEventListener(
+    "wheel",
+    (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      e.preventDefault();
+      // deltaY is lines on some mice and pixels on others; only the sign is
+      // portable, so a step is a step.
+      nudgeZoom(e.deltaY < 0 ? 1.1 : 1 / 1.1);
+    },
+    { passive: false },
+  );
+
+  // A PINCH, on a touch screen. Two pointers down, and the zoom follows the
+  // ratio of the distance between them to the distance they started at —
+  // which is what a pinch is, and it means letting go and starting again
+  // continues from where it stopped rather than snapping.
+  const touches = new Map<number, { x: number; y: number }>();
+  let pinch: { span: number; zoom: number } | null = null;
+  const span = (): number => {
+    const [a, b] = [...touches.values()];
+    if (!a || !b) return 0;
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  };
+  document.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch") return;
+    touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    pinch = touches.size === 2 ? { span: span(), zoom: settings.zoom } : null;
+  });
+  document.addEventListener(
+    "pointermove",
+    (e) => {
+      if (e.pointerType !== "touch" || !touches.has(e.pointerId)) return;
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (!pinch || touches.size !== 2) return;
+      const now = span();
+      if (pinch.span < 24 || now < 24) return; // two fingers, not one thumb
+      e.preventDefault();
+      settings.setZoom(Math.round(((pinch.zoom * now) / pinch.span) * 100) / 100);
+    },
+    { passive: false },
+  );
+  const liftTouch = (e: PointerEvent): void => {
+    if (e.pointerType !== "touch") return;
+    touches.delete(e.pointerId);
+    if (touches.size < 2) pinch = null;
+  };
+  document.addEventListener("pointerup", liftTouch);
+  document.addEventListener("pointercancel", liftTouch);
+
+  muteButton.addEventListener("click", () => {
+    settings.setMuted(!settings.muted);
+    applyOutput();
+    markSound();
+    log(`audio: ${settings.muted ? "muted" : "unmuted"}`);
+  });
+  markSound();
+  if (settings.muted) log("audio: muted — the speaker in the rail has the level and the mute");
+  else log("audio: output is live. The speaker in the rail has the level and the mute.");
+
+  // Copy the console. The one time anyone wants this is when something has
+  // gone wrong and the whole log has to be pasted somewhere else, so it has
+  // a FALLBACK: `navigator.clipboard` needs a secure context and a focused
+  // document, and a page that is misbehaving is exactly where that fails.
+  const copyButton = $("#logcopy");
+  copyButton.addEventListener("click", () => {
+    const text = logEl.textContent ?? "";
+    const settle = (ok: boolean): void => {
+      copyButton.textContent = ok ? "copied" : "select all";
+      copyButton.classList.toggle("done", ok);
+      copyButton.classList.toggle("failed", !ok);
+      setTimeout(() => {
+        copyButton.textContent = "copy";
+        copyButton.classList.remove("done", "failed");
+      }, 1400);
+    };
+    const theOldWay = (): boolean => {
+      // Deprecated, and the only thing that works without the permission
+      // the modern API wants. If it fails too, the selection is left on
+      // the log so Ctrl+C still does it.
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.append(area);
+      area.select();
+      let ok = false;
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        ok = false;
+      }
+      area.remove();
+      if (!ok) globalThis.getSelection?.()?.selectAllChildren(logEl);
+      return ok;
+    };
+    void navigator.clipboard
+      ?.writeText(text)
+      .then(() => settle(true))
+      .catch(() => settle(theOldWay()));
+    if (!navigator.clipboard) settle(theOldWay());
+  });
+
+  // The console is a development aid, not part of the instrument, so it is
+  // folded away by default and the toolbar button is what reveals it.
+  // The console is a DEVICE now, so showing it is showing its box — which
+  // is also what the stage reads to decide whether to lay it out, and what
+  // `arrange devices` reads to decide whether it can be moved.
+  const consoleBox = $("#consolebox") as HTMLElement;
+  const consoleButton = $("#consoletoggle");
+  consoleButton.addEventListener("click", () => {
+    const open = consoleBox.hidden;
+    consoleBox.hidden = !open;
+    stage?.refresh();
+    refit();
+    consoleButton.setAttribute("aria-pressed", String(open));
+    // The log has been accumulating while hidden; show its end, not its
+    // beginning, which is what a console that was open all along would show.
+    if (open) logEl.scrollTop = logEl.scrollHeight;
+  });
+
+  // --- the restart button (E9-17) ----------------------------------------
+  //
+  // In a tab you reload the tab. In the application there is no address bar
+  // and no reload, and SYSTEM > RESTART is four presses into a menu — which
+  // is a long way to go for the thing a freshly installed engine needs.
+  //
+  // IT CONFIRMS, even though saving a trip through the menus is the point:
+  // this is the one control in the rail that stops whatever is playing, and
+  // the menu asks too. One click and one confirm is still three fewer.
+  const restartButton = $("#restart");
+  const restartPanel = $("#restartpanel") as HTMLElement;
+  const restartWhy = $("#restartwhy");
+  const showRestart = (on: boolean): void => {
+    if (on) closeOtherPanels(restartToken);
+    restartPanel.hidden = !on;
+    restartButton.setAttribute("aria-expanded", String(on));
+    if (!on) return;
+    const owed = [...restartOwed];
+    restartWhy.textContent =
+      owed.length === 0
+        ? "restart? what you have written is kept. whatever is playing stops."
+        : `${owed.join(", ")} ${owed.length === 1 ? "needs" : "need"} it. what you have written is kept.`;
+  };
+  const restartToken = railPanel(() => restartPanel.hidden === false, () => showRestart(false));
+  markRestart = (): void => {
+    // The icon carries it: amber, like every other rail button that is ON,
+    // and the tooltip says what is waiting rather than only "restart".
+    const owed = restartOwed.size > 0;
+    restartButton.setAttribute("aria-pressed", String(owed));
+    restartButton.dataset["tip"] = owed ? `restart — ${[...restartOwed].join(", ")}` : "restart";
+  };
+  markRestart();
+  restartButton.addEventListener("click", () => showRestart(restartPanel.hidden === true));
+  $("#restartgo").addEventListener("click", () => {
+    showRestart(false);
+    doRestart();
+  });
+  $("#restartno").addEventListener("click", () => showRestart(false));
+
+  // The arc is ATTACHED, not present: a norns with nothing plugged in has no
+  // arc, and four empty circles on screen would say otherwise. The button is
+  // the cable.
+  const arcBox = $("#arcbox") as HTMLElement;
+  const arcCanvas = $("#arc") as HTMLCanvasElement;
+  const arcButton = $("#arcattach");
+  let arcDevice: ReturnType<ArcManager["add"]> | null = null;
+  let arcView: ArcView | null = null;
+  arcButton.addEventListener("click", () => {
+    if (arcDevice === null) {
+      arcDevice = arcManager.add({ serial: "v0001", name: "monome arc 4" });
+      arcBox.hidden = false;
+      stage?.refresh();
+      const d = arcDevice;
+      arcView = new ArcView({
+        canvas: arcCanvas,
+        descriptor: d.descriptor,
+        onDelta: (ring, delta) => d.delta(ring, delta),
+        onKey: (ring, state) => d.key(ring, state),
+      });
+      d.addTransport(arcView);
+      requestAnimationFrame(() => arcView?.layout());
+      arcButton.setAttribute("aria-pressed", "true");
+      log("arc: virtual arc attached");
+    } else {
+      arcView?.dispose();
+      arcDevice.removeTransport(arcView!);
+      arcManager.remove(arcDevice.id);
+      arcDevice = null;
+      arcView = null;
+      arcBox.hidden = true;
+      stage?.refresh();
+      arcButton.setAttribute("aria-pressed", "false");
+      log("arc: virtual arc detached");
+    }
+    dirty = true;
+  });
+  globalThis.addEventListener("resize", () => arcView?.layout());
+
+  // --- the virtual MIDI keyboard -----------------------------------------
+  //
+  // A device you plug in, like the arc and the loopback, for the same
+  // reason: one that is simply there is a surprise rather than a choice.
+  // It is a MIDI INPUT and nothing else, so a script sees exactly what a
+  // USB keyboard would — `Midi.add` on attach, note on and note off, and
+  // `Midi.remove` when it goes.
+  const keysBox = $("#keysbox") as HTMLElement;
+  const keysButton = $("#keysattach");
+  let keysPort: KeyboardMidiPort | null = null;
+  let keysId = -1;
+  let keysView: KeyboardView | null = null;
+  keysButton.addEventListener("click", () => {
+    if (keysPort === null) {
+      keysPort = createKeyboardMidiPort();
+      const d = midiManager.add(keysPort);
+      keysPort.attach(d);
+      keysId = d.id;
+      keysBox.hidden = false;
+      const port = keysPort;
+      keysView = createKeyboardView({
+        host: $("#keys") as HTMLElement,
+        octave: settings.midiOctave,
+        velocity: settings.midiVelocity,
+        onNoteOn: (n, v) => port.noteOn(n, v),
+        onNoteOff: (n) => port.noteOff(n),
+      });
+      stage?.refresh();
+      refit();
+      keysButton.setAttribute("aria-pressed", "true");
+      log(`midi keyboard: attached, two octaves from C${settings.midiOctave}`);
+    } else {
+      // Release before removing: a note left on when its port disappears is
+      // a voice a script can never turn off.
+      keysView?.dispose();
+      keysPort.allOff();
+      midiManager.remove(keysId);
+      keysPort = null;
+      keysId = -1;
+      keysView = null;
+      keysBox.hidden = true;
+      stage?.refresh();
+      refit();
+      keysButton.setAttribute("aria-pressed", "false");
+      log("midi keyboard: detached");
+    }
+    dirty = true;
+  });
+
+  // --- `faders` and `knobs` ----------------------------------------------
+  //
+  // Two MIDI controllers of our own, inspired by the two the norns world
+  // already speaks to: a sixteen-fader bank on the 16n's factory mapping,
+  // and four banks of sixteen encoders on the Midi Fighter Twister's. A
+  // page with no MIDI hardware had no way to reach any of that.
+  //
+  // THE BUTTON AND THE WIRE SAY DIFFERENT THINGS, on purpose. The buttons
+  // are `faders` and `knobs`, which is what these are to somebody looking
+  // at them. On the wire they answer "16n" and "Midi Fighter Twister",
+  // because `flora.lua:110` and `cheat_codes_2.lua:2093` compare that
+  // string exactly and set themselves up on finding it — a controller that
+  // has to be assigned by hand before anything happens is a controller most
+  // people never get working.
+  //
+  // Same shape as the keyboard and the arc: `Midi.add` on attach and
+  // `Midi.remove` on detach, so a running script sees a hot-plug rather
+  // than a device that was always there. Off and hidden until asked for.
+  const fadersBox = $("#fadersbox") as HTMLElement;
+  const fadersButton = $("#fadersattach");
+  let fadersPort: FadersMidiPort | null = null;
+  let fadersId = -1;
+  let fadersView: FadersView | null = null;
+  fadersButton.addEventListener("click", () => {
+    if (fadersPort === null) {
+      const port = createFadersMidiPort();
+      const d = midiManager.add(port);
+      port.attach(d);
+      fadersPort = port;
+      fadersId = d.id;
+      fadersBox.hidden = false;
+      fadersView = createFadersView({
+        host: $("#faders") as HTMLElement,
+        values: port.values(),
+        onMove: (fader, value) => port.move(fader, value),
+      });
+      stage?.refresh();
+      refit();
+      fadersButton.setAttribute("aria-pressed", "true");
+      log(`faders: attached as "${FADERS_MIDI_NAME}" — CC 32-47 on channel 1`);
+    } else {
+      fadersView?.dispose();
+      midiManager.remove(fadersId);
+      fadersPort = null;
+      fadersId = -1;
+      fadersView = null;
+      fadersBox.hidden = true;
+      stage?.refresh();
+      refit();
+      fadersButton.setAttribute("aria-pressed", "false");
+      log("faders: detached");
+    }
+    dirty = true;
+  });
+
+  const knobsBox = $("#knobsbox") as HTMLElement;
+  const knobsButton = $("#knobsattach");
+  let knobsPort: KnobsMidiPort | null = null;
+  let knobsId = -1;
+  let knobsView: KnobsView | null = null;
+  knobsButton.addEventListener("click", () => {
+    if (knobsPort === null) {
+      const port = createKnobsMidiPort();
+      const d = midiManager.add(port);
+      port.attach(d);
+      knobsPort = port;
+      knobsId = d.id;
+      knobsBox.hidden = false;
+      const redraw = (): void => {
+        knobsView?.refresh(port.values(), port.colours(), port.bank());
+        dirty = true;
+      };
+      knobsView = createKnobsView({
+        host: $("#knobs") as HTMLElement,
+        values: port.values(),
+        bank: port.bank(),
+        onTurn: (knob, value) => port.turn(knob, value),
+        onPress: (knob, down) => port.press(knob, down),
+        onBank: (bank) => {
+          port.setBank(bank);
+          redraw();
+        },
+      });
+      // The host painting the face, which is half of what this device is
+      // for: a script lights the rings as its own state moves.
+      port.onPaint(redraw);
+      stage?.refresh();
+      refit();
+      knobsButton.setAttribute("aria-pressed", "true");
+      log(
+        `knobs: attached as "${KNOBS_MIDI_NAME}" — 4 banks, CC 0-63 on ` +
+          `channel 1, switches on channel 2`,
+      );
+    } else {
+      knobsView?.dispose();
+      midiManager.remove(knobsId);
+      knobsPort = null;
+      knobsId = -1;
+      knobsView = null;
+      knobsBox.hidden = true;
+      stage?.refresh();
+      refit();
+      knobsButton.setAttribute("aria-pressed", "false");
+      log("knobs: detached");
+    }
+    dirty = true;
+  });
+
+  // --- the exerciser (E5-23) ---------------------------------------------
+  //
+  // Exposed rather than wired to a button: it takes minutes, it drives the
+  // page from underneath, and it is a measuring instrument, not a feature.
+  // `__norns.exercise()` from the console, or `?exercise=1` to run it on
+  // load and leave the report in `__norns.lastExercise`.
+  const runExercise = async (o: ExerciseOptions = {}): Promise<unknown> => {
+    const report = await exercise(
+      {
+        host,
+        vfs,
+        screen,
+        peak: () => (window as unknown as { __norns: { peak?: () => number } }).__norns.peak?.() ?? null,
+        grid: () => (gridDevice ? Uint8Array.from(gridDevice.front()) : null),
+        gridKey: (x, y, z) => gridDevice?.key(x - 1, y - 1, z),
+        key: (n, z) => void cb.key(n, z),
+        enc: (n, d) => void cb.enc(n, d),
+        // Through the SAME port a person plays, not through a back door:
+        // a script that filters by channel or by device id must be asked
+        // the question the hardware would ask. Absent when the keyboard is
+        // not attached, and the sweep then reports no note rather than a
+        // silent one.
+        note: keysPort ? (n, v) => keysPort?.noteOn(n, v) : undefined,
+        noteOff: keysPort ? (n) => keysPort?.noteOff(n) : undefined,
+        log: (l) => log(l),
+      },
+      { onResult: () => void (dirty = true), ...o },
+    );
+    expose({ lastExercise: report });
+    log(`exercise: ${report.ok} of ${report.total} ok`);
+    return report;
+  };
+  expose({ exercise: runExercise, scripts: () => scriptsIn(vfs) });
+
+  // --- which machine this is ----------------------------------------------
+  //
+  // Detected once: the signals are a user agent, a screen and a gamepad
+  // list, and none of them change under a running page. The PREFERENCE can
+  // change, so the stage is handed a function rather than a value.
+  let detected = detect(readSignals());
+  const kindNow = (): MachineKind => effectiveKind(settings.machine, detected);
+  log(
+    `machine: ${kindNow()} — ${settings.machine === "auto" ? detected.why : "set in the gear"}`,
+  );
+
+  /** Turn the gamepad on or off to match the profile. */
+  const applyMachine = (): void => {
+    const kind = kindNow();
+    document.body.dataset["machine"] = kind;
+    if (kind === "steamdeck" && pad === null) {
+      pad = createPadCore({ sensitivity: () => settings.encoderSensitivity });
+      padAt = 0;
+      log("machine: reading a gamepad — A/B/X are K3/K2/K1, sticks are E2 and E3, d-pad is E1");
+    } else if (kind !== "steamdeck" && pad !== null) {
+      // One last frame with no pad, so anything held is released.
+      for (const a of pad.frame(null, 16)) if (a.a === "key") onKeyIn(a.n, a.z);
+      pad = null;
+    }
+    stage?.refresh();
+    refit();
+  };
+
+  // A PAD ARRIVES LATE, ALWAYS. Chrome does not expose a gamepad until one
+  // of its buttons has been pressed -- it is a fingerprinting surface, so
+  // the list is empty until the user proves there is a pad. That means the
+  // strongest Steam Deck signal CANNOT exist at boot, and detecting once
+  // would throw it away. So detection runs again when a pad appears, and
+  // only a change does anything.
+  globalThis.addEventListener("gamepadconnected", () => {
+    const again = detect(readSignals());
+    if (again.kind === detected.kind && again.confident === detected.confident) return;
+    detected = again;
+    log(`machine: ${kindNow()} — ${settings.machine === "auto" ? again.why : "set in the gear"}`);
+    if (settings.machine === "auto") applyMachine();
+  });
+
+  // --- the gear (E6-10) --------------------------------------------------
+  //
+  // Last, because the stage has to be able to measure the devices and the
+  // panel has to be able to tell the stage to re-place them.
+  stage = createStage({
+    stage: $("#stage"),
+    devices: [
+      { id: "norns", el: $("#nornsbox") },
+      { id: "grid", el: gridBox },
+      { id: "arc", el: arcBox },
+      { id: "keys", el: keysBox },
+      { id: "faders", el: fadersBox },
+      { id: "knobs", el: knobsBox },
+      { id: "console", el: consoleBox },
+    ],
+    kind: kindNow,
+    settings,
+    onResized: (id: DeviceId) => {
+      // Each device measures itself from its box. The two canvases are
+      // told; the screen is REFITTED HERE TOO, not only by its own
+      // ResizeObserver.
+      //
+      // The observer alone was not enough and the failure was quiet: the
+      // screen came up at scale 1 instead of 2 and stayed there until the
+      // window was resized by hand — measured at phone width, where the
+      // well is 299 device pixels and the canvas was 128 of them. Half the
+      // resolution, no error, and on a small screen the difference between
+      // legible and not. The stage is what decides how wide a device is, so
+      // the stage is what has to say when it changed.
+      if (id === "grid") gridView?.layout();
+      if (id === "arc") arcView?.layout();
+      if (id === "norns") refit();
+      dirty = true;
+    },
+  });
+  /**
+   * Hand the user a file.
+   *
+   * An object URL and a click on an anchor the user never sees. It is the
+   * only way a page can produce a file, and it only works because a real
+   * click is what started it — which is also why export is a button and not
+   * something the page decides to do.
+   */
+  const download = (bytes: Uint8Array, name: string): void => {
+    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/zip" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    // Not immediately: the navigation to the blob has to start first.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  };
+
+  // The profile decides default widths and whether a gamepad is read, so it
+  // is applied once the stage exists and again whenever the gear changes it.
+  applyMachine();
+  settings.subscribe((_st, what) => {
+    if (what === "machine") applyMachine();
+    // Zoom changes every device's size, so the canvases have to measure
+    // themselves again -- the same work a window resize causes.
+    if (what === "zoom") {
+      applyZoom();
+      stage?.refresh();
+      refit();
+      gridView?.layout();
+      arcView?.layout();
+      markZoom();
+    }
+    if (what === "midi") {
+      keysView?.setOctave(settings.midiOctave);
+      keysView?.setVelocity(settings.midiVelocity);
+    }
+  });
+
+  // THE GEAR JOINS THE RAIL REGISTRY (E9-93), and it is the one that needed
+  // joining: the four popovers already closed each other. It is not a
+  // popover itself — it survives a click on a device, because arranging is
+  // done out there with the panel open — so it is told when it opens
+  // instead, and closes the rest from inside.
+  const gearPanel = $("#settings") as HTMLElement;
+  const gearToken = railPanel(() => gearPanel.hidden === false, () => gear.close());
+  const gear = createSettingsPanel({
+    button: $("#gear"),
+    panel: gearPanel,
+    onOpen: () => closeOtherPanels(gearToken),
+    settings,
+    stage,
+    machine: { detected: () => detected, effective: kindNow },
+    audio: {
+      list: listAudioDevices,
+      canChooseOutput,
+      applyOutput: applyOutputDevice,
+      applyInput: applyInputDevice,
+      grant: async () => {
+        const r = await grantDeviceAccess();
+        audioError = r.ok ? "" : (r.why ?? "the microphone was refused");
+        log(r.ok ? "audio: the sound cards can be named now" : `audio: ${audioError}`);
+      },
+      watch: watchDevices,
+      lastError: () => audioError,
+    },
+    // Through closures, not direct references: the panel is built long
+    // before these exist, and a direct one is a temporal dead zone waiting
+    // to happen — which is exactly what the port list did (E9-16).
+    loopback: { on: () => virtualMidi !== null, toggle: () => toggleLoopback() },
+    midiPorts: listMidiPorts,
+    files: {
+      export: async (everything) => {
+        const r = await exportTree(vfs, { everything });
+        if (r.files === 0) {
+          log("export: nothing has been changed yet — there is nothing to save");
+          return;
+        }
+        const stamp = new Date().toISOString().slice(0, 10);
+        download(r.bytes, `norns-js-dust-${stamp}.zip`);
+        log(
+          `export: ${r.files} files, ${(r.bytes.length / 1024).toFixed(0)} KB` +
+            (r.skipped.length
+              ? ` (${r.skipped.length} left out: downloaded files the build supplies again)`
+              : ""),
+        );
+      },
+      // A backup goes back at the paths it has. This is the inverse of
+      // export and nothing else: it does not look for a script inside.
+      restore: async (bytes, name) => {
+        try {
+          const r = await importTree(vfs, bytes);
+          log(`restore: ${name} — ${r.written} files written`);
+          for (const x of r.refused) log(`restore: refused ${x.path} (${x.why})`);
+          // SELECT reads the tree when it is opened, so scripts appear
+          // without a reload; `state.resume` does not, so a tree that
+          // replaces the running script needs one. Said, not done.
+          if (r.written > 0) log("restore: reload the page to resume into a restored script");
+        } catch (err) {
+          log(`restore failed: ${String((err as Error)?.message ?? err)}`);
+        }
+      },
+      // One script, rehomed under code/<name>. The wrapper folder a zip
+      // from GitHub carries is stripped, which is the whole difference
+      // from restore — and the reason the old advice to "use import"
+      // produced a script outside code/ that SELECT never found.
+      addScript: async (bytes, name) => {
+        try {
+          const r = await installScript(vfs, bytes);
+          log(`add: ${name} — ${r.name}, ${r.files} files, in code/${r.name}`);
+          for (const x of r.refused) log(`add: refused ${x.path} (${x.why})`);
+        } catch (err) {
+          log(`add failed: ${String((err as Error)?.message ?? err)}`);
+        }
+      },
+      addScriptFromUrl: async (url) => {
+        try {
+          const archive = await fetchArchive(url);
+          const r = await installScript(vfs, archive);
+          log(`add: ${r.name} — ${r.files} files, in code/${r.name}`);
+          for (const x of r.refused) log(`add: refused ${x.path} (${x.why})`);
+        } catch (err) {
+          log(`add failed: ${String((err as Error)?.message ?? err)}`);
+        }
+      },
+    },
+  });
+  // --- the community catalogue (E6-11) -----------------------------------
+  //
+  // Read live from norns.community's own data file. Installing reads the
+  // repository's files one at a time through a CDN, because GitHub will not
+  // let a page download an archive — measured, see src/community/install.ts.
+  // The devices have just been placed for the first time, and the screen's
+  // well now has its real size. See `onResized` for why the observer alone
+  // does not catch this.
+  refit();
+
+  // --- maiden, phase 1 ---------------------------------------------------
+  //
+  // The editor the page has had no way to be: a tree over the dust store,
+  // Ace with the Lua mode, and save. See docs/08-MAIDEN.md for what it is
+  // modelled on and what is still to come.
+  //
+  // `onToggle` is not decoration. The browser keyboard IS the norns panel
+  // here — `q` and `w` turn encoder 1 — so typing Lua with the keymap live
+  // would drive the instrument from the editor. The same switch the gear
+  // and the community panel use.
+  // sclang, once the audio graph has started. The repl reads it through a
+  // closure for the same reason the stage reads the machine through one:
+  // it exists later than the thing that wants it.
+  let scEngine: Awaited<ReturnType<typeof createEngineHost>> | null = null;
+  const maidenButton = $("#maiden");
+  const maiden = createMaidenPanel({
+    host: $("#maidenpanel") as HTMLElement,
+    // The restart the session has earned, asked about on the way OUT of
+    // the panel — which is the moment it matters, because the next thing
+    // anybody does after closing it is go and play the script.
+    restart: {
+      pending: () => (restartDeferred ? [] : [...restartOwed]),
+      earned: restartEarned,
+      now: doRestart,
+      later: () => {
+        restartDeferred = true;
+        log("restart: deferred — the arrow in the rail still has it");
+      },
+    },
+    store: createVfsStore(vfs),
+    runner: createRunner(host),
+    // The two consoles. `host.run` IS matron's standard input because the
+    // page is matron, and `engine.runCode` is sclang's — the websockets
+    // `ws-wrapper` puts on :5555 and :5556 exist to cross a machine
+    // boundary that is not here. sclang is absent until the audio graph
+    // starts, and a console that says so is better than a tab that is not
+    // there yet.
+    repl: [
+      { name: "matron", lines: () => host.output, send: (code) => host.run(code) },
+      {
+        name: "sc",
+        lines: () => scEngine?.scLog ?? [],
+        send: (code) => {
+          if (scEngine === null) return "sclang is not up yet";
+          scEngine.runCode(code);
+          return null;
+        },
+      },
+    ],
+    // The project activity, over the machinery the community panel already
+    // had: there is no catalogue of our own and there will not be one.
+    project: {
+      // E9-69 — opening this IS "refresh the library in maiden", so it
+      // leaves what a refresh leaves: `~/dust/data/catalogs/base.json`
+      // and `community.json`, which is where `folio` reads the library
+      // from. The community catalogue is fetched once and used twice.
+      catalog: () => fetchAndStoreCatalogs(vfs, { log }),
+      // E9-56 — a FOLDER is not a script. This listed every directory
+      // under `~/dust/code`, and an empty one is a directory: 281 of the
+      // 329 here were the leftovers of removed scripts, every one of them
+      // offered as installed with an `update` and a `remove` button, and
+      // nothing in SELECT to choose. Asked about by a user who could see
+      // `terrarium` in the installed list and not in the menu.
+      //
+      // The bar is one file, not a `<name>.lua`: several of these ARE
+      // installed and are libraries rather than scripts — `nb`,
+      // `midigrid`, `passthrough` — and saying those are not installed
+      // would be the same lie the other way round.
+      installed: () =>
+        vfs
+          .list("/home/we/dust/code")
+          .filter((e) => e.isDir && vfs.walk(`/home/we/dust/code/${e.name}`).length > 0)
+          .map((e) => e.name),
+      install: async (entry, signal, onProgress) => {
+        const repo = parseRepoUrl(entry.url);
+        if (!repo) throw new Error("that entry does not point at a GitHub repository");
+        return installFromRepo(vfs, repo, {
+          name: entry.name.toLowerCase(),
+          signal: withStallTimeout(signal),
+          onProgress: (p) => onProgress(p.done, p.total),
+          // E9-72 — read at the moment of the install, not captured at
+          // boot: somebody who raises the limit because a script was
+          // refused expects the next attempt to use the new number.
+          maxFiles: settings.installMaxFiles,
+        });
+      },
+      installUrl: async (url, signal, onProgress) => {
+        const repo = parseRepoUrl(url);
+        if (!repo) throw new Error("that is not a GitHub repository url");
+        return installFromRepo(vfs, repo, {
+          signal: withStallTimeout(signal),
+          onProgress: (p) => onProgress(p.done, p.total),
+          maxFiles: settings.installMaxFiles,
+        });
+      },
+      onEngines: (names) => {
+        for (const n of names) restartEarned(n);
+      },
+      // E9-32. The panel owns the sentence; the filesystem lives here.
+      needs: (name, entries) => needsOf(vfs, name, entries),
+      remove: (name) => {
+        const dir = `/home/we/dust/code/${name}`;
+        for (const p of vfs.walk(dir)) vfs.remove(p);
+        vfs.remove(dir);
+      },
+      log: (l) => log(l),
+    },
+    prefs: settings.editor,
+    onPrefs: (p) => settings.setEditor(p),
+    log: (l) => log(l),
+    onToggle: (on) => {
+      dialogOpen = on;
+      // The editor covers the page, rail and all, so a panel left open
+      // under it would come back when the editor went away (E9-93).
+      if (on) closeOtherPanels(null);
+      maidenButton.setAttribute("aria-expanded", String(on));
+    },
+  });
+  maidenButton.addEventListener("click", () => maiden.toggle());
+
+  // --- the devices panel --------------------------------------------------
+  //
+  // The bottom row's buttons, moved rather than rewritten: they kept their
+  // ids and their `data-size`, so everything that drives them is untouched
+  // and this only decides when they are on screen.
+  const devicesButton = $("#devices");
+  const devicesPanel = $("#devicespanel") as HTMLElement;
+  const showDevices = (on: boolean): void => {
+    if (on) closeOtherPanels(devicesToken);
+    devicesPanel.hidden = !on;
+    devicesButton.setAttribute("aria-expanded", String(on));
+  };
+  const devicesToken = railPanel(() => devicesPanel.hidden === false, () => showDevices(false));
+  devicesButton.addEventListener("click", () => showDevices(devicesPanel.hidden === true));
+  // A click anywhere else puts it away, which is what a popover does — and
+  // not a click INSIDE it, or choosing a grid size would close it before
+  // you could rotate the grid, and dragging the level would close the panel
+  // on the way past its edge.
+  //
+  // ONE PAIR OF LISTENERS FOR ALL FOUR. This is DISMISSAL and not
+  // exclusion: what keeps one panel open at a time is `railPanels`
+  // above, which each panel consults as it opens. The gear is not in
+  // this list on purpose — it has to survive a click on a device, which
+  // is what arranging is — and Escape is left to it too, because while it
+  // is capturing a key binding Escape means cancel.
+  const popovers: Array<[HTMLElement, (on: boolean) => void, HTMLElement]> = [
+    [devicesPanel, showDevices, devicesButton],
+    [soundPanel, showSound, soundButton],
+    [zoomPanel, showZoom, zoomButton],
+    [restartPanel, showRestart, restartButton],
+  ];
+  document.addEventListener("click", (e) => {
+    for (const [panel, show, button] of popovers) {
+      if (panel.hidden) continue;
+      const t = e.target as Node;
+      if (panel.contains(t) || button.contains(t)) continue;
+      show(false);
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    for (const [panel, show] of popovers) if (!panel.hidden) show(false);
+  });
+
+  if (!settings.persisted) {
+    log("settings: this browser is not keeping them — changes last for this page only");
+  }
+
+  // --- MIDI (E5-07) ------------------------------------------------------
+  //
+  // `startWebMidi` is NOT awaited. `requestMIDIAccess` can put a permission
+  // prompt on the screen, and a page that waits for an answer before drawing
+  // its first frame is a page that looks broken until you notice the prompt.
+  // A device that arrives later is a hot-plug, which is a path that has to
+  // work anyway.
+  // --- the clock source (E3-09) -----------------------------------------
+  //
+  // The MIDI clock source is built HERE, before the audio block, because the
+  // bytes arrive from MIDI and MIDI starts first. `liveClock` is filled in
+  // when the worklet clock exists; until then a tick is measured and
+  // discarded, which is what a norns does before its audio thread is up.
+  let clockSource: ClockSource = "internal";
+  let liveClock: Clock | null = null;
+  const midiClock = new MidiClockSource({
+    onReference: (ref) => {
+      if (clockSource !== "midi") return;
+      liveClock?.setSourceReference(ref.beat, ref.beatDuration);
+    },
+    onStart: () => {
+      if (clockSource !== "midi") return;
+      // `clock_start_from_source` resets the sync events and posts
+      // EVENT_CLOCK_START. `transportStart` does both; its beat reset is a
+      // no-op here because the first tick after 0xFA is beat 0 anyway.
+      liveClock?.transportStart();
+      const e = cb.clockStart();
+      if (e) log(`clock.start: ${e.message}`);
+    },
+    onStop: () => {
+      if (clockSource !== "midi") return;
+      liveClock?.transportStop();
+      const e = cb.clockStop();
+      if (e) log(`clock.stop: ${e.message}`);
+    },
+  });
+
+  const midiManager = new MidiManager({
+    midiAdd: (id, name, dev) => {
+      const e = cb.midiAdd(id, name, dev as never);
+      if (e) log(`midi.add: ${e.message}`);
+      dirty = true;
+    },
+    midiRemove: (id) => void cb.midiRemove(id),
+    midiEvent: (id, bytes) => {
+      const e = cb.midiEvent(id, bytes);
+      if (e) log(`midi.event: ${e.message}`);
+      dirty = true;
+    },
+    // Every device with clock reception enabled feeds the same source, which
+    // is matron's arrangement too: `clock_midi_handle_message` is global and
+    // `Midi.update_clock_receive` is what narrows it to one device.
+    clockByte: (_id, byte, at) => midiClock.handle(byte, at),
+  });
+  registerMidi(host.registry, midiManager, { log: (l) => log(l) });
+  // crow and serial: not implemented, and saying so clearly (E5-10).
+  registerSerial(host.registry, { log: (l) => log(l) });
+  // Exposed whether or not the browser grants MIDI: the manager is how a
+  // device gets attached at all, and SYSTEM > DEVICES (E5-08) will need it
+  // on a machine that refused the permission just as much as on one that
+  // granted it.
+  expose({ midi: midiManager, opfs: mirror, arc: arcManager });
+  void startWebMidi(midiManager, { log: (l) => log(l) }).then((w) => {
+    if (w !== null) expose({ webmidi: w });
+    // Kept so the gear can list the ports. The ACCESS and not a snapshot:
+    // its `inputs` and `outputs` are live maps, so a device plugged in
+    // while the panel is open appears without anything having to be told.
+    webMidiAccess = w;
+  });
+
+  // The loopback, which is a cable you plug in rather than a device that is
+  // there. `Midi.add` fires on attach and `Midi.remove` on detach, so a
+  // running script sees it as a hot-plug — the same path a real device takes.
+  let virtualMidi: VirtualMidiPort | null = null;
+  let virtualMidiId = -1;
+  /**
+   * The virtual loopback: a cable with both ends in the same box.
+   *
+   * ITS BUTTON IS IN THE GEAR NOW, under `midi`, and not in the rail (user,
+   * 2026-11-13). The icon was a cable looping back on itself, which reads as
+   * a circular arrow — and the restart button added beside it IS a circular
+   * arrow. Two round arrows in one column of six is a rail you have to read
+   * instead of recognise, which is the whole argument for icons. This is
+   * also the rarer of the two, and a setting rather than a gesture.
+   */
+  const toggleLoopback = (): void => {
+    if (virtualMidi === null) {
+      virtualMidi = createVirtualMidiPort();
+      const d = midiManager.add(virtualMidi);
+      virtualMidi.attach(d);
+      virtualMidiId = d.id;
+      log("midi: virtual loopback attached");
+    } else {
+      midiManager.remove(virtualMidiId);
+      virtualMidi = null;
+      virtualMidiId = -1;
+      log("midi: virtual loopback detached");
+    }
+    dirty = true;
+  };
+
+  log(`booted, ${installed} community scripts in ~/dust/code.`);
+  log("SELECT lists the scripts. The gear has the key bindings.");
+
+  // --- audio -------------------------------------------------------------
+  //
+  // Deliberately last, and not awaited before the menu is usable: the two
+  // wasm modules are 5.8 MB and sclang then compiles 2320 classes, so making
+  // the first frame wait for them would put several seconds of blank screen
+  // in front of a user for no reason.
+  //
+  // The clock is created on SCSYNTH'S AudioContext rather than one of its
+  // own. Two contexts would mean two device callbacks, two sets of latency,
+  // and a clock whose frames count a different stream from the one making
+  // the sound — which is exactly the drift the frame-counting design exists
+  // to avoid.
+  void startAudio();
+
+  async function startAudio(): Promise<void> {
+    // LET THE SCREEN PAINT FIRST. Everything below is one long run of
+    // synchronous work — instantiating two wasm modules and compiling
+    // sclang's class library, which is 373 files and 2434 classes — and
+    // the main thread does not yield inside it. Without this the menu is
+    // drawn into the surface at boot and never reaches the canvas, so the
+    // page sits black for as long as that takes. Reported as "the screen
+    // stayed black at first, then appeared after a while": the screen was
+    // fine, the browser simply never got a frame.
+    await new Promise<void>((paint) => requestAnimationFrame(() => paint()));
+
+    let engineState: ReturnType<typeof registerEngine> | null = null;
+    // Kept so the console tap below can reach it: crone is the only node
+    // between the engine and the speakers, and measuring there is how
+    // "does this script make a sound" gets answered without ears.
+    let croneForConsole: Awaited<ReturnType<typeof startCrone>> | null = null;
+    let croneLoad: import("./crone/crone.js").CroneLoad | null = null;
+    // EVERY SCRIPT'S OWN SuperCollider CLASSES, not just norns'. This is
+    // what makes `engine.name = "Amen"` resolve: norns puts `~/dust/code` on
+    // sclang's class path, so an engine a script ships is compiled into the
+    // class library at startup and appears in `engine.names`. Without it a
+    // script with a custom engine loads, draws its splash, and has no
+    // engine — and nothing says why, because from Lua's side the name is
+    // simply not in the list.
+    //
+    // E9-55 — `.scd` TOO, because a class can load one. `Engine_R.sc` is
+    // eleven lines; everything it does is
+    //
+    //     "r.scd".resolveRelative.load
+    //
+    // and with only the `.sc` staged that resolved to
+    // `/sc/SCClassLibrary/dust/r/lib/r.scd`, which was not there:
+    //
+    //     file "/sc/SCClassLibrary/dust/r/lib/r.scd" does not exist.
+    //     norns-js: engine Engine_R failed to allocate
+    //     ERROR: Nil does not understand the message 'at'.
+    //
+    // `R` was in `engine.names`, loaded, and registered NOT ONE command, so
+    // `moln` and `torii` died on their first `engine.new`. A `.scd` is not
+    // compiled — sclang's class-library pass reads `.sc` and nothing else —
+    // so writing them beside the classes costs a few kilobytes and no risk.
+    const extraClasses = new Map<string, string | Uint8Array>();
+    const decoder = new TextDecoder();
+    for (const path of vfs.walk("/home/we/dust/code")) {
+      if (!path.endsWith(".sc") && !path.endsWith(".scd")) continue;
+      const bytes = vfs.read(path);
+      if (bytes === null) {
+        // A `.sc` that is DECLARED and not resident. The build packs text
+        // inline, so this should not happen — and if it ever does, the
+        // symptom is the one the comment above describes: a script with a
+        // custom engine that loads, draws, and has no engine. Said, rather
+        // than skipped in silence.
+        if (vfs.remoteAt(path) !== null) {
+          log(`engine: ${path} has not been fetched; its class is not compiled`);
+        }
+        continue;
+      }
+      // E9-66 — TWO BAD CHARACTERS COST THREE SCRIPTS THEIR AUDIO.
+      //
+      // The class library compiles as one unit, so a single malformed `.sc`
+      // does not fail alone: it takes sclang down, and with it every engine
+      // on the machine. `lissadron` ends on an unclosed `/*` and `sway`
+      // carries a stray U+FEFF; both crash the compiler with no file named.
+      // `repairScSource` fixes exactly those two, says which file it
+      // touched, and leaves anything else byte for byte alone.
+      const name = path.slice("/home/we/dust/code/".length);
+      const { text, repairs } = repairScSource(name, decoder.decode(bytes));
+      for (const line of repairs) log(`engine: ${line}`);
+      extraClasses.set(name, repairs.length > 0 ? text : bytes);
+    }
+
+    // What every bundled sound file is, so sclang's `SoundFile.openRead` can
+    // answer without libsndfile. The VFS already carries it: the dust build
+    // measured channels, frames and rate for every audio asset because the
+    // page needs them to decode.
+    // WHAT `SoundFile.openRead` CAN SEE, and it used to be half of it.
+    //
+    // The build records frames, channels and rate for every sound file a
+    // bundled script ships, so a file whose bytes have not been fetched can
+    // still answer. But the table was built ONLY from those declarations —
+    // so a file that is actually present, installed from the catalogue or
+    // restored from OPFS, had no entry at all. sclang's `openRead` returned
+    // nil and Timber refused it with "Could not open file": the one sample
+    // the user chose was the one the sampler could not open.
+    //
+    // A resident file's header is right here, and the same parser the build
+    // uses reads it. WAV only — a resident .aif or .flac is still invisible,
+    // because nothing here can parse one synchronously, and `openRead` must
+    // answer synchronously.
+    const soundFiles = new Map<string, { frames: number; channels: number; sampleRate: number }>();
+    let fromHeader = 0;
+    for (const path of vfs.walk("/home/we/dust")) {
+      const declared = vfs.remoteAt(path)?.audio;
+      if (declared !== undefined) {
+        soundFiles.set(path, declared);
+        continue;
+      }
+      if (!/\.wav$/i.test(path)) continue;
+      const bytes = vfs.read(path);
+      if (bytes === null) continue;
+      const parsed = parseWavHeader(bytes);
+      if (parsed === null) continue;
+      soundFiles.set(path, parsed);
+      fromHeader++;
+    }
+    if (fromHeader > 0) log(`sound files: ${fromHeader} read from their own headers`);
+
+    let engine = (scEngine = await createEngineHost({
+      log: (l) => log(l),
+      soundFiles,
+      onMatron: (m) => {
+        engineState?.onMatron(m.address, m.args);
+        dirty = true;
+      },
+      // The browser is holding the engine until somebody touches the page.
+      // The log already says so, but a console nobody has opened is not an
+      // answer to a page that looks stalled.
+      onNeedsGesture: (waiting) => void (needsGesture = waiting, showGate()),
+      extraClasses,
+    }));
+
+    const injected = await engine.injectNorns();
+    // Counted separately, because they fail differently: a community class
+    // that does not compile takes the WHOLE library with it, on hardware as
+    // well as here, and "20 injected" with a library that refused to build
+    // is a different situation from "20 injected" and a working one.
+    log(
+      `${injected} classes injected into MEMFS ` +
+        `(${extraClasses.size} .sc/.scd from ~/dust/code)`,
+    );
+
+    // CAUGHT, not just checked. A class that crashes the compiler can
+    // take sclang down two ways: the abort that leaves the boot waiting
+    // until its own timeout, and a wasm `memory access out of bounds`
+    // that REJECTS. The first draft of this retry handled only the
+    // first, so batch 7 sat at eight keys for three minutes with no
+    // retry line in the log.
+    const sclangUp = await engine.bootSclang().catch(() => false);
+    if (!sclangUp) {
+      // E9-48 — ONE SCRIPT'S CLASS MUST NOT BRICK THE APP.
+      //
+      // `lissadron/lib/Engine_Lissadron.sc` crashes sclang's class-library
+      // compiler outright — `worker sent an error! Uncaught 10236728`, then
+      // ninety seconds of waiting and `sclang did not boot`. Measured by
+      // bisecting a batch of twenty-five: put that one file back and the
+      // crash returns every time.
+      //
+      // What the user saw was an app with no audio and no way to know why,
+      // and no cure short of wiping storage — the file is restored from
+      // OPFS on every load, so every reload fails the same way.
+      //
+      // So the second attempt leaves the scripts' own classes out. The
+      // engine comes up, every bundled engine works, and the ones a script
+      // brought are gone WITH A LINE SAYING SO. That is a worse norns than
+      // the one with the classes and a far better one than none.
+      if (extraClasses.size > 0) {
+        log(
+          `sclang did not boot — retrying without the ${extraClasses.size} ` +
+            `class(es) from ~/dust/code`,
+        );
+        extraClasses.clear();
+        engine = scEngine = await createEngineHost({
+          log: (l) => log(l),
+          soundFiles,
+          onMatron: (m) => {
+            engineState?.onMatron(m.address, m.args);
+            dirty = true;
+          },
+          onNeedsGesture: (waiting) => void (needsGesture = waiting, showGate()),
+          extraClasses,
+        });
+        await engine.injectNorns();
+        const again = await engine.bootSclang().catch(() => false);
+        if (!again) {
+          log("sclang did not boot, with or without them");
+          return;
+        }
+        log(
+          "sclang booted WITHOUT the installed scripts' SuperCollider " +
+            "classes: one of them crashes its compiler. Scripts that bring " +
+            "their own engine will report it missing until that script is " +
+            "removed.",
+        );
+      } else {
+        log("sclang did not boot");
+        return;
+      }
+    }
+    const { ready, ctx } = await engine.bootServerFromSclang();
+    if (!ready || !ctx) {
+      log("scsynth did not come up");
+      return;
+    }
+
+    // THE MASTER, BETWEEN EVERYTHING AND THE SPEAKERS.
+    //
+    // One gain and one meter, and every path to the destination goes through
+    // them -- crone's output when crone is there, scsynth's own node when it
+    // is not. Two reasons, and the second is the one that matters:
+    //
+    //   * the gain is where muting happens, and the choice is remembered;
+    //
+    //   * the METER IS BEFORE THE GAIN, so a muted page can still be
+    //     measured. That is what lets the exerciser (E5-23) answer "did this
+    //     script make a sound" with the output turned down to nothing.
+    // TAKEN BEFORE THE MASTER EXISTS, and that is the whole subtlety.
+    // `captured.toDestination` is fed by a patched `AudioNode.prototype.
+    // connect` (engine/capture.ts:54), so EVERY node that reaches the
+    // destination lands in it — including the master we are about to make.
+    // Re-routing the live list afterwards therefore unplugs the master and
+    // wires it into crone's input: crone -> meter -> master -> crone, a
+    // feedback loop, silent only because the mute is on. Measured as a
+    // meter that read 0.000 for a 0.3 oscillator plugged straight into it.
+    const scsynthOut = [...captured.toDestination];
+    const master = ctx.createGain();
+    const meter = ctx.createAnalyser();
+    meter.fftSize = 2048;
+    meter.connect(master);
+    master.connect(ctx.destination);
+    // THE MUTE AND THE LEVEL ARE ONE NUMBER on this gain, which is why
+    // there is one function rather than two: a mute that multiplied a level
+    // would be a second gain node to keep in step, and the two would drift
+    // the first time one of them was set from somewhere the other did not
+    // know about.
+    //
+    // `setTargetAtTime` rather than an assignment, and 12 ms: a gain that
+    // jumps mid-block is a step in the waveform, which is a click. Dragging
+    // a fader is hundreds of those.
+    const levelNow = (): number => (settings.muted ? 0 : dbToGain(settings.volumeDb));
+    const setLevel = (): void => {
+      master.gain.setTargetAtTime(levelNow(), ctx.currentTime, 0.012);
+    };
+    master.gain.value = levelNow();
+    settings.subscribe((_st, what) => {
+      if (what === "muted" || what === "volume") setLevel();
+    });
+    applyMute = () => setLevel();
+    // The pickers in the gear have something to talk to now (E9-15). The
+    // stored output is applied on the way past: a choice that only took
+    // effect the next time you opened the panel would look like it had not
+    // been remembered.
+    audioContext = ctx;
+    if (settings.audioOut !== "") void applyOutputDevice();
+    expose({ master, meter, peak: () => peakOf(meter) });
+
+    // CRONE, BETWEEN scsynth AND THE SPEAKERS.
+    //
+    // This is norns' topology and not a refinement of it: the mixer, the
+    // monitor, the reverb, the compressor, the sends to softcut and the six
+    // softcut voices all live in crone. An engine wired straight to the
+    // destination plays, and then `level_ext`, `level_monitor`, every
+    // `softcut.*` call and the tape do nothing — which is most of what a
+    // community script asks for. `amen` is 14 softcut calls in its `init`
+    // alone.
+    //
+    // `captured.toDestination` is the node scsynth connected; the capture
+    // shim in engine/capture.ts exists because sclang hands back emscripten
+    // handles rather than objects.
+    try {
+      const tapePaths = createTapePaths();
+      const tapeWriter = croneTapeWriter(vfs, tapePaths, ctx.sampleRate, cb, (l) => log(l));
+      const crone = await startCrone({
+        context: ctx,
+        log: (l) => log(l),
+        events: croneEvents(cb, (l) => log(l)),
+        onFileWritten: croneFileWriter(vfs, (l) => log(l)),
+        onTapeData: (pcm) => tapeWriter.onTapeData(pcm),
+        onTapeFinished: (d) => tapeWriter.onTapeFinished(d),
+        // E4-14. Kept, not logged: one line a second would bury everything
+        // else. `__norns.load` is where to read it.
+        onLoad: (l) => {
+          croneLoad = l;
+          // What `_norns.audio_get_cpu_load` and `_norns.audio_get_xrun_count`
+          // answer with (E5-24). The xruns accumulate and are cleared by a
+          // read, because that is what jack's counter does.
+          audioLoad = { meanMs: l.meanMs, budgetMs: l.budgetMs };
+          hardware.noteXruns(l.over);
+          if (l.over > 0) log(`audio: ${l.over} of ${l.blocks} blocks over budget`);
+        },
+      });
+      registerCrone(host.registry, crone, {
+        log: (l) => log(l),
+        files: {
+          vfs,
+          paths: tapePaths,
+          callbacks: cb,
+          decode: async (bytes) => await ctx.decodeAudioData(bytes.slice().buffer),
+        },
+      });
+
+      // Re-route: scsynth -> crone input 0 (ext) -> destination. The
+      // disconnect has to happen or the engine is heard twice, once through
+      // the mixer and once around it, and `level_ext` would only move half
+      // of it.
+      for (const node of scsynthOut) {
+        try {
+          node.disconnect(ctx.destination);
+        } catch {
+          /* already gone */
+        }
+        node.connect(crone.node, 0, 0);
+      }
+      // CRONE INPUT 1 IS THE ADC (processor.js:16), kept apart from input 0
+      // which carries the engine. A microphone summed into the engine bus
+      // would make `level_adc` and `level_ext` the same control, which is
+      // exactly what crone's two-input topology exists to prevent.
+      adcInput = crone.node;
+      if (settings.audioInOn) void applyInputDevice();
+      crone.node.connect(meter);
+      void crone.poll("vu", true);
+      croneForConsole = crone;
+      log(`crone: ${crone.voices} softcut voices, scsynth routed through the mixer`);
+    } catch (err) {
+      // A page without crone is still a usable norns: the engine reaches
+      // the speakers, and softcut and the tape stay stubs. Saying so beats
+      // a boot that stops here.
+      log(`crone did not start: ${String((err as Error)?.message ?? err)}`);
+      log("the engine goes straight to the speakers; softcut and the tape are stubs");
+      // Still through the master, or the mute would be a lie on exactly the
+      // path that is left when the mixer fails.
+      for (const node of scsynthOut) {
+        try {
+          node.disconnect(ctx.destination);
+        } catch {
+          /* already gone */
+        }
+        node.connect(meter);
+      }
+    }
+
+    engineState = registerEngine(host.registry, engine, {
+      callbacks: cb,
+      log: (l) => log(l),
+      // Sound files into scsynth's buffers. scsynth has no libsndfile and
+      // its MEMFS is not the VFS, so the browser decodes and the samples go
+      // in over OSC. See src/engine/buffers.ts.
+      buffers: createBufferLoader({
+        vfs,
+        context: ctx,
+        sendToServer: (a, g) => engine.sendToServer(a, g as never),
+        sendToLang: (a, g) => engine.sendToLang(a, g as never),
+        log: (l) => log(l),
+      }),
+      onReady: () => {
+        log("audio ready");
+      },
+    });
+
+    // The clock, on the engine's context.
+    const clock = await createWorkletClock({
+      context: ctx,
+      onMetro: (idx, stage) => {
+        cb.metro(idx, stage);
+        dirty = true;
+      },
+      onClock: (id, beat) => {
+        cb.clockResume(id, beat);
+        dirty = true;
+      },
+      onStall: (seconds) =>
+        log(`clock: ${seconds.toFixed(2)} s of wall time with no audio behind it`),
+    });
+    liveClock = clock;
+    registerClock(host.registry, clock, {
+      onStub: (name, why) => log(`${name}: ${why}`),
+      onSource: (source) => {
+        clockSource = source;
+        log(`clock source: ${source}`);
+      },
+    });
+    expose({
+      clock,
+      engine,
+      engineState,
+      audio: ctx,
+      crone: croneForConsole,
+      load: () => croneLoad,
+    });
+
+    // Crone's own boot, which ends in /crone/ready and the boot gate.
+    engine.runCode(`Crone.remoteAddr = NetAddr("127.0.0.1", 8888);
+Crone.startBoot;`);
+    log("crone booting…");
+
+    // Ask, repeatedly, until Crone answers. `/crone/ready` is a REPLY and
+    // nothing sends it unprompted.
+    engineState.queryStartup();
+  }
+}
+
+main().catch((e) => {
+  log("failed");
+  log(String(e?.stack ?? e));
+  // A failure the console is closed for is a blank page with no explanation,
+  // so this is the one thing that opens it by itself.
+  const box = document.querySelector("#consolebox");
+  if (box instanceof HTMLElement) box.hidden = false;
+  document.querySelector("#consoletoggle")?.setAttribute("aria-pressed", "true");
+});
