@@ -74,6 +74,21 @@ const SHARE: Record<MachineKind, { first: number; rest: number }> = {
   phone: { first: 1, rest: 1 },
   steamdeck: { first: 0.57, rest: 0.39 },
 };
+/**
+ * E9-110 — AND A PHONE ON ITS SIDE IS A STEAM DECK.
+ *
+ * `phone` above describes a phone HELD UPRIGHT, which is the only way the
+ * table could describe it: a machine has one entry and an orientation is
+ * not a machine. Turned sideways a phone is 812x375 — wide, and with no
+ * height at all — which is the exact shape the deck's two columns exist
+ * for. Stacked at full width instead, the norns alone came to 812 by 725
+ * on a 375-tall screen, and everything else was below the fold.
+ *
+ * Reported as "la rotation automatique est mal gérée" (user, 2026-11-18),
+ * which it was: the page DID re-lay-out on the turn — `refresh` is on the
+ * resize event — and laid it out to the wrong rule.
+ */
+const SIDEWAYS = SHARE.steamdeck;
 /** A desk is the only profile that stops growing. */
 const DESK_W = 640;
 /** Nothing may be made smaller than this: a device you cannot grab is lost. */
@@ -90,6 +105,17 @@ export function createStage(opts: StageOptions): Stage {
   const stageWidth = (): number => Math.max(MIN_W, stage.clientWidth);
 
   const kindNow = (): MachineKind => opts.kind?.() ?? "normal";
+
+  /**
+   * Is this a handheld lying on its side?
+   *
+   * Two columns and a height budget are for a screen with width to spare
+   * and no height, and that is a SHAPE rather than a machine. A Steam Deck
+   * is always this shape, so nothing about a Deck changes; a phone is this
+   * shape only when it is turned, and a desk is never asked.
+   */
+  const sideways = (): boolean =>
+    kindNow() !== "normal" && (globalThis.innerWidth || 0) > (globalThis.innerHeight || 0);
 
   /**
    * E9-61 — THE ZOOM IS NOT APPLIED HERE ANY MORE, and that is the point.
@@ -126,7 +152,8 @@ export function createStage(opts: StageOptions): Stage {
     // second device; with nothing to make room for, a norns that takes 57%
     // of a Steam Deck and leaves the rest black is just small.
     if (shown.length <= 1) return sw;
-    const share = id === shown[0]?.id ? SHARE[kind].first : SHARE[kind].rest;
+    const table = sideways() ? SIDEWAYS : SHARE[kind];
+    const share = id === shown[0]?.id ? table.first : table.rest;
     return Math.round(sw * share);
   };
 
@@ -210,7 +237,7 @@ export function createStage(opts: StageOptions): Stage {
     // the real new height. It changes nothing for a landscape device, which
     // every one of them is until it is turned.
     {
-      const deck = kindNow() === "steamdeck";
+      const deck = sideways();
       const budget = availableHeight();
       const shown = devices.filter(visible);
       // The left column is one device and gets the whole height. The right
@@ -230,7 +257,7 @@ export function createStage(opts: StageOptions): Stage {
     // norns above a grid at any useful size. Everywhere else they stack
     // down the middle, which is what a page with room looks like.
     const stacked = new Map<DeviceId, { x: number; y: number }>();
-    const twoColumns = kindNow() === "steamdeck";
+    const twoColumns = sideways();
     let y = 0;
     let first = true;
     for (const d of devices) {

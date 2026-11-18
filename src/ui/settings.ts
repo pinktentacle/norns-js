@@ -89,6 +89,24 @@ export interface Placement {
  */
 export type Layout = Partial<Record<DeviceId, Placement>>;
 
+/**
+ * Which norns is drawn: the official box, or the shield.
+ *
+ * E9-108 — BOTH ARE REAL NORNS. The official one is the wide aluminium
+ * unit; the shield is a Raspberry Pi hat in a nearly square case with the
+ * screen across the middle. They run the same scripts and the same
+ * `_norns.key` and `_norns.enc` reach them, so this decides a picture and
+ * nothing else — no script can tell the difference, which is why it is a
+ * setting rather than a mode.
+ *
+ * NOT `auto`, unlike `machine`. The page cannot detect which norns somebody
+ * owns, and an `auto` that always meant one of them would be a third name
+ * for a choice with two answers.
+ */
+export type PanelKind = "norns" | "shield";
+
+export const PANEL_KINDS: readonly PanelKind[] = ["norns", "shield"];
+
 export interface Settings {
   readonly keymap: Keymap;
   readonly layout: Layout;
@@ -157,6 +175,17 @@ export interface Settings {
    */
   readonly machine: MachinePreference;
   /**
+   * Which body the norns is drawn as. See `PanelKind`.
+   *
+   * THE SHIELD IS THE DEFAULT, on every machine and not only on a phone.
+   * The phone is where it was asked for and where it matters most — at one
+   * device width the shield's screen is 1.58x wider and its encoders 1.73x
+   * bigger — but the same is true of a mouse on a desk, and a page that
+   * laid itself out differently depending on what you opened it with would
+   * be two applications wearing one name.
+   */
+  readonly panel: PanelKind;
+  /**
    * How big everything on the stage is drawn, as a multiplier.
    *
    * Not a CSS transform. A transform would scale the norns screen's canvas
@@ -201,6 +230,8 @@ export interface SettingsStore {
   setEncoderSensitivity(value: number): void;
   readonly machine: MachinePreference;
   setMachine(value: MachinePreference): void;
+  readonly panel: PanelKind;
+  setPanel(value: PanelKind): void;
   readonly zoom: number;
   setZoom(value: number): void;
   readonly midiOctave: number;
@@ -219,7 +250,7 @@ export interface SettingsStore {
   resetKeymap(): void;
   /** Called after every change, with what the page should now show. */
   subscribe(
-    fn: (s: Settings, what: "keymap" | "layout" | "muted" | "volume" | "audio" | "encoder" | "machine" | "zoom" | "midi" | "editor" | "files") => void,
+    fn: (s: Settings, what: "keymap" | "layout" | "muted" | "volume" | "audio" | "encoder" | "machine" | "panel" | "zoom" | "midi" | "editor" | "files") => void,
   ): () => void;
 }
 
@@ -346,6 +377,7 @@ const fallback = (): Settings => ({
   audioInOn: false,
   encoderSensitivity: 1,
   machine: "auto",
+  panel: "shield",
   zoom: 1,
   midiOctave: 4,
   midiVelocity: 100,
@@ -382,9 +414,18 @@ export function createSettings(storage: StorageLike | null): SettingsStore {
         audioIn: typeof parsed["audioIn"] === "string" ? parsed["audioIn"] : "",
         audioInOn: parsed["audioInOn"] === true,
         encoderSensitivity: clampSens(parsed["encoderSensitivity"]),
-        // The STORAGE key stays `device`: renaming it would silently
-        // reset the choice of anyone who had already made one.
-        machine: readMachine(parsed["device"]),
+        // E9-108 — AND IT NEVER CAME BACK, which measuring the stored blob
+        // is what showed: `write` is `JSON.stringify(state)` and the field
+        // on `Settings` is `machine`, so what is on disk has always been
+        // `{"machine":"phone"}` while this line read `device`. No key
+        // called `device` exists in any stored settings — checked in the
+        // page — so forcing a machine in the gear lasted exactly until the
+        // next reload.
+        //
+        // Both are read, and the new one wins. The fallback is what the
+        // original comment was for and costs one `??`.
+        machine: readMachine(parsed["machine"] ?? parsed["device"]),
+        panel: parsed["panel"] === "norns" ? "norns" : "shield",
         zoom: clampNum(parsed["zoom"], ZOOM_MIN, ZOOM_MAX, 1),
         midiOctave: clampNum(parsed["midiOctave"], -1, 7, 4),
         midiVelocity: Math.round(clampNum(parsed["midiVelocity"], VELOCITY_MIN, VELOCITY_MAX, 100)),
@@ -402,10 +443,10 @@ export function createSettings(storage: StorageLike | null): SettingsStore {
 
   let state = read();
   const listeners = new Set<
-    (s: Settings, what: "keymap" | "layout" | "muted" | "volume" | "audio" | "encoder" | "machine" | "zoom" | "midi" | "editor" | "files") => void
+    (s: Settings, what: "keymap" | "layout" | "muted" | "volume" | "audio" | "encoder" | "machine" | "panel" | "zoom" | "midi" | "editor" | "files") => void
   >();
 
-  const write = (what: "keymap" | "layout" | "muted" | "volume" | "audio" | "encoder" | "machine" | "zoom" | "midi" | "editor" | "files"): void => {
+  const write = (what: "keymap" | "layout" | "muted" | "volume" | "audio" | "encoder" | "machine" | "panel" | "zoom" | "midi" | "editor" | "files"): void => {
     if (storage) {
       try {
         storage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -453,6 +494,9 @@ export function createSettings(storage: StorageLike | null): SettingsStore {
     get machine(): MachinePreference {
       return state.machine;
     },
+    get panel(): PanelKind {
+      return state.panel;
+    },
     get zoom(): number {
       return state.zoom;
     },
@@ -496,6 +540,10 @@ export function createSettings(storage: StorageLike | null): SettingsStore {
     setMachine(value: MachinePreference): void {
       state = { ...state, machine: readMachine(value) };
       write("machine");
+    },
+    setPanel(value: PanelKind) {
+      state = { ...state, panel: value === "norns" ? "norns" : "shield" };
+      write("panel");
     },
     setMuted(muted: boolean): void {
       state = { ...state, muted };

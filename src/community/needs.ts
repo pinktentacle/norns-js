@@ -129,6 +129,31 @@ export function needsOf(
   name: string,
   entries: readonly CatalogEntry[],
   root = "/home/we/dust",
+  /**
+   * E9-109 — THE ENGINE CLASSES THIS MACHINE ALREADY HAS.
+   *
+   * `enginesHere` below is built by reading every `.sc` under
+   * `~/dust/code`, which is where a SCRIPT's engine lives. It is not where
+   * the twenty-odd engines built into the page live: those are compiled
+   * into scsynth and declared in the class library, and nothing in the
+   * dust tree mentions them at all.
+   *
+   * So every script that asks for one was reported as short of it. From a
+   * user's own log, on a page whose very next lines list nine engines with
+   * PolyPerc among them:
+   *
+   *     maiden: tmi also needs kolor and the PolyPerc engine,
+   *             which no catalogue script has
+   *
+   * Half of that sentence was true and urgent and the other half was
+   * false, which is the worst way to be half right: a line that cries wolf
+   * about the engine teaches you to skim the part about `kolor`.
+   *
+   * `engine.names` is the answer and the page has had it since the server
+   * reported. Empty here means "nobody told us", which reads exactly as it
+   * did before — this cannot make the function report LESS than it knows.
+   */
+  have: readonly string[] = [],
 ): Need[] {
   const code = `${root}/code`;
   const mine = `${code}/${name}`;
@@ -141,7 +166,7 @@ export function needsOf(
   // declare. One walk for both: the tree is a few thousand paths and this
   // runs once per install.
   const present = new Set<string>();
-  const enginesHere = new Set<string>();
+  const enginesHere = new Set<string>(have);
   for (const p of vfs.walk(code)) {
     const rel = p.slice(code.length + 1);
     const head = rel.split("/")[0];

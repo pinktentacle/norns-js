@@ -43,7 +43,10 @@ export const COMPONENTS: readonly Component[] = [
   { what: "FFTW", who: "Matteo Frigo and Steven G. Johnson, MIT", licence: "GPL-2.0-or-later" },
   { what: "ByteBeat, PulsePTR, TrianglePTR, FormantTriPTR", who: "their authors", licence: "GPL-3.0-or-later" },
   { what: "softcut-lib", who: "monome", licence: "GPL-3.0" },
-  { what: "fengari", who: "Benoit Giannangeli, Daurnimator", licence: "MIT" },
+  // E9-117 — the interpreter is PUC Lua now, compiled from source by
+  // `tools/lua53/build.sh`. It IS distributed: 232 KB of wasm in the
+  // bundle, which is what puts it on this list.
+  { what: "Lua", who: "Lua.org, PUC-Rio", licence: "MIT" },
   { what: "cairo", who: "the cairo authors", licence: "LGPL-2.1 / MPL-1.1" },
   { what: "pixman", who: "the pixman authors", licence: "MIT" },
   { what: "FreeType", who: "David Turner, Robert Wilhelm, Werner Lemberg", licence: "FTL / GPL-2.0" },

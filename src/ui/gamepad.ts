@@ -8,15 +8,22 @@
 // THE MAPPING, and why each one:
 //
 //   A  -> K3     the norns button you press most. The pad's primary button.
-//   B  -> K2     beside it, as K2 is beside K3.
-//   X  -> K1     the shift key: held, not tapped, so it wants its own thumb
-//                position rather than sharing with A and B.
+//   X  -> K2     beside it, as K2 is beside K3.
+//   Y  -> K1     the shift key: held, not tapped, so it wants its own thumb
+//                position rather than sharing with A and X.
 //   left stick X  -> E2     E2 is the left-hand knob on a norns.
 //   right stick X -> E3     E3 is the right-hand one.
-//   d-pad < >     -> E1     E1 changes page, which is a discrete thing, and
-//   L1 / R1       -> E1     a d-pad press is discrete. The bumpers do the
-//                           same because "page back, page forward" is what
-//                           a bumper means on everything else.
+//   L2 / R2       -> E1     and they are ANALOG, which is the point: a
+//                           trigger reports 0 to 1, so it drives E1 through
+//                           the same curve the sticks use. A trigger suits
+//                           it better than a stick does, because a trigger
+//                           has somewhere to rest.
+//
+// B, the d-pad, the bumpers and both trackpads are deliberately unmapped. B
+// is "back" everywhere else on a Deck. The trackpads cannot be reached at
+// all: the Standard Gamepad layout has no concept of a touch surface, so if
+// they are ever wanted it is through a Steam Input layout that turns them
+// into something else, not through this file.
 //
 // WHY A STICK IS A RATE AND NOT A POSITION. An encoder has no end stops: it
 // reports movement, not where it is. A stick does the opposite -- it springs
@@ -31,10 +38,24 @@
 //
 // NOT RUN ON A STEAM DECK. The indices are the W3C standard mapping and the
 // behaviour is covered by tests over synthetic frames, but no part of this
-// has met the hardware.
+// has met the hardware. `docs/14-STEAM-DECK.md` is what has to happen before
+// it can — including the setting that decides whether any of these indices
+// arrive at all: a non-Steam shortcut gets the DESKTOP layout by default,
+// where the sticks are a mouse and `getGamepads()` returns nothing.
 
 export interface PadFrame {
   readonly buttons: readonly boolean[];
+  /**
+   * The same buttons as 0..1, because two of them are not buttons.
+   *
+   * `GamepadButton.value` is the analog reading, and for L2 and R2 it is the
+   * whole of what they are for. `pressed` is a threshold over it — true
+   * past about half-way — so reading only `pressed` would throw away the
+   * half of a trigger that makes it an encoder rather than a switch. Empty
+   * on a pad that reports no values, and the trigger code falls back to
+   * `pressed` then.
+   */
+  readonly values: readonly number[];
   readonly axes: readonly number[];
   /** The browser's own word for whether the indices below mean anything. */
   readonly standard: boolean;
@@ -45,13 +66,13 @@ export type PadAction =
   | { readonly a: "enc"; readonly n: 1 | 2 | 3; readonly delta: number };
 
 /** Standard mapping indices, from the Gamepad API's own table. */
-const BTN = { a: 0, b: 1, x: 2, l1: 4, r1: 5, dpadLeft: 14, dpadRight: 15 } as const;
+const BTN = { a: 0, x: 2, y: 3, l2: 6, r2: 7 } as const;
 const AXIS = { leftX: 0, rightX: 2 } as const;
 
 const BUTTON_KEYS: ReadonlyArray<readonly [number, 1 | 2 | 3]> = [
   [BTN.a, 3],
-  [BTN.b, 2],
-  [BTN.x, 1],
+  [BTN.x, 2],
+  [BTN.y, 1],
 ];
 
 /** Below this a stick is at rest. Sticks drift, and a drifting knob is a bug. */
@@ -67,10 +88,6 @@ const MAX_RATE = 34;
  * time" a page-sized list wants, and still 34 at the stop.
  */
 const CURVE = 1.6;
-/** A held d-pad repeats, like a key. First after this, then every REPEAT_MS. */
-const REPEAT_DELAY_MS = 380;
-const REPEAT_MS = 90;
-
 /** Deflection to ticks per second, with the dead zone removed. */
 export function rateFor(axis: number, sensitivity = 1): number {
   const mag = Math.abs(axis);
@@ -93,9 +110,6 @@ export function createPadCore(opts: PadCoreOptions = {}): PadCore {
   const sensitivity = opts.sensitivity ?? ((): number => 1);
   const held = new Set<number>();
   const carry = new Map<1 | 2 | 3, number>();
-  /** When each repeating button is next due to fire. */
-  const nextRepeat = new Map<number, number>();
-  let clock = 0;
 
   const encFromRate = (n: 1 | 2 | 3, rate: number, dtMs: number, out: PadAction[]): void => {
     const acc = (carry.get(n) ?? 0) + (rate * dtMs) / 1000;
@@ -107,7 +121,6 @@ export function createPadCore(opts: PadCoreOptions = {}): PadCore {
   return {
     frame(pad, dtMs) {
       const out: PadAction[] = [];
-      clock += dtMs;
 
       if (pad === null || !pad.standard) {
         // Release anything still down, so a pad unplugged mid-press does not
@@ -116,7 +129,6 @@ export function createPadCore(opts: PadCoreOptions = {}): PadCore {
           if (held.delete(index)) out.push({ a: "key", n: key, z: 0 });
         }
         held.clear();
-        nextRepeat.clear();
         carry.clear();
         return out;
       }
@@ -132,33 +144,22 @@ export function createPadCore(opts: PadCoreOptions = {}): PadCore {
         }
       }
 
-      // E1 steps: the d-pad and the bumpers, each repeating while held.
-      for (const [index, delta] of [
-        [BTN.dpadLeft, -1],
-        [BTN.l1, -1],
-        [BTN.dpadRight, 1],
-        [BTN.r1, 1],
-      ] as const) {
-        const down = pad.buttons[index] === true;
-        if (!down) {
-          held.delete(index);
-          nextRepeat.delete(index);
-          continue;
-        }
-        if (!held.has(index)) {
-          held.add(index);
-          nextRepeat.set(index, clock + REPEAT_DELAY_MS);
-          out.push({ a: "enc", n: 1, delta });
-          continue;
-        }
-        const due = nextRepeat.get(index) ?? Infinity;
-        if (clock >= due) {
-          nextRepeat.set(index, clock + REPEAT_MS);
-          out.push({ a: "enc", n: 1, delta });
-        }
-      }
-
       const s = sensitivity();
+
+      // E1 on the triggers. R2 turns it one way and L2 the other, through
+      // the same curve as a stick, so both of a norns' three encoders and
+      // its odd one out behave alike under the thumb. Pulling both at once
+      // cancels, which is what a knob turned two ways at once should do.
+      const trigger = (index: number): number => {
+        const v = pad.values[index];
+        if (typeof v === "number") return v;
+        // A pad that reports no analog values at all: fall back to the
+        // threshold, so E1 still turns rather than being dead.
+        return pad.buttons[index] === true ? 1 : 0;
+      };
+      const e1 = rateFor(trigger(BTN.r2), s) - rateFor(trigger(BTN.l2), s);
+      encFromRate(1, e1, dtMs, out);
+
       encFromRate(2, rateFor(pad.axes[AXIS.leftX] ?? 0, s), dtMs, out);
       encFromRate(3, rateFor(pad.axes[AXIS.rightX] ?? 0, s), dtMs, out);
       return out;
@@ -178,6 +179,7 @@ export function readPad(): PadFrame | null {
     if (p === null || !p.connected) continue;
     return {
       buttons: p.buttons.map((b) => b.pressed),
+      values: p.buttons.map((b) => b.value),
       axes: Array.from(p.axes),
       standard: p.mapping === "standard",
     };

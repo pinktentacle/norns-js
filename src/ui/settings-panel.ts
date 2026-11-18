@@ -35,6 +35,7 @@ import {
   ZOOM_MAX,
   ZOOM_MIN,
   type SettingsStore,
+  type PanelKind,
 } from "./settings.js";
 import { DEFAULT_MAX_FILES } from "../community/install.js";
 import type { Stage } from "./stage.js";
@@ -276,6 +277,41 @@ export function createSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
   sensRow.append(sens, sensValue);
   sensSection.append(sensRow);
   controlsPane.append(sensSection);
+
+  // WHICH NORNS, and it comes before `machine` because it is the more
+  // visible of the two: one changes a picture you are looking at, the other
+  // changes defaults you may never notice.
+  //
+  // The note carries the numbers rather than an adjective. "Bigger" is not
+  // a reason to change what your instrument looks like; 1.58x of screen is.
+  layoutSection.append(el("p", "sp-sub", "body"));
+  const panelRow = el("div", "sp-row sp-choice");
+  const panelNote = el(
+    "div",
+    "sp-note",
+    "at the same width the shield's screen is 1.58x wider and its encoders " +
+      "1.73x bigger; its body is squarer, so it is taller too",
+  );
+  const panelButtons = new Map<PanelKind, HTMLElement>();
+  const markPanel = (): void => {
+    for (const [value, b] of panelButtons) {
+      b.setAttribute("aria-pressed", String(settings.panel === value));
+    }
+  };
+  for (const [value, label] of [
+    ["shield", "shield"],
+    ["norns", "norns"],
+  ] as ReadonlyArray<[PanelKind, string]>) {
+    const b = el("button", "sp-toggle", label);
+    b.addEventListener("click", () => {
+      settings.setPanel(value);
+      markPanel();
+    });
+    panelButtons.set(value, b);
+    panelRow.append(b);
+  }
+  markPanel();
+  layoutSection.append(panelRow, panelNote);
 
   // Which machine to lay out for. `auto` first, because it is right most of
   // the time and the other three exist for when it is not.

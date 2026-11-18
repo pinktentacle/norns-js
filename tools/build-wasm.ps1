@@ -166,6 +166,18 @@ $steps = @(
     Always = $true   # tracked, cheap, and stage 1 compiles it
   },
   @{
+    # E9-117 — the Lua interpreter every script runs in.
+    #
+    # Stage 1 because it is a wasm build like the others and skips when it
+    # is already there; it is also the fastest of them, about a minute,
+    # and it fetches its own source. Without it `npm run build` stops at
+    # `import("./lua53/lua53.mjs")` the way it stops at the screen module.
+    Name = "lua"; Stage = 1; How = "bash"; Clean = $true
+    Run  = @("tools/lua53/build.sh")
+    Makes = @("src/lua/lua53/lua53.wasm", "src/lua/lua53/lua53.mjs")
+    Why  = "PUC Lua 5.3, which replaced fengari (docs/13-CPU.md): 2.4-13x per script"
+  },
+  @{
     Name = "fftw"; Stage = 1; How = "bash"; Clean = $true
     Run  = @("tools/sclang/build-fftw.sh")
     Makes = @("third_party/fftw3/build-wasm/libfftw3f.a")

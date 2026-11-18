@@ -67,6 +67,19 @@ export interface MaidenProject {
   readonly element: HTMLElement;
   /** Shown or hidden. The catalogue is fetched the first time it is shown. */
   active(on: boolean): void;
+  /**
+   * E9-109 — ASK FOR A SCRIPT BY NAME, from outside the panel.
+   *
+   * The dependency a script discovers at LOAD time is the same thing the
+   * installer discovers at install time, and it deserves the same
+   * treatment: a row in the strip with its own count and its own cancel,
+   * behind whatever else is queued. Doing it any other way would mean a
+   * second installer with no progress and nothing to stop it.
+   *
+   * Resolves to what it could not find, so the caller can say so: a name
+   * the catalogue does not carry is not an error here, it is an answer.
+   */
+  want(names: readonly string[], neededBy: string): Promise<string[]>;
   dispose(): void;
 }
 
@@ -172,6 +185,37 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
   root.append(bar, jobs, toolbar, ask, note, list);
 
   /**
+   * E9-110 — THE LIST MUST NOT MOVE UNDER THE FINGER.
+   *
+   * Reported in every version, not only on a phone (user, 2026-11-18):
+   * press `install` three hundred rows down the catalogue and the row you
+   * pressed walks down the screen. The strip of downloads is pinned ABOVE
+   * the list and appears when the first job does, so the scroller's box
+   * gets shorter from the top — and the content inside it, which keeps
+   * its `scrollTop`, slides down by exactly as much. Press three in a row
+   * and it happens three times, and the second press lands on a row
+   * nobody chose.
+   *
+   * The other way out was to reserve the band whether or not anything is
+   * downloading, which is a permanent cost for a rare event. This pays
+   * nothing while the strip is empty.
+   *
+   * SYNCHRONOUSLY, AND NOT THROUGH A ResizeObserver, which is what the
+   * first draft did and is why this comment can say so: an observer fires
+   * after layout and after paint, so the row had already moved and the
+   * correction came a frame late and short — of a 50 px shift it caught
+   * 21. Measured in the panel at 375 px.
+   *
+   * Only when the NUMBER of rows changes. `drawJobs` runs on every
+   * progress tick, several times a second, and `offsetHeight` is a forced
+   * layout; the strip's height can only change when a row comes or goes.
+   *
+   * At `scrollTop` 0 there is nothing to give back and the list does move
+   * — which is the top of the list, where there is no row to lose.
+   */
+  let jobRowsDrawn = 0;
+
+  /**
    * E9-39 — what a script is known to be missing here, by name.
    *
    * Computed over the whole catalogue by `tools/build-blockers.mjs` and
@@ -228,8 +272,30 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
   let busy = false;
   /** Waiting their turn, in the order they were asked for. */
   let queue: CatalogEntry[] = [];
-  /** The one being downloaded, with the handle its cancel button pulls. */
-  let current: { key: string; done: number; total: number; ac: AbortController } | null = null;
+  /**
+   * E9-107 — HOW MANY DOWNLOAD AT ONCE.
+   *
+   * This was one, and E9-21 gave the reasons. The reason that was about
+   * SPEED turns out to have been wrong, and measuring it is what showed
+   * why: an install's first act is a `data.jsdelivr.com` listing that takes
+   * between 280 and 1470 ms and fetches no file at all, and while that
+   * request was in the air nothing else happened. Eight catalogue scripts,
+   * browser cache defeated, three runs each, median wall clock — one at a
+   * time 600 ms, two 344, three 243, four 208.
+   *
+   * Three rather than four: the curve is nearly flat past three, every
+   * extra one is another listing and another staging tree held in memory at
+   * once, and `install.ts` holds all of them to ONE budget of twelve
+   * requests so this number does not multiply what lands on jsDelivr.
+   *
+   * The reason that was NOT about speed was real, and is closed in
+   * `install.ts`: two installs of one name shared a staging directory.
+   */
+  const PARALLEL = 3;
+  /** Downloading now, by lower-cased name, each with its own cancel. */
+  const running = new Map<string, { done: number; total: number; ac: AbortController }>();
+  /** Set by `run()` while it drains, so `enqueue` can add a worker to it. */
+  let topUp: (() => void) | null = null;
   /**
    * The action button of each row on screen, by lower-cased name.
    *
@@ -265,6 +331,14 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
   const pending = new Map<string, Need[]>();
 
   const drawJobs = (): void => {
+    // See `jobRowsDrawn` above. `pending` adds a line of its own below the
+    // job rows, so the count is of what will be DRAWN, not of `jobList`.
+    const willDraw = jobList.length + pending.size;
+    const resizing = willDraw !== jobRowsDrawn;
+    const was = resizing ? jobs.offsetHeight : 0;
+    const scrolled = list.scrollTop;
+    jobRowsDrawn = willDraw;
+
     jobs.textContent = "";
     jobs.hidden = jobList.length === 0;
     for (const job of jobList) {
@@ -296,7 +370,7 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
         stop.addEventListener(
           "click",
           () => {
-            if (job.state === "running") current?.ac.abort();
+            if (job.state === "running") running.get(job.name.toLowerCase())?.ac.abort();
             else dequeue(job.name);
           },
           { signal },
@@ -319,6 +393,14 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
       row.append(el("span", "mdn-proj-job-name", line));
       jobs.append(row);
       jobs.hidden = false;
+    }
+
+    // The strip has just changed height, so give the scroller back what it
+    // lost from the top. Read after the rebuild and applied in the same
+    // task, which is what keeps the row the finger is on where it was.
+    if (resizing) {
+      const delta = (jobs.hidden ? 0 : jobs.offsetHeight) - was;
+      if (delta !== 0 && scrolled > 0) list.scrollTop = scrolled + delta;
     }
   };
 
@@ -355,8 +437,9 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     const key = name.toLowerCase();
     const button = rowButtons.get(key);
     if (button === undefined) return;
-    if (current?.key === key) {
-      button.textContent = current.total > 0 ? `${current.done} of ${current.total}` : "starting…";
+    const live = running.get(key);
+    if (live !== undefined) {
+      button.textContent = live.total > 0 ? `${live.done} of ${live.total}` : "starting…";
       button.title = "downloading — press to give up on this one";
       button.dataset["state"] = "running";
       return;
@@ -374,15 +457,26 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     delete button.dataset["state"];
   };
 
-  /** One line for the whole queue: what is downloading, and how many wait. */
+  /**
+   * One line for the whole queue: what is downloading, and how many wait.
+   *
+   * THREE AT A TIME NEEDS A LINE THAT CAN SAY THREE. With one running the
+   * old sentence is unchanged. With more, the counts would make something
+   * nobody can read at a glance — `installing a… 4 of 9 · installing b… 40
+   * of 105 · installing c…` — so past the first it says how many and leaves
+   * the counts to the rows, which carry their own.
+   */
   const sayQueue = (): void => {
-    if (current === null && queue.length === 0) return;
+    if (running.size === 0 && queue.length === 0) return;
+    const first = [...running.entries()][0];
     const head =
-      current === null
+      first === undefined
         ? ""
-        : current.total > 0
-          ? `installing ${current.key}… ${current.done} of ${current.total}`
-          : `installing ${current.key}…`;
+        : running.size > 1
+          ? `installing ${running.size} scripts…`
+          : first[1].total > 0
+            ? `installing ${first[0]}… ${first[1].done} of ${first[1].total}`
+            : `installing ${first[0]}…`;
     const rest = queue.length === 0 ? "" : `${head === "" ? "" : " · "}${queue.length} waiting`;
     say(head + rest);
   };
@@ -397,7 +491,8 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     urlGo.hidden = tab !== "available";
     updateAll.hidden = tab !== "installed" || busy;
     cancelButton.hidden = !busy;
-    cancelButton.textContent = queue.length > 0 ? `cancel all (${queue.length + 1})` : "cancel";
+    cancelButton.textContent =
+      queue.length + running.size > 1 ? `cancel all (${queue.length + running.size})` : "cancel";
 
     if (tab === "installed") {
       const names = opts.installed().sort();
@@ -502,7 +597,8 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
       add.addEventListener(
         "click",
         () => {
-          if (current?.key === key) current.ac.abort();
+          const live = running.get(key);
+          if (live !== undefined) live.ac.abort();
           else if (queue.some((q) => q.name.toLowerCase() === key)) dequeue(entry.name);
           else enqueue([entry]);
         },
@@ -529,23 +625,14 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
   };
 
   /**
-   * Install or update, one at a time and saying which one.
+   * Add to the queue, and start the pump if it is not already going.
    *
-   * SEQUENTIAL, not parallel: each install is dozens of file requests
-   * through a CDN, and twenty at once is how a page gets itself rate
-   * limited into failing all of them.
-   */
-  /**
-   * Add to the queue and start it if it is not already going.
-   *
-   * A QUEUE AND NOT PARALLEL INSTALLS, which was the question and this is
-   * the answer. Running them at once would buy little — they all come from
-   * one CDN, and the concurrency that matters is already inside a single
-   * install (`install.ts`, eight files at a time, measured) — and it would
-   * cost real things: two installs of the same name share one staging
-   * directory, and the first to finish would sweep it while the second was
-   * still writing. One at a time also hands you the FIRST script while the
-   * rest are still arriving, which parallel never does.
+   * A QUEUE AND THREE WORKERS, which is a change of mind from E9-21, and
+   * the reason is at `PARALLEL` above: the listing request is where an
+   * install's time actually went, and nothing overlapped it. The hazard
+   * that argued against this — two installs of one name sharing a staging
+   * directory — is refused in `install.ts` now, where the destination is
+   * known, rather than relied upon not to happen here.
    */
   /**
    * How far a chain of needs may pull. E9-34.
@@ -555,11 +642,24 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
    * script wanting a library that wants nothing — and it means a cycle, or
    * a repository that grows one, cannot turn an install into a download of
    * the whole catalogue.
+   *
+   * E9-107 — CARRIED BY THE ENTRY RATHER THAN COUNTED PER DRAIN. It used to
+   * be one counter for the whole batch, so the THIRD script you asked for
+   * got no libraries at all however shallow its own chain was: the guard is
+   * about how far ONE chain pulls, and a counter shared by every chain in
+   * the queue cannot say that. With three installs finishing in whatever
+   * order the CDN decides, it would also have made which scripts got their
+   * libraries depend on the weather.
    */
   const NEED_DEPTH = 2;
-  let needDepth = 0;
+  /** How deep in a chain of needs each queued name sits. */
+  const needDepthOf = new Map<string, number>();
 
-  const enqueue = (entries: readonly CatalogEntry[], neededBy?: string): void => {
+  const enqueue = (
+    entries: readonly CatalogEntry[],
+    neededBy?: string,
+    depth = 0,
+  ): void => {
     // NOTHING IS CLEARED ON A NEW REQUEST. The first draft wiped finished
     // rows whenever the queue was idle, which read as the list losing its
     // history: a small script finishes between two clicks, so every click
@@ -567,9 +667,10 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     // the record of this visit, trimmed from the front below.
     for (const e of entries) {
       const key = e.name.toLowerCase();
-      if (current?.key === key) continue;
+      if (running.has(key)) continue;
       if (queue.some((q) => q.name.toLowerCase() === key)) continue;
       queue.push(e);
+      needDepthOf.set(key, depth);
       if (jobFor(e.name) === undefined) {
         const job: Job = { name: e.name, state: "queued", done: 0, total: 0 };
         if (neededBy !== undefined) job.needed = neededBy;
@@ -578,7 +679,10 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     }
     drawJobs();
     draw();
-    if (!busy) void run();
+    // Either start the drain, or give the one already running another worker
+    // for what was just added.
+    if (busy) topUp?.();
+    else void run();
   };
 
   /** Take it out of the queue again. Only possible before it starts. */
@@ -600,98 +704,131 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     const engines: string[] = [];
     const failed: string[] = [];
     let cancelled = false;
-    while (queue.length > 0) {
-      const entry = queue.shift()!;
-      const ac = new AbortController();
-      current = { key: entry.name.toLowerCase(), done: 0, total: 0, ac };
-      const job = jobFor(entry.name);
-      if (job !== undefined) job.state = "running";
-      drawJobs();
-      draw();
-      sayQueue();
-      try {
-        const r = await opts.install(entry, ac.signal, (done, total) => {
-          // THE COUNT, not a spinner. "47 of 112" is the difference between
-          // waiting and wondering whether it has stopped. Only the one row
-          // and the one line are repainted: redrawing the whole list a
-          // hundred times would take the scroll position with it.
-          if (current !== null) {
-            current.done = done;
-            current.total = total;
+    // THREE WORKERS OVER ONE QUEUE, which is the whole of the change here:
+    // the body below is what it always was, and `queue.shift()` is still
+    // what decides the order.
+    const pump = async (): Promise<void> => {
+      while (queue.length > 0) {
+        const entry = queue.shift()!;
+        const ac = new AbortController();
+        running.set(entry.name.toLowerCase(), { done: 0, total: 0, ac });
+        const job = jobFor(entry.name);
+        if (job !== undefined) job.state = "running";
+        drawJobs();
+        draw();
+        sayQueue();
+        try {
+          const r = await opts.install(entry, ac.signal, (done, total) => {
+            // THE COUNT, not a spinner. "47 of 112" is the difference between
+            // waiting and wondering whether it has stopped. Only the one row
+            // and the one line are repainted: redrawing the whole list a
+            // hundred times would take the scroll position with it.
+            const live = running.get(entry.name.toLowerCase());
+            if (live !== undefined) {
+              live.done = done;
+              live.total = total;
+            }
+            if (job !== undefined) {
+              job.done = done;
+              job.total = total;
+            }
+            drawJobs();
+            paintRow(entry.name);
+            sayQueue();
+          });
+          ok++;
+          if (job !== undefined) {
+            job.state = "done";
+            job.engine = r.needsReload;
+          }
+          log(`maiden: installed ${entry.name} — ${r.files} files${leftOut(r.skipped)}`);
+          // E9-32. ASKED HERE, while the tree is in the state the install
+          // left it, and asked with the name the INSTALLER chose: it
+          // lower-cases the folder, and `needsOf` looks for that folder.
+          const short = r.name;
+          const needs = opts.needs?.(short, catalog?.entries ?? []) ?? [];
+          if (needs.length > 0) {
+            log(`maiden: ${sayNeeds(short, needs)}`);
+            // E9-34 — FETCHED, NOT OFFERED.
+            //
+            // A library a script cannot run without is not a choice to put
+            // in front of somebody: the answer is always yes, and the
+            // question is only legible to a reader who already knows what
+            // `mx.synths` is. So it goes into the same queue, with the
+            // reason beside it in the strip, and `remove` on the installed
+            // tab undoes it like anything else.
+            //
+            // The DEPTH is the guard rather than a confirmation: a chain
+            // deeper than two is a repository that has grown a cycle, not a
+            // dependency somebody meant.
+            const libs = needs
+              .map((n) => n.entry)
+              .filter((e): e is CatalogEntry => e !== null)
+              .filter((e) => !opts.installed().some((n) => n.toLowerCase() === e.name.toLowerCase()));
+            const mine = needDepthOf.get(entry.name.toLowerCase()) ?? 0;
+            if (libs.length > 0 && mine < NEED_DEPTH) {
+              enqueue(libs, short, mine + 1);
+            }
+            // Whatever is left after that — an engine with no script to
+            // name — stays on screen, because nothing can be done about it
+            // automatically and saying so is the whole value.
+            const rest = needs.filter((n) => n.entry === null);
+            if (rest.length > 0) pending.set(short, rest);
+            else pending.delete(short);
+          } else {
+            pending.delete(short);
+          }
+        } catch (e) {
+          const err = e as Error;
+          if (err.name === "AbortError") {
+            // CANCEL STOPS THIS ONE, NOT THE QUEUE — unless the queue was
+            // emptied too, which is what the toolbar's button does. Giving up
+            // on a script that is taking too long should not throw away the
+            // four you asked for after it.
+            if (job !== undefined) job.state = "cancelled";
+            log(`maiden: ${entry.name} cancelled`);
+            if (queue.length === 0) cancelled = true;
+            continue;
           }
           if (job !== undefined) {
-            job.done = done;
-            job.total = total;
+            job.state = "failed";
+            job.why = err.message;
           }
+        } finally {
+          running.delete(entry.name.toLowerCase());
           drawJobs();
-          paintRow(entry.name);
-          sayQueue();
-        });
-        ok++;
-        if (job !== undefined) {
-          job.state = "done";
-          job.engine = r.needsReload;
         }
-        log(`maiden: installed ${entry.name} — ${r.files} files${leftOut(r.skipped)}`);
-        // E9-32. ASKED HERE, while the tree is in the state the install
-        // left it, and asked with the name the INSTALLER chose: it
-        // lower-cases the folder, and `needsOf` looks for that folder.
-        const short = r.name;
-        const needs = opts.needs?.(short, catalog?.entries ?? []) ?? [];
-        if (needs.length > 0) {
-          log(`maiden: ${sayNeeds(short, needs)}`);
-          // E9-34 — FETCHED, NOT OFFERED.
-          //
-          // A library a script cannot run without is not a choice to put
-          // in front of somebody: the answer is always yes, and the
-          // question is only legible to a reader who already knows what
-          // `mx.synths` is. So it goes into the same queue, with the
-          // reason beside it in the strip, and `remove` on the installed
-          // tab undoes it like anything else.
-          //
-          // The DEPTH is the guard rather than a confirmation: a chain
-          // deeper than two is a repository that has grown a cycle, not a
-          // dependency somebody meant.
-          const libs = needs
-            .map((n) => n.entry)
-            .filter((e): e is CatalogEntry => e !== null)
-            .filter((e) => !opts.installed().some((n) => n.toLowerCase() === e.name.toLowerCase()));
-          if (libs.length > 0 && needDepth < NEED_DEPTH) {
-            needDepth++;
-            enqueue(libs, short);
-          }
-          // Whatever is left after that — an engine with no script to
-          // name — stays on screen, because nothing can be done about it
-          // automatically and saying so is the whole value.
-          const rest = needs.filter((n) => n.entry === null);
-          if (rest.length > 0) pending.set(short, rest);
-          else pending.delete(short);
-        } else {
-          pending.delete(short);
-        }
-      } catch (e) {
-        const err = e as Error;
-        if (err.name === "AbortError") {
-          // CANCEL STOPS THIS ONE, NOT THE QUEUE — unless the queue was
-          // emptied too, which is what the toolbar's button does. Giving up
-          // on a script that is taking too long should not throw away the
-          // four you asked for after it.
-          if (job !== undefined) job.state = "cancelled";
-          log(`maiden: ${entry.name} cancelled`);
-          if (queue.length === 0) cancelled = true;
-          continue;
-        }
-        if (job !== undefined) {
-          job.state = "failed";
-          job.why = err.message;
-        }
-      } finally {
-        current = null;
-        drawJobs();
       }
+    };
+    // TOPPED UP RATHER THAN STARTED THREE AT A TIME, and the difference is
+    // not academic. Each click enqueues ONE entry — so three workers started
+    // at the first click find the queue already empty, two of them return at
+    // once, and the five rows clicked after that are drained by the one
+    // survivor. MEASURED exactly that way in the page before this existed:
+    // six rows clicked, peak concurrency one, and a change that did nothing
+    // while every test passed.
+    //
+    // So workers are added whenever there is work for them — here and from
+    // `enqueue`, which is how a click, and a dependency discovered half way
+    // through, both join the batch already running.
+    const workers = new Set<Promise<void>>();
+    const addWorkers = (): void => {
+      while (workers.size < PARALLEL && queue.length > 0) {
+        const p = pump().finally(() => void workers.delete(p));
+        workers.add(p);
+      }
+    };
+    topUp = addWorkers;
+    addWorkers();
+    // The drain is over when nobody is working, not when the queue is empty:
+    // the last worker is still writing a script into the tree.
+    while (workers.size > 0) {
+      await Promise.race([...workers]);
+      addWorkers();
     }
+    topUp = null;
     busy = false;
-    needDepth = 0;
+    needDepthOf.clear();
     drawJobs();
     draw();
     // THE SUMMARY IS READ OFF THE STRIP, not off this call's own counters,
@@ -795,7 +932,9 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
       // between it and a row's own button: one gives up on a script, this
       // gives up on the lot.
       queue = [];
-      current?.ac.abort();
+      // All of them, not the first: with three downloading, aborting one
+      // would leave two running under a button that said "cancel all".
+      for (const live of running.values()) live.ac.abort();
       urlRun?.abort();
       say("cancelling…");
     },
@@ -869,6 +1008,26 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
 
   return {
     element: root,
+    async want(names, neededBy) {
+      // The catalogue may never have been opened, so this is the one place
+      // it is fetched for a reason other than somebody looking at it.
+      await load();
+      const missed: string[] = [];
+      const found: CatalogEntry[] = [];
+      for (const n of names) {
+        const key = n.toLowerCase();
+        const entry =
+          catalog?.entries.find((e) => e.name.toLowerCase() === key) ??
+          offCatalogueEntry(key) ??
+          undefined;
+        if (entry === undefined) missed.push(n);
+        else found.push(entry);
+      }
+      // Depth 1, not 0: this IS a dependency, and what IT needs may be
+      // fetched in turn, but a chain from here is bounded like any other.
+      if (found.length > 0) enqueue(found, neededBy, 1);
+      return missed;
+    },
     active(on) {
       if (!on) return;
       // THE CATALOGUE IS READ FOR BOTH TABS, which maiden also does on

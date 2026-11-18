@@ -315,10 +315,21 @@ $steps += [pscustomobject]@{
   Makes = (Join-Path $script:Vendor "sc-plugins-extra\PulsePTR")
   Why = "four single-plugin repositories: the PTR oscillators and ByteBeat"; Dl = $null
 }
-$steps += [pscustomobject]@{
-  Kind = "fengari"; Name = "fengari"
-  Makes = (Join-Path $script:Vendor "fengari\src")
-  Why = "the Lua VM, from npm and then patched to 64-bit integers"; Dl = $null
+# E9-118 — fengari was a step here, copied from node_modules and patched to
+# 64-bit integers. It is not a step any more: `tools/lua53/build.sh` fetches
+# Lua 5.3.6 itself, by URL and sha256, and nothing resolves `fengari` in the
+# page. One tarball with one hash and no patch does not need a runbook.
+#
+# AND THE TREE IT LEFT BEHIND IS REMOVED HERE, because deleting the step did
+# not delete the folder. A machine that fetched fengari before E9-118 still
+# has `third_party/fengari`, PINS.md no longer names it, and `pins:check`
+# therefore reports a tree it does not know about and fails — on a machine
+# where nothing is wrong except that something was taken away. Nothing reads
+# it: no alias in `vite.config.ts`, no `patches/fengari.patch`, no import.
+$fengariLeftover = Join-Path $script:Vendor "fengari"
+if (Test-Path $fengariLeftover) {
+  Say "fengari: left over from before E9-118, and nothing reads it — removing" "Yellow"
+  if (-not $DryRun) { Remove-Item -Recurse -Force $fengariLeftover }
 }
 
 # --- patch an existing tree, and nothing else -------------------------------
@@ -631,32 +642,6 @@ foreach ($s in $steps) {
     } finally {
       Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
     }
-  }
-
-  elseif ($s.Kind -eq "fengari") {
-    # FROM npm AND NOT FROM GIT, which is what PINS.md says it is: the
-    # published package with `patches/fengari.patch` applied. The patch
-    # makes integers 64-bit BigInt inside the VM, because norns' Lua has
-    # 64-bit integers and fengari's were 32-bit — `1000000 * 1000000` came
-    # back as -727379968 and nothing said so.
-    $from = Join-Path $script:Repo "node_modules\fengari"
-    if (-not (Test-Path $from)) {
-      Say "no node_modules/fengari. Run: npm ci" "Red"
-      exit 1
-    }
-    $bash = Find-GitBash
-    if ($null -eq $bash) {
-      Say 'no Git Bash, and patch comes with it. Run: .\tools\setup-windows.ps1 -Role build' 'Red'
-      exit 1
-    }
-    $dst = Join-Path $script:Vendor "fengari"
-    if (Test-Path $dst) { Remove-Item -Recurse -Force $dst }
-    Copy-Item $from $dst -Recurse -Force
-    $nm = Join-Path $dst "node_modules"
-    if (Test-Path $nm) { Remove-Item -Recurse -Force $nm }
-    Say "patch -p0 < patches/fengari.patch" "DarkGray"
-    & $bash -c "cd '$($dst -replace '\\','/')' && patch -p0 < '$(($script:Repo -replace '\\','/'))/patches/fengari.patch'"
-    if ($LASTEXITCODE -ne 0) { Say "fengari: the patch did not apply" "Red"; exit 1 }
   }
 
   $took = [int]((Get-Date) - $started).TotalSeconds

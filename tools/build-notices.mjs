@@ -169,13 +169,19 @@ const COMPONENTS = [
     licence: "softcut-lib/LICENSE.txt",
   },
   {
-    what: "fengari",
-    who: "Benoit Giannangeli, Daurnimator",
+    // E9-117 — this was fengari, a Lua written in JavaScript, until the
+    // interpreter became the interpreter: PUC Lua itself, compiled from
+    // source by `tools/lua53/build.sh`. 5.3 because norns is 5.3, which is
+    // the reason fengari was chosen in the first place and the reason this
+    // could replace it. `patches/fengari.patch` carried 64-bit integers
+    // into a VM that had none; these are native.
+    what: "Lua",
+    who: "Lua.org, PUC-Rio",
     spdx: "MIT",
-    url: "https://github.com/fengari-lua/fengari",
-    pin: "0.1.5, with patches/fengari.patch — 64-bit integers, as norns' Lua has",
-    ships: "the Lua virtual machine every script runs in",
-    licence: "fengari/LICENSE",
+    url: "https://www.lua.org/",
+    pin: "5.3.6, sha256 fc5fd69bb8736323f026672b1b7235da613d7177e72558893a0bdcd320466d60",
+    ships: "the Lua virtual machine every script runs in, as wasm",
+    licence: "lua53/doc/readme.html",
   },
   {
     what: "cairo",

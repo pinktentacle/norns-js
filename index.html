@@ -47,6 +47,28 @@
   * { box-sizing: border-box; }
   body {
     margin: 0; padding: 24px 16px 40px; background: var(--bg); color: var(--text);
+    /*
+      E9-110 — THE RAIL IS FIXED, AND THE PAGE HAS TO LEAVE IT ROOM.
+
+      Measured on a phone at 375 CSS px: the norns ran to x=359 and the
+      rail starts at x=337, so twenty-two pixels of the instrument were
+      under the buttons — the edge where E1 and E3 sit on both bodies, and
+      where the resize handle is in arrange mode. The grid lost twelve.
+
+      It is not a phone bug, it is a NARROW-WINDOW bug, and the width where
+      it starts is arithmetic rather than taste. The rail is `right: 10px`
+      and 28px wide, so it owns the last 38px. The stage is
+      `min(1100px, 100%)` of the content box and is centred, so its right
+      edge is 16 + (W-32+1100)/2 from the left — which clears 38px only
+      once W is 1176 or more. Every window narrower than that had the same
+      overlap, less of it.
+
+      So the gutter is unconditional: the alternative is a breakpoint that
+      has to be recomputed whenever the stage's 1100 or the rail's width
+      moves, and the cost on a desk is the content sitting fifteen pixels
+      left of centre.
+    */
+    padding-right: 46px;
     font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     display: flex; flex-direction: column; align-items: center; gap: 22px;
   }
@@ -165,7 +187,7 @@
     on the top edge and are drawn above it.
   */
   .norns {
-    position: relative; width: 100%; aspect-ratio: 437 / 285;
+    position: relative; width: 100%;
     /*
       A container, so the control labels can be sized as a fraction of the
       DEVICE rather than of the page. The norns is resizable and lives at
@@ -315,7 +337,7 @@
     canvas inside it is the real 128x64 framebuffer.
   */
   .screen-well {
-    position: absolute; left: 8.2%; top: 56.5%; width: 43.7%; aspect-ratio: 191 / 99;
+    position: absolute;
     background: #0a0a0c; border-radius: 2px;
     box-shadow:
       inset 0 0 0 1px rgba(0,0,0,.55),
@@ -329,6 +351,75 @@
     smear. The well centres whatever it produces.
   */
   .screen-well canvas { display: block; }
+
+
+  /*
+    E9-108 — TWO BODIES, AND THE POSITIONS LIVE HERE RATHER THAN INLINE.
+    ---------------------------------------------------------------------
+
+    There are two norns. The official one is a wide aluminium box with the
+    screen in its lower left and the controls up the right-hand side; the
+    SHIELD is a Raspberry Pi hat in a nearly square case, with the screen
+    across the middle, K1 and E1 above it and K2/K3/E2/E3 below. Both are
+    real norns, both run the same scripts, and which one a person has is
+    not something this page can know.
+
+    IT MATTERS MOST ON A PHONE, which is where it was asked for (user, on a
+    Pixel 9 Pro): a phone gives the device its WIDTH and has height to
+    spare, and at one width the shield gives
+
+        the screen    69.2% of the body against 43.7%   — 1.58x wider
+        an encoder    16.6%              against  9.6%  — 1.73x bigger
+        a key          9.1%              against  6.6%  — 1.38x bigger
+
+    in exchange for a body that is squarer (1.12 against 1.53) and so
+    taller. On a touch screen that trade is the right way round twice over:
+    the screen you read is bigger and the knobs you grab are bigger.
+
+    MEASURED, NOT DRAWN. The official one's numbers were read off monome's
+    norns-grey.jpeg and are unchanged. The shield's were read the same way
+    from a photograph of one, by finding the case edges and then the dark
+    blobs inside them, and taking each circle's centre from the row where
+    its dark run is WIDEST — the bounding box of a knob in a photograph is
+    stretched by its own drop shadow, its equator is not. The three
+    encoders are then given ONE diameter and the three keys another,
+    because on the hardware they are identical and a photograph taken from
+    above is not: the far ones measured 15.0% and 16.3% against the near
+    one's 18.4%, which is parallax and not three different knobs.
+
+    They are CSS rather than inline `style` attributes now because there
+    are two of them. An inline style wins over any rule in here, so with
+    the positions on the elements the second layout could only have been
+    written with `!important` on every line.
+  */
+  .norns[data-panel="norns"] { aspect-ratio: 437 / 285; }
+  .norns[data-panel="norns"] .screen-well {
+    left: 8.2%; top: 56.5%; width: 43.7%; aspect-ratio: 191 / 99;
+  }
+  .norns[data-panel="norns"] #k1 { --d: 6.6%; left: 11.4%; top: 40.1%; }
+  .norns[data-panel="norns"] #e1 { --d: 9.6%; left: 22.6%; top: 40.1%; }
+  .norns[data-panel="norns"] #e2 { --d: 9.6%; left: 70.5%; top: 66.5%; }
+  .norns[data-panel="norns"] #e3 { --d: 9.6%; left: 86.5%; top: 66.5%; }
+  .norns[data-panel="norns"] #k2 { --d: 6.6%; left: 62.4%; top: 86.2%; }
+  .norns[data-panel="norns"] #k3 { --d: 6.6%; left: 78.5%; top: 86.2%; }
+
+  .norns[data-panel="shield"] { aspect-ratio: 1182 / 1056; }
+  .norns[data-panel="shield"] .screen-well {
+    left: 15.6%; top: 31.3%; width: 69.2%; aspect-ratio: 41 / 20;
+  }
+  .norns[data-panel="shield"] #k1 { --d: 9.1%; left: 65.7%; top: 13.3%; }
+  .norns[data-panel="shield"] #e1 { --d: 16.6%; left: 83.0%; top: 13.3%; }
+  .norns[data-panel="shield"] #e2 { --d: 16.6%; left: 59.6%; top: 86.8%; }
+  .norns[data-panel="shield"] #e3 { --d: 16.6%; left: 80.2%; top: 86.8%; }
+  .norns[data-panel="shield"] #k2 { --d: 9.1%; left: 16.1%; top: 86.8%; }
+  .norns[data-panel="shield"] #k3 { --d: 9.1%; left: 32.0%; top: 86.8%; }
+  /*
+    A shield has no row of jacks across its top edge: it is a hat on a Pi,
+    and what comes out of the top of the case in the photograph is one USB
+    cable. Drawing five of somebody else's sockets on it would be drawing a
+    device that does not exist.
+  */
+  .norns[data-panel="shield"] .jacks { display: none; }
 
   /* --------------------------------------------------------------- devices */
 
@@ -632,6 +723,7 @@
   .mdn-remote { color: #6f7276; border: 1px solid #343a3f; }
   .mdn-mine { color: #1D1F21; background: #B5BD68; }
 
+
   /* The repl activity has no file tree, so the sidebar column goes. */
   #maidenpanel[data-activity="repl"], #maidenpanel[data-side="off"] {
     grid-template-columns: 44px 1fr;
@@ -785,7 +877,24 @@
   }
   .mdn-proj-job-x:hover { border-color: #6a6e76; }
   .mdn-proj-note { padding: 6px 12px; color: #6f7276; font-size: 11px; min-height: 14px; }
-  .mdn-proj-list { flex: 1 1 auto; overflow: auto; padding: 0 12px 16px; }
+  /*
+    E9-110 — `min-height: 0` IS WHY THE SUMMARY SAT ON TOP OF THE FIRST ROW.
+
+    A flex item will not shrink below its content by default, so the
+    scroller refused to give up height — and the siblings above it, which
+    have no such content to defend, were squeezed instead. The catalogue's
+    own summary line is the tallest of them on a phone, where
+    `355 of 355 — sequencer 133 · midi 121 · grid 115 · looper 41` wraps to
+    three lines: it was squashed to one line's worth of box and the other
+    two were painted over the list. Reported with a screenshot.
+
+    `min-height: 0` lets the scroller do what a scroller is for, and the
+    lines above it keep their height.
+  */
+  .mdn-proj-list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 12px 16px; }
+  .mdn-proj-tabs, .mdn-proj-bar, .mdn-proj-jobs, .mdn-proj-note, .mdn-proj-ask {
+    flex: 0 0 auto;
+  }
   .mdn-proj-row {
     display: flex; align-items: center; gap: 8px;
     padding: 6px 0; border-bottom: 1px solid #25282c;
@@ -811,6 +920,74 @@
   .mdn-proj-del { color: #CC6666; }
   .mdn-proj-empty { padding: 16px 0; color: #6f7276; font-size: 11px; }
 
+  /*
+    E9-110 — MAIDEN ON A PHONE.
+    ----------------------------------------------------------------------
+
+    Reported with four screenshots from a Pixel 9 Pro (user, 2026-11-18).
+    Measured at 375 CSS px, which is what the grid above gives:
+
+        rail  44px        the activity rail
+        tree 229px        the file tree
+        edit 101px        the editor
+
+    A hundred pixels is not an editor. The tree is a FIXED 230px column in
+    a three-column grid, so on a narrow screen it takes everything the rail
+    left and the thing you came to look at gets the remainder.
+
+    So below 720px the tree stops being a column and becomes an overlay
+    over the editor: the full height, most of the width, and gone again as
+    soon as you have chosen a file — which is the one gesture a phone
+    makes easy and a keyboard shortcut (Ctrl-B) does not.
+
+    720 rather than a phone's own width: the three columns need about 44 +
+    230 + 420 to leave an editor worth the name, and a narrow window on a
+    desk is no better off than a phone.
+  */
+  @media (max-width: 720px) {
+    #maidenpanel { grid-template-columns: 44px 1fr; }
+    #maidenpanel .mdn-side {
+      position: absolute; left: 44px; top: 0; bottom: 0;
+      width: min(300px, calc(100% - 44px)); z-index: 3;
+      box-shadow: 10px 0 24px -10px rgba(0,0,0,.8);
+    }
+    /* `data-side` is maiden's own toggle (Ctrl-B); the button is new. */
+    #maidenpanel[data-side="off"] .mdn-side { display: none; }
+
+    /*
+      THE CATALOGUE ROW, which was three columns of text and three controls
+      on one line. At this width the description's ellipsis ran under
+      `details code install` and a script with a note had the note painted
+      across them.
+
+      Two lines instead: who and what above, what you can do with it below.
+    */
+    .mdn-proj-row { flex-wrap: wrap; gap: 4px 8px; }
+    /*
+      `0 0 100%` and not `1 1 100%`: a basis of a whole line that is still
+      allowed to SHRINK is not a line of its own, and the links came up
+      beside the description to share one. Measured as `details` sitting at
+      the end of the description and `code` alone underneath it.
+    */
+    .mdn-proj-left { flex: 0 0 100%; flex-wrap: wrap; }
+    .mdn-proj-desc { flex: 0 0 100%; white-space: normal; }
+    .mdn-proj-row > .mdn-proj-link, .mdn-proj-row > .mdn-proj-act { margin-left: 0; }
+    .mdn-proj-row > .mdn-proj-act { margin-left: auto; }
+
+    /* The toolbar wraps rather than squeezing the search box to nothing. */
+    .mdn-proj-bar { flex-wrap: wrap; }
+    .mdn-proj-search { width: 100%; }
+    .mdn-proj-url { flex: 1 1 60%; }
+
+    /* A job's name is `min-width: 9em`, which is most of a phone's width. */
+    .mdn-proj-job { flex-wrap: wrap; gap: 2px 8px; }
+    .mdn-proj-job-name { min-width: 0; flex: 1 1 auto; }
+
+    /* The tree's own tools, which are seven buttons on one line. */
+    .mdn-side-head { flex-wrap: wrap; }
+  }
+
+
   /* The configure activity. */
   .mdn-config { flex: 1 1 auto; overflow: auto; padding: 18px 20px; max-width: 560px; }
   .mdn-config[hidden] { display: none; }
@@ -824,7 +1001,25 @@
     background: #e0a040; color: #1D1F21; border-color: #a97c2b;
   }
   .mdn-config-note { color: #6f7276; font-size: 11px; max-width: 42em; margin-top: 18px; }
-  .mdn-tools { margin-left: auto; display: flex; align-items: center; padding: 0 6px; }
+  .mdn-tools { margin-left: auto; display: flex; align-items: center; gap: 6px; padding: 0 6px; }
+  /*
+    E9-110 - the file tree's button. Only on a screen too narrow for three
+    columns: where the tree is a column it is always there, and a button
+    beside it saying `files` would be a button that lies about what it
+    does.
+  */
+  .mdn-files {
+    display: none;
+    font: inherit; font-size: 11px; padding: 3px 10px; border-radius: 3px; cursor: pointer;
+    color: #C5C8C6; background: #2b2e31; border: 1px solid #34383c;
+  }
+  .mdn-files[aria-pressed="true"] { color: #e0a040; border-color: #e0a040; }
+  @media (max-width: 720px) {
+    .mdn-files { display: block; }
+    /* It belongs with the file it opens, so it goes first in the row. */
+    .mdn-tools { margin-left: 0; width: 100%; }
+    .mdn-play { margin-left: auto; }
+  }
   .mdn-play {
     display: flex; align-items: center; gap: 5px;
     font: inherit; font-size: 11px; padding: 3px 10px;
@@ -1323,27 +1518,30 @@
   <div class="stage" id="stage" data-arrange="false">
 
   <!--
-    norns. The arrangement is the hardware's: K1 and E1 above the screen on
-    the left, the screen lower left, E2 and E3 upper right with K2 and K3
-    below and between them. Every number here is a percentage of the body,
-    read off monome's own norns-grey.jpeg -- the three encoders are the same
-    size as each other (42px in that photograph) and so are the three keys
-    (29px), which is not obvious by eye and was wrong before it was
-    measured.
+    norns. WHICH norns is `data-panel`, and both arrangements are the
+    hardware's own — see the two blocks of rules above for the measurements
+    and for why they are not inline here. The attribute is written again by
+    main.ts from the stored setting; `shield` is in the markup so that the
+    first paint is already the one most people will keep.
+
+    The controls are in DOM order of the official body (K1, E1, screen, E2,
+    E3, K2, K3) and the shield moves them with `left` and `top`. Tab order
+    follows the DOM rather than the picture either way, and K1..K3 then
+    E1..E3 is the order the keyboard bindings are in.
   -->
   <div class="device" id="nornsbox">
-    <div class="norns" id="norns">
+    <div class="norns" id="norns" data-panel="shield">
       <div class="jacks"><i></i><i></i><i></i><i></i><i></i></div>
 
-      <div class="ctl key" id="k1" style="--d:6.6%; left:11.4%; top:40.1%" title="K1"></div>
-      <div class="ctl enc" id="e1" style="--d:9.6%; left:22.6%; top:40.1%" title="E1"></div>
+      <div class="ctl key" id="k1" title="K1"></div>
+      <div class="ctl enc" id="e1" title="E1"></div>
 
       <div class="screen-well" id="screen"></div>
 
-      <div class="ctl enc" id="e2" style="--d:9.6%; left:70.5%; top:66.5%" title="E2"></div>
-      <div class="ctl enc" id="e3" style="--d:9.6%; left:86.5%; top:66.5%" title="E3"></div>
-      <div class="ctl key" id="k2" style="--d:6.6%; left:62.4%; top:86.2%" title="K2"></div>
-      <div class="ctl key" id="k3" style="--d:6.6%; left:78.5%; top:86.2%" title="K3"></div>
+      <div class="ctl enc" id="e2" title="E2"></div>
+      <div class="ctl enc" id="e3" title="E3"></div>
+      <div class="ctl key" id="k2" title="K2"></div>
+      <div class="ctl key" id="k3" title="K3"></div>
     </div>
     <i class="size" title="resize"></i>
   </div>
@@ -1557,10 +1755,6 @@
     </div>
   </div>
 
-  <!--
-    The `process` and `Buffer` globals fengari needs before it will load are
-    installed by src/lua/browser-globals.ts, imported first by src/main.ts.
-  -->
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

@@ -59,9 +59,15 @@ export const LUA_PATCHES: readonly LuaPatch[] = [
       '      local out = {}' + '\n' +
       "      for i = 1, select('#', ...) do" + '\n' +
       '        local s = tostring((select(i, ...)))' + '\n' +
+      '        -- E9-117: two spellings, because two interpreters. fengari' + '\n' +
+      '        -- wrote Infinity; PUC Lua writes inf, which is what hardware' + '\n' +
+      '        -- writes too. Neither one is a Lua literal.' + '\n' +
       '        s = s:gsub("= %-Infinity", "= -math.huge")' + '\n' +
       '        s = s:gsub("= Infinity", "= math.huge")' + '\n' +
+      '        s = s:gsub("= %-inf", "= -math.huge")' + '\n' +
+      '        s = s:gsub("= inf", "= math.huge")' + '\n' +
       '        s = s:gsub("= NaN", "= 0/0")' + '\n' +
+      '        s = s:gsub("= %-?nan", "= 0/0")' + '\n' +
       '        out[i] = s' + '\n' +
       '      end' + '\n' +
       '      return _io.write(table.unpack(out))' + '\n' +

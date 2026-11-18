@@ -15,15 +15,7 @@ const COI_HEADERS = {
   "Cross-Origin-Embedder-Policy": "require-corp",
 };
 
-import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
-
-// Fengari is a Node-shaped CommonJS package and reaches four builtins, each
-// from one or two lines. These aliases hand it browser versions that fail
-// loudly rather than plausibly. See src/lua/shims/README.md for why this
-// rather than the authors' `fengari-web` bundle.
-const shim = (name: string) =>
-  fileURLToPath(new URL(`./src/lua/shims/${name}.ts`, import.meta.url));
 
 /**
  * E7-08 — a production build without a source URL is refused.
@@ -76,43 +68,17 @@ const requireSourceUrl = (): { name: string; config: (c: unknown, env: { command
 
 export default defineConfig({
   plugins: [requireSourceUrl()],
-  resolve: {
-    alias: {
-      /**
-       * E9-64 — the Lua runtime is the VENDORED fengari, not the published
-       * one.
-       *
-       * norns' integers are 64-bit and fengari's were 32-bit, which is not
-       * a detail: `1000000 * 1000000` came back as -727379968 and nothing
-       * said so, and `fibonacci` built an eighteen-digit number in a loop
-       * that could therefore never end. `third_party/fengari` is the npm
-       * package with `patches/fengari.patch` applied — BigInt integers
-       * inside the VM, JS numbers across the C API. See
-       * `spike/lua64/README.md` for what it costs and what it fixes.
-       *
-       * It is a DIRECTORY with the package's own package.json, not the
-       * `src/` inside it, so the module id resolves exactly as the npm one
-       * did and `optimizeDeps` still sees a CommonJS package to convert.
-       */
-      fengari: fileURLToPath(new URL("./third_party/fengari", import.meta.url)),
-      os: shim("os"),
-      path: shim("path"),
-      fs: shim("fs"),
-      buffer: shim("buffer"),
-      // Two Node-only packages fengari pulls in for features norns never
-      // uses: `tmp` for os.tmpname and `readline-sync` for debug.debug().
-      // Replacing them here keeps the legacy `constants` module, which `tmp`
-      // reads, out of the browser bundle entirely.
-      tmp: shim("tmp"),
-      "readline-sync": shim("readline-sync"),
-      constants: shim("constants"),
-    },
-  },
+  // E9-118 — THERE IS NO `resolve.alias` ANY MORE, and that is the size of
+  // what fengari cost. It was a Node-shaped CommonJS package: one alias
+  // pointed `fengari` at the vendored copy carrying `patches/fengari.patch`,
+  // and seven more pointed `os`, `path`, `fs`, `buffer`, `tmp`,
+  // `readline-sync` and `constants` at hand-written shims under
+  // `src/lua/shims/`, which threw rather than returning something plausible.
+  // Lua 5.3 is a wasm module and reaches none of them: emscripten's glue
+  // names `fs` and `path` only inside its `ENVIRONMENT_IS_NODE` branch, and
+  // Vite externalises those on its own — MEASURED, by building with the
+  // aliases deleted before deleting them.
   define: {
-    // Fengari refers to the Node global object by name. `globalThis` is the
-    // standard spelling and exists in both environments, so this is a rename
-    // rather than a polyfill.
-    global: "globalThis",
     // WHICH BUILD AM I LOOKING AT. Not a vanity string: a copy of this runs
     // on another machine, and "the button is not there" and "there is no
     // sound" are both what an OLD build looks like. Without a stamp the only
@@ -175,5 +141,8 @@ export default defineConfig({
   test: {
     include: ["test/**/*.test.ts"],
     environment: "node",
+    // E9-117 — PUC Lua is wasm and has to be instantiated before any state
+    // is made. See the file; it is one await for the whole suite.
+    setupFiles: ["test/support/lua-up.ts"],
   },
 });

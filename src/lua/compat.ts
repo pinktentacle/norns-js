@@ -1,4 +1,4 @@
-// Two modules norns' Lua environment has and fengari's does not.
+// Two modules norns' Lua environment has and a stock 5.3 does not.
 //
 // Neither is a feature invented here. `bit32` is part of the
 // `LUA_COMPAT_5_2` layer norns' interpreter is built with — the same layer

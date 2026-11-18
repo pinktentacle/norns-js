@@ -6,10 +6,16 @@
 // loop whose condition could therefore never be true — forty-one seconds
 // of a frozen page and then `RangeError: Map maximum size exceeded`.
 //
-// `third_party/fengari` is the published package with
-// `patches/fengari.patch` applied: BigInt integers inside the VM, JS
-// numbers across the C API. `spike/lua64/README.md` has the measurements
-// and the five things that bit on the way.
+// That was fengari, and the fix was `patches/fengari.patch`: BigInt
+// integers inside the VM, JS numbers across the C API.
+// `spike/lua64/README.md` has the measurements and the five things that
+// bit on the way. Since E9-117 the interpreter is PUC Lua 5.3, whose
+// integers are 64-bit because they are a C `long long`, and the tree and
+// the patch are both gone (E9-118). THE FILE DID NOT CHANGE, which is the
+// point of it: it is a contract, not a regression test for one runtime.
+// Four of these caught a real bug in the port — `luaL_tolstring` popping
+// the value it is required to leave on the stack, so `print(nil)` came out
+// empty and `print(1, true)` lost its second argument.
 //
 // This file is the contract. Every expectation below is what Lua 5.3 on a
 // norns answers, checked against the manual rather than against the

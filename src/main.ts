@@ -4,21 +4,22 @@
 // and wires a keyboard, a mouse and a touch screen to the three keys and three
 // encoders. No audio: that is E4.
 
-// FIRST: fengari reads `process` while it initialises and a browser has
-// none. Static imports run in source order, so this installs the globals
-// before the import below pulls fengari in. This used to be an inline script
-// in index.html; it moved here when a second page needed it, because two
-// copies of a shim is two things to keep in step.
-import "./lua/browser-globals.js";
+// E9-118 — the `process` and `Buffer` globals that were installed here
+// first, before any other import, are gone. fengari read them while it
+// initialised, being a Node-shaped CommonJS package; a wasm module reads
+// nothing of the sort, and the page was BUILT AND BOOTED without them
+// before they were deleted.
 import { createHost, boot, type Host } from "./lua/host.js";
 import { loadNornsLuaWeb, loadConfigWeb } from "./lua/host-web.js";
 import menuHereLua from "./lua/norns-js/menu-here.lua?raw";
+import screenDirectLua from "./lua/norns-js/screen-direct.lua?raw";
 import { createScreen, type Screen } from "./screen/screen.js";
 import { loadScreenModuleWeb } from "./screen/screen-web.js";
 import { createScreenCanvas } from "./ui/canvas.js";
 import { createInput, type Side } from "./ui/input.js";
 import { createPadCore, readPad, type PadCore } from "./ui/gamepad.js";
 import { detect, effectiveKind, readSignals, type MachineKind } from "./ui/machine.js";
+import { startCpuMeter } from "./ui/cpu-meter.js";
 import { registerScreenImages } from "./screen/images.js";
 import { registerHardware, type Hardware } from "./norns/hardware.js";
 import { registerOsc } from "./osc/register.js";
@@ -41,6 +42,12 @@ import { createRunner } from "./editor/runner.js";
 import { installFromRepo, parseRepoUrl } from "./community/install.js";
 import { fetchAndStoreCatalogs } from "./community/maiden-catalogs.js";
 import { needsOf } from "./community/needs.js";
+import { initLua, luaVersion } from "./lua/lua.js";
+import {
+  MISSING_INCLUDE,
+  SCRIPT_LOAD,
+  readMissingInclude,
+} from "./community/missing-include.js";
 import { declareExtensions } from "./community/extensions.js";
 import { exportTree, fetchArchive, importTree, installScript } from "./fs/transfer.js";
 import { makeCallbacks } from "./norns/callbacks.js";
@@ -351,10 +358,94 @@ async function main(): Promise<void> {
     })();
   };
 
-  log("booting norns…");
+  /**
+   * E9-109 — A SCRIPT THAT CANNOT LOAD BECAUSE ANOTHER ONE IS NOT HERE.
+   *
+   * `tmi` ends at `### MISSING INCLUDE: kolor/lib/lattice` and a traceback,
+   * and nothing anywhere says that `kolor` is a catalogue script, that it
+   * is not installed, or that installing it is the cure. Reported from a
+   * phone (user, 2026-11-18).
+   *
+   * It is supposed to be installed for you and usually is — E9-32 reads a
+   * freshly installed script's includes and E9-34 fetches what they name.
+   * But that is asked ONCE, in the minute after the install, and `kolor` is
+   * 446 files: a backgrounded tab, a reload or a cancel leaves `tmi` here
+   * and `kolor` not, and nobody asks again. So it is asked again here,
+   * where the failure actually happens.
+   *
+   * THROUGH maiden's OWN QUEUE rather than a second installer, so it gets
+   * the row, the count and the cancel that every other install has, behind
+   * anything already downloading. `maiden.want` is that door.
+   *
+   * ONCE PER PATH PER SESSION. A script left in SELECT redraws and can be
+   * loaded again and again; three identical paragraphs about `kolor` would
+   * bury the one that matters.
+   */
+  let loadingScript: string | null = null;
+  const toldAbout = new Set<string>();
+
+  const watchIncludes = (line: string): void => {
+    const loaded = SCRIPT_LOAD.exec(line);
+    if (loaded !== null) {
+      // `/home/we/dust/code/tmi/tmi.lua` — the FOLDER is the script's name,
+      // and a folder can have a space in it (`get in the sea!`), so this
+      // takes the segment rather than the file's stem.
+      const parts = loaded[1]!.split("/");
+      const at = parts.indexOf("code");
+      loadingScript = at >= 0 && parts.length > at + 1 ? parts[at + 1]! : null;
+      return;
+    }
+    const missing = MISSING_INCLUDE.exec(line);
+    if (missing === null) return;
+    const path = missing[1]!;
+    if (toldAbout.has(path)) return;
+    toldAbout.add(path);
+
+    const verdict = readMissingInclude(path, loadingScript, (name) => {
+      const dir = `/home/we/dust/code/${name}`;
+      return vfs.isDir(dir) && vfs.walk(dir).length > 0;
+    });
+    log(verdict.line);
+    if (verdict.want === null || verdict.installed) return;
+
+    // Asked for, said, and reported either way. A name the catalogue has
+    // never heard of is an answer rather than a silence: it means the
+    // script wants something that is not ours to fetch.
+    const want = verdict.want;
+    void (async () => {
+      try {
+        const missed = await maiden.want([want], loadingScript ?? "a script");
+        if (missed.length > 0) {
+          log(
+            `\`${want}\` is not in the catalogue and not one of the repositories ` +
+              "this build knows by name, so it has to be installed by hand.",
+          );
+          return;
+        }
+        log(`fetching \`${want}\` — maiden has it; load the script again when it is done.`);
+      } catch (e) {
+        log(`\`${want}\` could not be fetched — ${(e as Error).message}`);
+      }
+    })();
+  };
+
+  // E9-117 — THE INTERPRETER IS WASM NOW, SO IT HAS TO BE INSTANTIATED.
+  //
+  // fengari was a JavaScript module: importing it was having it. PUC Lua
+  // 5.3 is 232 KB of wasm (`tools/lua53/build.sh`) and comes up
+  // asynchronously, which is the one line the port costs its callers.
+  //
+  // Before `createHost` rather than beside it, because every `luaL_newstate`
+  // after this point would otherwise raise — and here rather than at the top
+  // of `main`, so the lines above it still run while it instantiates.
+  await initLua();
+  log(`booting norns… (${luaVersion()})`);
   const host: Host = createHost({
     sources: nornsSources,
-    onPrint: (l) => log(l),
+    onPrint: (l) => {
+      log(l);
+      watchIncludes(l);
+    },
     vfs,
     // The OTHER door. `registerFs` below covers what norns core asks for
     // through `_norns.execute`; this one covers a script's own `os.execute`
@@ -435,6 +526,21 @@ async function main(): Promise<void> {
   // slightly wrong is better than no norns at all.
   const menuErr = host.run(menuHereLua, "=(norns-js menu)");
   if (menuErr) log(`menu notes: ${menuErr}`);
+
+  // E9-112 — AFTER `core/screen` EXISTS AND BEFORE ANY SCRIPT RUNS.
+  //
+  // 31 of norns' 49 `Screen.*` functions are one-line pass-throughs to
+  // `_norns`, which on hardware costs fifty nanoseconds and here costs
+  // half the call. See the file for the measurements and for the four
+  // that are deliberately left alone.
+  //
+  // Here rather than in a patch to `third_party/`: `src/lua/patches.ts`
+  // is for upstream code that CRASHES, by its own stated bar, and this is
+  // an optimisation. An assignment after the module has loaded is also
+  // the reversible version — delete the import and the wrappers come
+  // back.
+  const directErr = host.run(screenDirectLua, "=(norns-js screen)");
+  if (directErr) log(`screen: ${directErr}`);
 
   const cb = makeCallbacks(host.L);
   // The callbacks exist only after boot, and the OSC relay may deliver
@@ -541,6 +647,32 @@ async function main(): Promise<void> {
    *
    * `refresh` is `norns.none` outside play mode, so this costs one Lua
    * call into an empty function for the whole time the menu is up.
+   *
+   * SIXTY IS MATRON'S OWN NUMBER, and E9-113 went and read it rather than
+   * leaving it as ours. `matron/src/hardware/screen/ssd1322.cc` runs a
+   * thread whose whole body is
+   *
+   *     static struct timespec ts = { .tv_sec = 0, .tv_nsec = 16666666 };
+   *     while (spidev_buffer) {
+   *       if (display_dirty) { ssd1322_refresh(); display_dirty = false; }
+   *       event_post(event_data_new(EVENT_SCREEN_REFRESH));
+   *       clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
+   *     }
+   *
+   * — 16.666 ms, posted every time round and NOT only when the display
+   * was dirty, and `w_handle_screen_refresh` calls the Lua global
+   * `refresh`. So this interval is a copy of that loop and the rate is not
+   * a choice to be tuned. `test/refresh-rate.test.ts` reads that file and
+   * fails if the two ever disagree.
+   *
+   * WHAT IT COSTS, measured (`docs/13-CPU.md` §4): 0.52 ms/s with no
+   * `refresh` defined, which is 38 of the 40 bundled scripts, and 19.5
+   * ms/s for `dreamsequence`, whose `refresh` is `redraw()` and nothing
+   * else. Halving the rate was considered and declined: it would buy
+   * about four per cent of a phone's core on one script in twenty, and
+   * the four per cent comes out of a frame rate that script's author
+   * chose on purpose — the commented-out line above it in
+   * `dreamsequence.lua` throttles it to 20 fps and is commented out.
    */
   const REFRESH_MS = 1000 / 60;
   let refreshSaid = false;
@@ -586,6 +718,37 @@ async function main(): Promise<void> {
   //
   // Created BEFORE the input, because the input reads the keymap out of it.
   const settings = createSettings(browserStorage());
+
+  // --- which machine this is ----------------------------------------------
+  //
+  // Detected once: the signals are a user agent, a screen and a gamepad
+  // list, and none of them change under a running page. The PREFERENCE can
+  // change, so everything downstream is handed a function rather than a
+  // value.
+  //
+  // E9-108 — UP HERE RATHER THAN BESIDE THE STAGE, which is where it was.
+  // The grid is attached seven hundred lines above that, and a phone wants
+  // a different grid, so the answer has to exist before the question.
+  let detected = detect(readSignals());
+  const kindNow = (): MachineKind => effectiveKind(settings.machine, detected);
+
+  /**
+   * Which norns is drawn, on the element the CSS keys both layouts off.
+   *
+   * The markup already says `shield`, so this only ever has work to do for
+   * somebody who chose the other one — but it has to run before the stage
+   * measures anything, because the two bodies have different aspect ratios
+   * and the stage lays out from the measured height.
+   */
+  const applyPanel = (): void => {
+    const el = document.getElementById("norns");
+    if (el !== null) el.dataset["panel"] = settings.panel;
+  };
+  applyPanel();
+  log(
+    `machine: ${kindNow()} — ${settings.machine === "auto" ? detected.why : "set in the gear"}` +
+      `, body: ${settings.panel}`,
+  );
   zoomNow = (): number => settings.zoom;
 
   /**
@@ -889,6 +1052,26 @@ async function main(): Promise<void> {
   // `navigator.storage.estimate()` is the quota this origin may still use,
   // which is exactly what "disk" means to someone deciding whether a tape
   // recording will fit.
+  /**
+   * E9-112 — how busy the main thread is, left running for ever.
+   *
+   * One timer and a subtraction; see `src/ui/cpu-meter.ts` for why it is
+   * lateness rather than instrumentation, and `docs/13-CPU.md` for what it
+   * was measured against.
+   */
+  const cpuMeter = startCpuMeter();
+
+  /**
+   * Ask the audio server for its load, once there is one.
+   *
+   * A FUNCTION SET LATER, not a reference to `scEngine`: that is a `let`
+   * declared a thousand lines below, and `pollStat` runs immediately — so
+   * naming it here is a temporal dead zone and the boot dies with
+   * `Cannot access 'scEngine' before initialization`, which is what the
+   * first draft of this did. Measured by the page failing to start.
+   */
+  let pollServer: () => void = () => {};
+
   let freeMb = 0;
   const pollStat = (): void => {
     void navigator.storage
@@ -899,10 +1082,33 @@ async function main(): Promise<void> {
         freeMb = Math.max(0, Math.round((quota - usage) / (1024 * 1024)));
       })
       .catch(() => {});
-    cb.stat(freeMb, 0, 0, 0, 0, 0, 0);
+    // E9-112 — THE THREE READINGS norns DRAWS, AND THEY WERE ALL ZERO.
+    //
+    // Its home overlay (K2 on the menu, `core/menu/home.lua:40`) draws
+    // `norns.cpu[1..4]`, `_norns.audio_get_cpu_load()` and
+    // `_norns.audio_get_xrun_count()`. All three were dead here: four
+    // zeros sent from this line, and two stubs. A phone was taken to its
+    // knees by one script and the instrument reported a machine at rest
+    // — measured afterwards at 15-21% of a desktop core, which is 60-85%
+    // of a phone's. See `docs/13-CPU.md`.
+    //
+    // `cpu[1]` IS THE ONLY ONE FILLED, and the other three stay zero
+    // rather than repeating it. On hardware they are four cores of a Pi;
+    // here there is one main thread, and no browser reports per-core load.
+    // Four copies of one number would read as four cores at that load.
+    const main = Math.round(cpuMeter.percent);
+    cb.stat(freeMb, 0, main, main, 0, 0, 0);
+    // One round trip a second, beside the disk poll that was already here.
+    // The answer lands in `engine.status` and is read by
+    // `audio_get_cpu_load`.
+    pollServer();
   };
   pollStat();
   setInterval(pollStat, 1000);
+  // Counted here because this is where the clock reports them; read by
+  // `audio_get_xrun_count`, which norns' home overlay turns into `!!!`.
+  let xruns = 0;
+  host.registry.implement("audio_get_xrun_count", () => [xruns]);
 
   // --- the battery, when the machine has one -----------------------------
   //
@@ -1035,8 +1241,23 @@ async function main(): Promise<void> {
 
   const gridCanvas = $("#grid") as HTMLCanvasElement;
   const gridBox = $("#gridbox") as HTMLElement;
+  /**
+   * E9-108 — A PHONE GETS A 64, and every other machine still gets a 128.
+   *
+   * A grid takes the full width of a phone and a 128 is sixteen keys
+   * across it: on a Pixel 9 Pro that is about 24 CSS pixels a key, under
+   * half of what anybody's guidance calls a touch target, and the keys you
+   * miss are the ones next to the key you wanted. A 64 is eight across, so
+   * each key is twice as wide — and 8x8 is a real monome that real scripts
+   * are written for, not a cropped 128.
+   *
+   * It is a DEFAULT and not a rule: SETTINGS has 64/128/256/none and the
+   * buttons work the same on a phone as anywhere else.
+   */
+  const GRID_ON_PHONE = 64;
+  const GRID_DEFAULT = 128;
   /** 0 means nothing is plugged in, and then there is no device at all. */
-  let gridSize = 128;
+  let gridSize = kindNow() === "phone" ? GRID_ON_PHONE : GRID_DEFAULT;
   /**
    * The grid can be ABSENT, not merely hidden.
    *
@@ -1127,7 +1348,7 @@ async function main(): Promise<void> {
     requestAnimationFrame(() => gridView?.layout());
   }
   // One is connected by default, as a norns usually has one.
-  attachGrid(16, 8);
+  attachGrid(gridSize === 64 ? 8 : 16, 8);
   globalThis.addEventListener("resize", () => gridView?.layout());
 
   const sizeButtons = [...document.querySelectorAll<HTMLButtonElement>("button[data-size]")];
@@ -1703,17 +1924,6 @@ async function main(): Promise<void> {
   };
   expose({ exercise: runExercise, scripts: () => scriptsIn(vfs) });
 
-  // --- which machine this is ----------------------------------------------
-  //
-  // Detected once: the signals are a user agent, a screen and a gamepad
-  // list, and none of them change under a running page. The PREFERENCE can
-  // change, so the stage is handed a function rather than a value.
-  let detected = detect(readSignals());
-  const kindNow = (): MachineKind => effectiveKind(settings.machine, detected);
-  log(
-    `machine: ${kindNow()} — ${settings.machine === "auto" ? detected.why : "set in the gear"}`,
-  );
-
   /** Turn the gamepad on or off to match the profile. */
   const applyMachine = (): void => {
     const kind = kindNow();
@@ -1803,6 +2013,14 @@ async function main(): Promise<void> {
   applyMachine();
   settings.subscribe((_st, what) => {
     if (what === "machine") applyMachine();
+    // The two bodies are different SHAPES, so the stage has to place the
+    // devices again and the screen canvas has to find its new integer
+    // scale. Nothing else about the page changes.
+    if (what === "panel") {
+      applyPanel();
+      stage?.refresh();
+      refit();
+    }
     // Zoom changes every device's size, so the canvases have to measure
     // themselves again -- the same work a window resize causes.
     if (what === "zoom") {
@@ -1931,6 +2149,17 @@ async function main(): Promise<void> {
   // closure for the same reason the stage reads the machine through one:
   // it exists later than the thing that wants it.
   let scEngine: Awaited<ReturnType<typeof createEngineHost>> | null = null;
+  /**
+   * The engine classes the SERVER has reported, for anything out here that
+   * needs to know what exists.
+   *
+   * E9-109 — `engineState` is declared inside the audio boot, which is a
+   * function away and several hundred lines down, and the list only exists
+   * once scsynth has answered. A reader rather than the object: before the
+   * engines are reported this is empty, which reads as "nobody told us" and
+   * is exactly right.
+   */
+  let liveEngines: () => readonly string[] = () => [];
   const maidenButton = $("#maiden");
   const maiden = createMaidenPanel({
     host: $("#maidenpanel") as HTMLElement,
@@ -2016,7 +2245,12 @@ async function main(): Promise<void> {
         for (const n of names) restartEarned(n);
       },
       // E9-32. The panel owns the sentence; the filesystem lives here.
-      needs: (name, entries) => needsOf(vfs, name, entries),
+      // E9-109 — and the engines the PAGE has, not only the ones a script
+      // shipped. Without that list every script that asks for a built-in
+      // engine was reported as short of it, in the same sentence as a
+      // dependency that really was missing.
+      needs: (name, entries) =>
+        needsOf(vfs, name, entries, "/home/we/dust", liveEngines()),
       remove: (name) => {
         const dir = `/home/we/dust/code/${name}`;
         for (const p of vfs.walk(dir)) vfs.remove(p);
@@ -2562,8 +2796,17 @@ async function main(): Promise<void> {
         cb.clockResume(id, beat);
         dirty = true;
       },
-      onStall: (seconds) =>
-        log(`clock: ${seconds.toFixed(2)} s of wall time with no audio behind it`),
+      onStall: (seconds) => {
+        // E9-112 — A STALL IS WHAT AN XRUN IS HERE.
+        //
+        // `_norns.audio_get_xrun_count()` was stubbed at zero, so the
+        // `!!!` warning on norns' home overlay could never appear. On
+        // hardware it counts jack's dropouts; here the equivalent is the
+        // clock noticing wall time that no audio went with, which is the
+        // same event seen from the other side.
+        xruns++;
+        log(`clock: ${seconds.toFixed(2)} s of wall time with no audio behind it`);
+      },
     });
     liveClock = clock;
     registerClock(host.registry, clock, {
@@ -2589,6 +2832,9 @@ Crone.startBoot;`);
 
     // Ask, repeatedly, until Crone answers. `/crone/ready` is a REPLY and
     // nothing sends it unprompted.
+    liveEngines = () => engineState?.engines ?? [];
+    // The server exists now, so the status poll has something to ask.
+    pollServer = () => engine.pollStatus();
     engineState.queryStartup();
   }
 }

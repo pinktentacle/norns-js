@@ -72,3 +72,39 @@ nsis:
 
 portable:
   artifactName: ${productName}-${version}-portable.${ext}
+
+# E9-121 — THE STEAM DECK, which is Linux and therefore almost nothing new:
+# `desktop/main.js` and `tools/serve.mjs` contain no `process.platform` at
+# all, so the shell that runs on Windows is the shell that runs there.
+# `docs/14-STEAM-DECK.md` is the study; what is here is only the packaging.
+#
+# TWO TARGETS AGAIN, and for the same kind of reason as on Windows.
+# `AppImage` is one file you mark executable and add as a non-Steam game,
+# which is what "an app" means on a Deck. `tar.gz` is the one that cannot be
+# defeated by a missing FUSE library — SteamOS does not reliably provide the
+# libfuse2 an AppImage mounts itself with, and the documented answer is
+# `APPIMAGE_EXTRACT_AND_RUN=1 %command%` in the shortcut's launch options.
+# Shipping both costs one line and removes a support question.
+#
+# THIS CANNOT BE BUILT ON WINDOWS, and it fails in two different ways, both
+# measured: `AppImage` dies on `EPERM: symlink`, and `tar.gz` SUCCEEDS and
+# produces `-rw-r--r-- norns-js` — an archive whose executable is not
+# executable, because NTFS has no such bit to copy. Build it on Linux.
+linux:
+  target:
+    - AppImage
+    - tar.gz
+  icon: desktop/resources/icon.png
+  # freedesktop's own category for this, so a desktop environment files it
+  # with the other audio applications rather than under "Utility", which is
+  # what electron-builder picks when nobody says.
+  category: AudioVideo
+  # `desktopName` lives in package.json and this syncs the app id to it.
+  # Without the pair a compositor cannot tie the running window to the
+  # .desktop entry: wrong icon in the task switcher, and no grouping.
+  synopsis: monome norns, in a browser engine
+  syncDesktopName: true
+  artifactName: ${productName}-${version}.${ext}
+
+appImage:
+  artifactName: ${productName}-${version}.${ext}

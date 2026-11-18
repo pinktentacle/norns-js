@@ -5,15 +5,13 @@
   "description": "norns in the browser",
   "dependencies": {
     "ace-builds": "^1.45.2",
-    "fengari": "^0.1.5",
-    "fengari-interop": "^0.1.4",
-    "lua-wasm-bindings": "^0.5.3",
     "supersonic-scsynth": "^0.95.1",
-    "supersonic-scsynth-core": "^0.95.1",
-    "wasmoon": "^1.16.0"
+    "supersonic-scsynth-core": "^0.95.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "fengari": "^0.1.5",
+    "wasmoon": "^1.16.0",
     "electron": "^45.3.1",
     "electron-builder": "^26.18.0",
     "typescript": "^7.0.2",
@@ -21,12 +19,14 @@
     "vitest": "^5.1.0"
   },
   "license": "AGPL-3.0-or-later",
+  "desktopName": "norns-js.desktop",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "api": "node tools/extract-api.mjs",
     "api:write": "node tools/extract-api.mjs --write",
+    "lua": "bash tools/lua53/build.sh",
     "pins": "node tools/pins.mjs --write",
     "pins:check": "node tools/pins.mjs --check",
     "hardware": "node tools/hardware-report.mjs",
@@ -49,6 +49,7 @@
     "desktop:icon": "electron desktop/make-icon.mjs",
     "desktop:payload": "node tools/build-portable.mjs desktop/payload",
     "desktop:dist": "npm run desktop:payload && electron-builder --win",
+  "desktop:deck": "npm run desktop:payload && electron-builder --linux",
     "notices": "node tools/build-notices.mjs",
     "notices:check": "node tools/build-notices.mjs --check",
     "licences": "node tools/audit-licences.mjs",
@@ -56,7 +57,7 @@
     "blockers": "node tools/build-blockers.mjs"
   },
   "main": "desktop/main.js",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "pinktentacle",
   "homepage": "https://norns-js.pages.dev/",
   "repository": { "type": "git", "url": "git+https://github.com/pinktentacle/norns-js.git" }

@@ -38,11 +38,15 @@ spike/probe/runs/*.txt    -text
 # they apply to. Everything below is working material: true, useful, and
 # not part of what anybody was handed.
 #
-# TWO THINGS MOVED TO THE ROOT so they could stay while `docs/` goes:
-# `LICENCES.md` and `PINS.md`. PINS is not optional — a patch without the
-# commit it applies to is not source, it is a riddle.
+# THREE THINGS MOVED TO THE ROOT so they could stay while `docs/` goes:
+# `LICENCES.md`, `PINS.md` and `PORTABLE.md`. PINS is not optional — a patch
+# without the commit it applies to is not source, it is a riddle. PORTABLE
+# moved in E9-129 for a harder reason: `tools/build-portable.mjs` COPIES it
+# into the portable archive as its README, so a published tree without it
+# cannot build the desktop application at all, and a source that cannot
+# build the binary it accompanies is not corresponding source.
 #
-# `test/` STAYS, which is a judgement and not an obligation. 842 tests are
+# `test/` STAYS, which is a judgement and not an obligation. 901 tests are
 # the only evidence for every number in the README, and a clone where
 # `npm test` does nothing is a clone that cannot check a word of it.
 # Delete the line to change that.

@@ -67,6 +67,23 @@ export interface EngineHost {
     timedOutDefs: number;
     dead: boolean;
   };
+  /**
+   * What the SERVER says its own load is, from `/status.reply`. E9-112.
+   *
+   * `avgCpu` and `peakCpu` are percentages of the block period scsynth's
+   * DSP took, which is the audio thread's load and not the page's. `at` is
+   * when the last reply arrived, so a caller can tell a quiet server from
+   * one that has stopped answering.
+   */
+  readonly status: {
+    avgCpu: number;
+    peakCpu: number;
+    ugens: number;
+    synths: number;
+    at: number;
+  };
+  /** Ask for it. The reply lands in `status` a round trip later. */
+  pollStatus(): void;
   readonly sclang: ScModule;
   readonly scsynth: ScModule;
   /** Everything sclang has printed, for waiting on and for reporting. */
@@ -467,6 +484,33 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
    * guessed at. `/d_recv` is the one message the page waits on, and E5-20 is
    * about why it sometimes waits two seconds.
    */
+  /**
+   * E9-112 — WHAT THE SERVER SAYS ITS OWN LOAD IS.
+   *
+   * norns' home overlay draws `_norns.audio_get_cpu_load()`, which on
+   * hardware is jack's figure for the audio thread. Here it was a stub
+   * returning zero, so the one reading that would have said whether the
+   * DSP was in trouble said nothing at all.
+   *
+   * scsynth has the number and gives it for the asking: `/status` is
+   * answered with `/status.reply`, whose sixth and seventh arguments are
+   * the average and peak share of the block period its own DSP took. That
+   * is the right meaning — it is the audio thread's load, not the page's.
+   *
+   * Cached rather than asked for on demand, because `audio_get_cpu_load`
+   * is called from Lua inside a redraw and the answer comes back over OSC.
+   * `pollStatus` is driven once a second from `main.ts`, beside the disk
+   * and battery polls it already has.
+   */
+  const status = {
+    avgCpu: 0,
+    peakCpu: 0,
+    ugens: 0,
+    synths: 0,
+    /** When the last reply arrived, or 0. A stale number is worse than none. */
+    at: 0,
+  };
+
   const transport = {
     acks: 0,
     ackTotalMs: 0,
@@ -590,6 +634,23 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   };
 
   scsynth.onOscReply = (bytes: Uint8Array) => {
+    // Read BEFORE the `/d_recv` bookkeeping below and outside its guard:
+    // that branch only runs while a SynthDef is outstanding, and the
+    // status poll has nothing to do with sending defs.
+    try {
+      const r = decode(bytes) as unknown as Decoded;
+      if (r.address === "/status.reply") {
+        const a = (r.args ?? []) as number[];
+        // [1, ugens, synths, groups, defs, avgCPU, peakCPU, sr, actualSr]
+        status.ugens = Number(a[1] ?? 0);
+        status.synths = Number(a[2] ?? 0);
+        status.avgCpu = Number(a[5] ?? 0);
+        status.peakCpu = Number(a[6] ?? 0);
+        status.at = performance.now();
+      }
+    } catch {
+      /* a reply we cannot read is not a status */
+    }
     if (outstanding > 0) {
       try {
         const r = decode(bytes) as unknown as Decoded;
@@ -658,6 +719,72 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   }
 
   /**
+   * E9-106 — THE CLASS FILES ARRIVE AT ONCE, NOT ONE AFTER THE OTHER.
+   *
+   * Every injector below used to `await fetch` inside its own loop, and
+   * between them that is 184 round trips taken strictly in turn. Measured on
+   * the DEPLOYED page, from `performance.getEntriesByType("resource")`, with
+   * peak concurrency ONE for every one of them:
+   *
+   *     norns-sc/sc3      110 files   4076 ms
+   *     norns-sc/ported    39 files    439 ms
+   *     norns-sc/mi        14 files    320 ms
+   *     norns-sc/extra      5 files     78 ms
+   *     norns-sc (root)    16 files      —   (interleaved with the above)
+   *
+   * — about 4.9 s of a 12 s boot spent waiting for 67 KB. The proof that it
+   * is latency and not bytes was already in the same boot: the STK
+   * wavetables above fetch 42 files through `Promise.all` and take 62 ms.
+   *
+   * TWELVE, AND TWELVE IS MEASURED. The same 110 sc3 files against the
+   * deployed origin with the cache defeated, three runs each, median: 1 at a
+   * time 1860 ms, 6 -> 297, 8 -> 232, 12 -> 179, 16 -> 146, 24 -> 234 and
+   * wildly unstable (2682 / 110 / 234). Sixteen is marginally faster and
+   * twenty-four is where the connection starts fighting itself, so the pool
+   * sits below the knee rather than on it.
+   *
+   * The results come back IN ORDER and the MEMFS writes stay on one thread,
+   * so what lands on disk does not depend on which response won: only the
+   * waiting is overlapped.
+   *
+   * A file that fails comes back as a null BODY AND A REASON rather than as
+   * an exception. Most of these classes are optional and their callers
+   * already count what arrived and say so when the count is short — but
+   * `injectNorns`'s own twenty are not optional, and `fetch
+   * Engine_PolyPerc.sc: 404` is the line that says which build is broken.
+   * Throwing from inside the pool would lose the eleven answers in flight
+   * and report whichever happened to fail first.
+   */
+  const FETCH_POOL = 12;
+
+  interface Fetched {
+    readonly body: Uint8Array | null;
+    /** Why it is missing, when it is. */
+    readonly why: string | null;
+  }
+
+  async function fetchAll(urls: readonly string[]): Promise<Fetched[]> {
+    const out: Fetched[] = new Array<Fetched>(urls.length).fill({ body: null, why: "not tried" });
+    let next = 0;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = next++;
+        if (i >= urls.length) return;
+        try {
+          const res = await fetch(urls[i]!);
+          out[i] = res.ok
+            ? { body: new Uint8Array(await res.arrayBuffer()), why: null }
+            : { body: null, why: String(res.status) };
+        } catch (e) {
+          out[i] = { body: null, why: (e as Error).message };
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(FETCH_POOL, urls.length) }, worker));
+    return out;
+  }
+
+  /**
    * Write a script's own SuperCollider classes into MEMFS.
    *
    * THIS IS WHY A COMMUNITY SCRIPT WITH ITS OWN ENGINE DID NOT WORK. norns
@@ -701,15 +828,13 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     } catch {
       /* no manifest: the eight below are what this build had */
     }
-    for (const name of names) {
-      try {
-        const res = await fetch(`${nornsScUrl}/sc3/${name}`);
-        if (!res.ok) continue;
-        FS.writeFile(`/sc/SCClassLibrary/norns/${name}`, new Uint8Array(await res.arrayBuffer()));
-        n++;
-      } catch {
-        /* no checkout; the UGens are missing too, and that is said elsewhere */
-      }
+    const bodies = await fetchAll(names.map((name) => `${nornsScUrl}/sc3/${name}`));
+    for (const [i, got] of bodies.entries()) {
+      // A null is a file this checkout does not have; the UGens are missing
+      // too, and that is said elsewhere.
+      if (got.body === null) continue;
+      FS.writeFile(`/sc/SCClassLibrary/norns/${names[i]!}`, got.body);
+      n++;
     }
     if (n > 0 && n < names.length) {
       // Half a set is worse than none: a script would find some of the
@@ -800,15 +925,11 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
       return 0; // no checkout; the UGens are missing too
     }
     let n = 0;
-    for (const name of names) {
-      try {
-        const res = await fetch(`${nornsScUrl}/ported/${name}`);
-        if (!res.ok) continue;
-        FS.writeFile(`/sc/SCClassLibrary/norns/${name}`, new Uint8Array(await res.arrayBuffer()));
-        n++;
-      } catch {
-        /* one file; the count below says so */
-      }
+    const bodies = await fetchAll(names.map((name) => `${nornsScUrl}/ported/${name}`));
+    for (const [i, got] of bodies.entries()) {
+      if (got.body === null) continue; // one file; the count below says so
+      FS.writeFile(`/sc/SCClassLibrary/norns/${names[i]!}`, got.body);
+      n++;
     }
     if (n > 0 && n < names.length) {
       log(`PortedPlugins: only ${n} of ${names.length} classes injected`);
@@ -838,15 +959,11 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
       /* no manifest: the fallback is what this build had */
     }
     let n = 0;
-    for (const name of names) {
-      try {
-        const res = await fetch(`${nornsScUrl}/${dir}/${name}`);
-        if (!res.ok) continue;
-        FS.writeFile(`/sc/SCClassLibrary/norns/${name}`, new Uint8Array(await res.arrayBuffer()));
-        n++;
-      } catch {
-        /* no checkout; the UGens are missing too */
-      }
+    const bodies = await fetchAll(names.map((name) => `${nornsScUrl}/${dir}/${name}`));
+    for (const [i, got] of bodies.entries()) {
+      if (got.body === null) continue; // no checkout; the UGens are missing too
+      FS.writeFile(`/sc/SCClassLibrary/norns/${names[i]!}`, got.body);
+      n++;
     }
     if (n > 0 && n < names.length) {
       log(`${dir}: only ${n} of ${names.length} classes injected`);
@@ -903,10 +1020,14 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     mkdir("/sc/SCClassLibrary/norns/SystemOverwrites");
 
     let n = 0;
-    for (const name of NORNS_CLASSES) {
-      const res = await fetch(`${nornsScUrl}/${name}`);
-      if (!res.ok) throw new Error(`fetch ${name}: ${res.status}`);
-      FS.writeFile(`/sc/SCClassLibrary/norns/${name}`, new Uint8Array(await res.arrayBuffer()));
+    // STILL FATAL, and still names the file. These twenty are norns itself:
+    // without them sclang comes up as plain SuperCollider and every engine in
+    // the catalogue is missing, so a 404 here is a broken build rather than a
+    // missing option.
+    const core = await fetchAll(NORNS_CLASSES.map((name) => `${nornsScUrl}/${name}`));
+    for (const [i, got] of core.entries()) {
+      if (got.body === null) throw new Error(`fetch ${NORNS_CLASSES[i]!}: ${got.why}`);
+      FS.writeFile(`/sc/SCClassLibrary/norns/${NORNS_CLASSES[i]!}`, got.body);
       n++;
     }
     for (const [name, body] of Object.entries(INLINE_OVERRIDES)) {
@@ -1067,6 +1188,9 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     bootSclang,
     bootServerFromSclang,
     transport,
+    status,
+    /** Ask the server what its load is. The answer lands in `status`. */
+    pollStatus: (): void => scsynth.sendOsc(encodeMessage("/status", [])),
     sendToServer: (address, args = []) => scsynth.sendOsc(encodeMessage(address, args)),
     sendToLang: (address, args = []) => sclang.sendOsc(encodeMessage(address, args)),
     runCode: (code: string) => sclang.runCode(code),

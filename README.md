@@ -21,10 +21,13 @@ from their authors' own repositories.
 **<https://norns-js.pages.dev/>** — nothing to install. Open it, press **+**,
 pick a script.
 
-It needs a recent **Chromium** browser (Chrome, Edge, Brave, Arc). Firefox
-and Safari are the project's largest standing unknown: every number in this
-repository was measured on Chromium, and nobody has opened it in anything
-else. If you do, a report is welcome.
+It needs a recent **Chromium** browser (Chrome, Edge, Brave, Arc) or
+**Firefox**, where it has been tried and works. Every number in this
+repository was measured on Chromium, so treat the measurements as Chromium's
+and the behaviour as both.
+
+**Safari is untested, and is going to stay that way** — that is a decision
+rather than a gap waiting to be filled. If it fails there, it fails.
 
 ---
 
@@ -134,7 +137,7 @@ repository and deploy a build.
 ```bash
 npm install
 npm run dev          # http://localhost:5173/, with the two headers set
-npm test             # 842 tests
+npm test             # 901 tests
 npm run typecheck
 npm run pins:check   # third_party/ still matches PINS.md
 npm run notices:check
@@ -274,7 +277,7 @@ __norns.exercise()
 | `tools/` | the generators and build scripts — `npm run assets`, the notices, the blockers table |
 | `tools/sclang`, `tools/screen`, `tools/pack` | the WebAssembly builds — `sclang`, `scsynth`, the screen, the class library. These are how every `.wasm` here was produced, and each is a `build.sh` you can run |
 | `patches/` | three upstream trees need changes; they are diffs, so what is ours stays separable |
-| `test/` | 842 of them, and six that say so when they are skipped |
+| `test/` | 901 of them, and six that say so when they are skipped |
 | `desktop/`, `electron-builder.yml` | the Electron shell for the Windows app — four files; the page it wraps is the same `src/` |
 
 **This is the source, not the workshop.** The development tree also holds
@@ -313,9 +316,9 @@ norns-js is © 2026 pinktentacle.
   the sound of the mi UGens is [Émilie Gillet's Mutable Instruments
   code](https://github.com/pichenettes/eurorack) (MIT), via Volker Böhm's
   [mi-UGens](https://github.com/v7b1/mi-UGens); the screen is cairo, pixman
-  and FreeType; the Lua VM is [fengari](https://github.com/fengari-lua/fengari)
-  (MIT), patched for 64-bit integers. **[`NOTICES.txt`](public/NOTICES.txt)**
-  carries every one of the nineteen with its licence in full, generated from
+  and FreeType; the Lua VM is [Lua](https://www.lua.org) itself (MIT), 5.3.6
+  compiled from source. **[`NOTICES.txt`](public/NOTICES.txt)**
+  carries every one of the twenty with its licence in full, generated from
   what the build actually links, and the running app serves it at
   `/NOTICES.txt`.
 

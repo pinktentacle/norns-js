@@ -119,14 +119,21 @@ describe("the menu pages that cannot work here", () => {
     expect(probe("_menu.page")).toBe("DISPLAY");
   });
 
-  it("marks the two stats that cannot be read, and keeps the two that can", () => {
+  it("marks the stats that cannot be read, and passes the ones that can", () => {
     // K2 on HOME showed `cpu 0. 0. 0. 0.` and `0c`, and a zero there does
     // not read as "unknown" — it reads as an idle machine running cold.
-    // The free space beside them is real (`navigator.storage.estimate()`),
-    // and so is the audio percent (crone's own block time).
+    // Three of the four and the temperature are still marks.
+    //
+    // E9-112 — THE FIRST ONE IS A MEASUREMENT NOW. There is one main
+    // thread here rather than four cores, and `main.ts` measures how busy
+    // it is (`src/ui/cpu-meter.ts`) and sends it as `cpu1`. It arrives as
+    // a number and must survive this override, because it is the reading
+    // that was missing when a script took a phone to its knees.
     expect(host.run(`_norns.stat(1234, 41, 7, 8, 9, 10, 11)`)).toBeNull();
     expect(probe("norns.disk")).toBe("1234");
-    expect(probe("norns.cpu[1]")).toBe("-");
+    expect(probe("norns.cpu[1]"), "the measured one was overwritten").toBe("8");
+    expect(probe("norns.cpu_avg")).toBe("7");
+    expect(probe("norns.cpu[2]")).toBe("-");
     expect(probe("norns.cpu[4]")).toBe("-");
     expect(probe("norns.temp")).toBe("-");
   });

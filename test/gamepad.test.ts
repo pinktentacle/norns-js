@@ -10,6 +10,7 @@ import { createPadCore, rateFor, type PadFrame } from "../src/ui/gamepad.js";
 
 const frame = (over: Partial<PadFrame> = {}): PadFrame => ({
   buttons: new Array(16).fill(false),
+  values: new Array(16).fill(0),
   axes: [0, 0, 0, 0],
   standard: true,
   ...over,
@@ -17,18 +18,42 @@ const frame = (over: Partial<PadFrame> = {}): PadFrame => ({
 
 const withButton = (i: number): PadFrame => {
   const b = new Array(16).fill(false);
+  const v = new Array(16).fill(0);
   b[i] = true;
-  return frame({ buttons: b });
+  v[i] = 1;
+  return frame({ buttons: b, values: v });
+};
+
+/** A trigger at `v`, 0..1. `pressed` follows the browser's own threshold. */
+const withTrigger = (i: number, v: number): PadFrame => {
+  const b = new Array(16).fill(false);
+  const vals = new Array(16).fill(0);
+  b[i] = v > 0.5;
+  vals[i] = v;
+  return frame({ buttons: b, values: vals });
+};
+
+/** How far E1 turns over `frames` frames of 16 ms. */
+const turn = (core: ReturnType<typeof createPadCore>, f: PadFrame, frames = 60): number => {
+  let total = 0;
+  for (let i = 0; i < frames; i++) {
+    for (const a of core.frame(f, 16)) if (a.a === "enc" && a.n === 1) total += a.delta;
+  }
+  return total;
 };
 
 describe("the face buttons", () => {
-  it("are K3, K2 and K1, down and up", () => {
+  it("are A=K3, X=K2 and Y=K1, down and up", () => {
     const core = createPadCore();
-    expect(core.frame(withButton(0), 16)).toEqual([{ a: "key", n: 3, z: 1 }]);
+    expect(core.frame(withButton(0), 16), "A").toEqual([{ a: "key", n: 3, z: 1 }]);
     expect(core.frame(frame(), 16)).toEqual([{ a: "key", n: 3, z: 0 }]);
-    expect(core.frame(withButton(1), 16)).toEqual([{ a: "key", n: 2, z: 1 }]);
+    expect(core.frame(withButton(2), 16), "X").toEqual([{ a: "key", n: 2, z: 1 }]);
     core.frame(frame(), 16);
-    expect(core.frame(withButton(2), 16)).toEqual([{ a: "key", n: 1, z: 1 }]);
+    expect(core.frame(withButton(3), 16), "Y").toEqual([{ a: "key", n: 1, z: 1 }]);
+  });
+
+  it("leaves B alone, because B is back on a Deck", () => {
+    expect(createPadCore().frame(withButton(1), 16)).toEqual([]);
   });
 
   it("do not repeat while held, because a norns key does not", () => {
@@ -46,18 +71,50 @@ describe("the face buttons", () => {
   });
 });
 
-describe("E1 on the d-pad and the bumpers", () => {
-  it("steps once on press, then repeats after a pause", () => {
-    const core = createPadCore();
-    expect(core.frame(withButton(15), 16)).toEqual([{ a: "enc", n: 1, delta: 1 }]);
-    expect(core.frame(withButton(15), 100), "still inside the pause").toEqual([]);
-    core.frame(withButton(15), 300);
-    expect(core.frame(withButton(15), 100)).toEqual([{ a: "enc", n: 1, delta: 1 }]);
+describe("E1 on the triggers", () => {
+  it("runs fast on a full pull of R2, and the right way round", () => {
+    const total = turn(createPadCore(), withTrigger(7, 1));
+    expect(total).toBeGreaterThan(25);
+    expect(total).toBeLessThan(40);
   });
 
-  it("goes the other way on the left side", () => {
-    expect(createPadCore().frame(withButton(14), 16)).toEqual([{ a: "enc", n: 1, delta: -1 }]);
-    expect(createPadCore().frame(withButton(4), 16)).toEqual([{ a: "enc", n: 1, delta: -1 }]);
+  it("goes the other way on L2", () => {
+    expect(turn(createPadCore(), withTrigger(6, 1))).toBeLessThan(-25);
+  });
+
+  it("gives ONE tick at a time for a light squeeze", () => {
+    // The whole reason a trigger suits E1: a page-sized list wants one step,
+    // and a trigger has somewhere to rest that a stick does not.
+    const total = turn(createPadCore(), withTrigger(7, 0.3));
+    expect(total).toBeGreaterThan(0);
+    expect(total).toBeLessThan(6);
+  });
+
+  it("ignores a trigger resting below the dead zone", () => {
+    expect(turn(createPadCore(), withTrigger(7, 0.1))).toBe(0);
+  });
+
+  it("cancels when both are pulled, as a knob turned two ways should", () => {
+    const b = new Array(16).fill(true);
+    const v = new Array(16).fill(0);
+    v[6] = 1;
+    v[7] = 1;
+    const core = createPadCore();
+    const both = frame({ buttons: b, values: v });
+    let total = 0;
+    for (let i = 0; i < 60; i++) {
+      for (const a of core.frame(both, 16)) if (a.a === "enc" && a.n === 1) total += a.delta;
+    }
+    expect(total).toBe(0);
+  });
+
+  it("falls back to pressed on a pad that reports no analog values", () => {
+    // `values` empty is what a pad with switch triggers looks like. E1 still
+    // has to turn; a dead encoder would be the worse failure.
+    const b = new Array(16).fill(false);
+    b[7] = true;
+    const total = turn(createPadCore(), frame({ buttons: b, values: [] }));
+    expect(total).toBeGreaterThan(25);
   });
 });
 

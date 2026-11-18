@@ -4,7 +4,7 @@
 // That only works if every value it writes is a Lua literal, and one class
 // of value was not: `norns.state.mix.rev_monitor_input` and two others
 // default to `-math.huge` (state.lua:27-28, 46), and concatenating that
-// gives `-inf` on hardware and `-Infinity` here. Neither is Lua.
+// gives `-inf`, on hardware and here alike since E9-117. It is not Lua.
 //
 // The symptom was not a missing file. The file was there, 3 KB of it, and
 // `state.resume` died on line 21 of norns' own output with
@@ -69,18 +69,22 @@ describe("the system state file", () => {
           .. ' / ' .. tostring(norns.state.mix.output)
       `),
     ).toBeNull();
-    // `-Infinity`, not Lua's `-inf`: fengari's number-to-string is JS's.
-    // That spelling is exactly why the file could not be read back before,
-    // and the value round-trips now because it is written as `-math.huge`
-    // rather than as whatever tostring makes of it.
-    expect(luaString("_RT")).toBe("virtual grid v0001 / -Infinity / -7.5");
+    // `-inf`, which is what Lua prints and what HARDWARE writes. E9-117
+    // changed this line: under fengari it read `-Infinity`, because
+    // fengari's number-to-string was JavaScript's. Either spelling is why
+    // the file could not be read back before, and the value round-trips
+    // because it is written as `-math.huge` rather than as whatever
+    // tostring makes of it.
+    expect(luaString("_RT")).toBe("virtual grid v0001 / -inf / -7.5");
   });
 
   it("writes a PSET an infinite level can be read back out of", () => {
     // ParamSet:read already understands "inf" and "-inf" -- Lua spells an
-    // infinity that way. Fengari spells it "-Infinity", which matched
-    // neither branch and set the param to the STRING, and the next
-    // controlspec.unmap did math.max on it.
+    // infinity that way, and since E9-117 so do we. Fengari spelled it
+    // "-Infinity", which matched neither branch and set the param to the
+    // STRING, and the next controlspec.unmap did math.max on it. The patch
+    // that fixed it covers both spellings, so this keeps passing whichever
+    // interpreter writes the file.
     expect(
       host.run(`
         local ps = paramset.new()
@@ -93,7 +97,7 @@ describe("the system state file", () => {
     ).toBeNull();
     expect(vfs.readText("/home/we/dust/data/probe.pset")).toContain("-inf");
     expect(vfs.readText("/home/we/dust/data/probe.pset")).not.toContain("Infinity");
-    expect(luaString("_PV")).toBe("-Infinity"); // i.e. -math.huge, round-tripped
+    expect(luaString("_PV")).toBe("-inf"); // i.e. -math.huge, round-tripped
   });
 
   it("leaves a path containing the word alone", () => {

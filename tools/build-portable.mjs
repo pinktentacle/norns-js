@@ -7,7 +7,10 @@
 // by hand, and the README that explains it ended up living only inside the
 // output folder -- which is gitignored, because it is a build product. One
 // clean and the document the user reads on the other machine would have been
-// gone. The canonical README is docs/PORTABLE.md; this copies it in.
+// gone. The canonical README is PORTABLE.md at the repository root; this
+// copies it in. AT THE ROOT and not under docs/, which is export-ignored:
+// this script is published, the desktop build needs it, and a build that
+// cannot run from the published source is not corresponding source (E9-129).
 //
 // WHAT GOES IN, and why there are three parts:
 //
@@ -124,7 +127,7 @@ await cp(join(ROOT, "tools/serve.mjs"), join(OUT, "serve.mjs"));
 await cp(join(ROOT, "tools/serve.py"), join(OUT, "serve.py"));
 await cp(join(ROOT, "tools/steamdeck/norns-js.sh"), join(OUT, "norns-js.sh"));
 await chmod(join(OUT, "norns-js.sh"), 0o755);
-await cp(join(ROOT, "docs/PORTABLE.md"), join(OUT, "README.md"));
+await cp(join(ROOT, "PORTABLE.md"), join(OUT, "README.md"));
 
 // THE SAME SOURCE THE REPOSITORY PUBLISHES, cut the same way.
 //
@@ -146,13 +149,23 @@ await cp(join(ROOT, "docs/PORTABLE.md"), join(OUT, "README.md"));
 // is offering a tree that exists nowhere else.
 await mkdir(SRC, { recursive: true });
 {
-  const tar = join(OUT, "source.tar");
+  // THE TARBALL LANDS IN `SRC` AND IS EXTRACTED BY ITS BARE NAME, which
+  // looks like fussiness and is not. Windows has two tars on it:
+  // its own bsdtar, and GNU tar if Git for Windows is on PATH first.
+  // GNU tar reads `C:/...` as HOST:PATH and tries to open an rsh
+  // connection — `tar: Cannot connect to C: resolve failed`, which is a
+  // failure that says nothing about the real problem. `--force-local`
+  // fixes GNU tar and bsdtar rejects it, so there is no flag that works on
+  // both. Giving neither of them a colon is the fix that does: `cwd` sets
+  // where, and the name has no drive letter in it.
+  const tarName = "source.tar";
+  const tar = join(SRC, tarName);
   const ar = spawnSync("git", ["archive", "--format=tar", "-o", tar, "HEAD"], {
     cwd: ROOT,
     stdio: "inherit",
   });
   if (ar.status !== 0) throw new Error("git archive failed; is this a checkout?");
-  const ex = spawnSync("tar", ["-xf", tar, "-C", SRC], { stdio: "inherit" });
+  const ex = spawnSync("tar", ["-xf", tarName], { cwd: SRC, stdio: "inherit" });
   if (ex.status !== 0) throw new Error("tar -xf failed");
   await rm(tar);
 }

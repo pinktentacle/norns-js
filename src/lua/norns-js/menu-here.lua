@@ -200,24 +200,37 @@ if devices_page ~= nil then
   end
 end
 
--- The stats line on HOME: two of its four readings cannot exist here.
+-- The stats line on HOME, and which of its readings can exist here.
 --
--- K2 on HOME shows `cpu 0. 0. 0. 0.` across four cores and `0c` for the
--- temperature, and both are inventions: matron reads them from /proc and
--- /sys on hardware, and a browser has neither. A zero there does not read
--- as "unknown", it reads as a measurement -- an idle machine running cold.
+-- K2 on HOME shows four per-core CPU figures and a temperature. Three of
+-- the four and the temperature are inventions: matron reads them from
+-- /proc and /sys on hardware, and a browser has neither. A zero there does
+-- not read as "unknown", it reads as a measurement -- an idle machine
+-- running cold -- so they are a mark instead.
 --
--- The two beside them are REAL and stay: the percentage is crone's own mean
--- block time against its budget (it reads 0 only because nothing is making
--- sound), and the free space is `navigator.storage.estimate()`.
+-- E9-112: THE FIRST ONE IS REAL NOW. There is one main thread here rather
+-- than four cores, and `main.ts` measures how much of each second it spends
+-- busy (`src/ui/cpu-meter.ts`: a timer that measures its own lateness). It
+-- arrives as `cpu1`. The other three stay a mark rather than repeating it,
+-- because four copies of one number would read as four cores at that load.
+--
+-- This is the reading that was missing when a script took a phone to its
+-- knees and the instrument said nothing: `docs/13-CPU.md` measured that
+-- script afterwards at 15-21% of a desktop core, which is 60-85% of a
+-- phone's.
+--
+-- The percentage beside them is REAL and was not: it is
+-- `_norns.audio_get_cpu_load()`, which was a stub returning zero and is
+-- now scsynth's own average DSP load from `/status`. The free space is
+-- `navigator.storage.estimate()` and always was.
 local real_stat = _norns.stat
 _norns.stat = function(disk, temp, cpu, cpu1, cpu2, cpu3, cpu4)
   real_stat(disk, temp, cpu, cpu1, cpu2, cpu3, cpu4)
   -- Strings, and nothing reads these as numbers: `menu/home.lua:51` and
   -- :70 concatenate them and are the only readers in norns or in any
   -- bundled script.
-  norns.cpu = { "-", "-", "-", "-" }
-  norns.cpu_avg = "-"
+  norns.cpu = { tostring(cpu1), "-", "-", "-" }
+  norns.cpu_avg = tostring(cpu)
   norns.temp = "-"
 end
 

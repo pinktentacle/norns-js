@@ -1,10 +1,11 @@
 // E6-02 — `io.open` and `loadfile`, over the virtual filesystem.
 //
 // Implemented in LUA on top of four JS primitives, rather than in JavaScript
-// against fengari's C-level `liolib`. That is the smaller and the more honest
-// choice:
+// against the interpreter's own C-level `liolib`. That is the smaller and the
+// more honest choice, and E9-117 only sharpened it — `liolib` is now real C
+// inside a wasm module rather than fengari's JavaScript:
 //
-//   * fengari's io is a Node file-descriptor implementation. Replacing it
+//   * that io is a file-descriptor implementation either way. Replacing it
 //     means reimplementing its FILE userdata, its metatable, its buffering and
 //     its `__gc`. Replacing `io.open` in Lua means a table with five methods.
 //   * norns uses exactly five operations across `lua/core` — `io.open`,

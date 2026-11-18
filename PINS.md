@@ -32,9 +32,9 @@ ways that read as bugs in this project rather than as a version skew.
 | Tree | What is in it |
 |---|---|
 | `cairo-build` | cairo-1.16.0, pixman-0.42.2 |
-| `fengari` | LICENSE, NEWS, README.md |
 | `fftw3` | fftw-3.3.10.tar.gz |
 | `freetype-2104` | freetype-VER-2-10-4 |
+| `lua53` | Makefile, README, doc |
 | `pixman-0400` | pixman-0.40.0, pixman-0.40.0.tar.gz |
 | `portedplugins` | CHANGELOG.md, CMakeLists.txt, CONTRIBUTING.md |
 | `sc-plugins-extra` | ByteBeat, FormantTriPTR, LICENSE |
@@ -81,19 +81,22 @@ git -C third_party/sc3-plugins submodule update --init --recursive
 git -C third_party/supercollider submodule update --init --recursive
 ```
 
-## `fengari`, vendored from npm and patched
+## `lua53`, a release tarball with a hash
 
-The Lua runtime. `third_party/fengari` is **fengari@0.1.5** as npm
-publishes it, with `patches/fengari.patch` applied: integers become 64-bit
-BigInt inside the VM, because norns' Lua has 64-bit integers and fengari's
-were 32-bit — `1000000 * 1000000` came back as -727379968 and nothing said
-so. `test/integers.test.ts` is what that measurement became. MIT, as the package is.
+The Lua runtime, and the whole of ADR-02: norns runs **Lua 5.3.6**, so
+this does. `tools/lua53/build.sh` downloads it, refuses to unpack it unless
+the hash matches, and compiles 33 translation units to `src/lua/lua53/`.
+No patch — nothing in it needed changing. MIT.
 
 ```
-cp -r node_modules/fengari third_party/fengari
-rm -rf third_party/fengari/node_modules
-(cd third_party/fengari && patch -p0 < ../../patches/fengari.patch)
+https://www.lua.org/ftp/lua-5.3.6.tar.gz
+sha256  fc5fd69bb8736323f026672b1b7235da613d7177e72558893a0bdcd320466d60
 ```
+
+Until E9-117 this was **fengari**, Lua written in JavaScript, vendored from
+npm and patched to 64-bit integers because its own were 32-bit. The patch
+is gone with it: Lua's integers are 64-bit, and `test/integers.test.ts` —
+which that patch is what created — still passes.
 
 ## Trees that are NOT vendored unmodified
 

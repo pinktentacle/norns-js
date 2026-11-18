@@ -616,6 +616,66 @@ export interface CommunityInstall {
 }
 
 /**
+ * E9-107 — ONE SHARED BUDGET OF REQUESTS, however many installs are running.
+ *
+ * Eight files at a time inside one install was measured in E9-21 and is
+ * still right. What changed is that installs now run SEVERAL AT A TIME, and
+ * eight each would have meant twenty-four requests on jsDelivr — tripling
+ * what one person's click puts on somebody else's CDN to buy a speed-up that
+ * does not come from there.
+ *
+ * It does not come from there because the time is in the LISTING. Measured
+ * on eight catalogue scripts with the browser cache defeated, three runs
+ * each, median wall clock: one install at a time 600 ms, two 344, three 243,
+ * four 208. Each install begins with one `data.jsdelivr.com` request that
+ * takes between 280 and 1470 ms and fetches no file at all — and under the
+ * old shape nothing else happened while it was in the air. Overlapping THOSE
+ * is the 2.5x; the file fetches were already parallel.
+ *
+ * So twelve is the ceiling for FILE fetches across every install at once,
+ * not twelve per install: half as much again as one install used to take on
+ * its own. The listing is deliberately outside it — it is one request, it
+ * is the one we are trying to overlap, and gating it behind a budget full of
+ * somebody else's samples is how three installs would go back to being one.
+ */
+const BUDGET = 12;
+let inFlight = 0;
+const waitingForSlot: Array<() => void> = [];
+
+async function withSlot<T>(run: () => Promise<T>): Promise<T> {
+  if (inFlight >= BUDGET) await new Promise<void>((r) => waitingForSlot.push(r));
+  inFlight++;
+  try {
+    return await run();
+  } finally {
+    inFlight--;
+    waitingForSlot.shift()?.();
+  }
+}
+
+/**
+ * E9-107 — ONE INSTALL AT A TIME PER DESTINATION, whoever asked for it.
+ *
+ * This is the hazard that kept installs sequential, and it has to be shut
+ * before they are allowed to overlap. Two installs of the same name share
+ * `.installing/<name>`, and the first to finish sweeps it while the second
+ * is still writing — which is the exact half-script the staging directory
+ * exists to prevent. They also both move into `code/<name>`, and that move
+ * begins by deleting what is there.
+ *
+ * The queue's own de-duplication is not enough, and never was: the URL box
+ * runs OUTSIDE the queue, and a dependency is enqueued by name while the
+ * script that needs it is already running. So the guard lives here, where
+ * the destination is known, rather than in the one caller that happens to
+ * keep a list.
+ *
+ * The second caller WAITS and then runs, rather than being refused: asking
+ * for a script twice means you want it, and the second run simply reinstalls
+ * over the first. What it may not do is run at the same time.
+ */
+const perDestination = new Map<string, Promise<CommunityInstall>>();
+
+/**
  * Install a repository into `code/<name>/`.
  *
  * The name is the repository's, lower-cased, because that is what SELECT
@@ -623,6 +683,28 @@ export interface CommunityInstall {
  * the catalogue's name for it passes that instead.
  */
 export async function installFromRepo(
+  vfs: Vfs,
+  repo: Repo,
+  opts: Parameters<typeof installOne>[2] = {},
+): Promise<CommunityInstall> {
+  const key = `${opts.root ?? "/home/we/dust"}/code/${opts.name ?? repo.repo.toLowerCase()}`;
+  const before = perDestination.get(key);
+  // Awaited, not joined: the first install's FAILURE is its own and the
+  // second must still run. The `catch` here is not swallowing an error, it
+  // is declining to adopt one.
+  if (before !== undefined) await before.catch(() => undefined);
+  const mine = installOne(vfs, repo, opts);
+  perDestination.set(key, mine);
+  try {
+    return await mine;
+  } finally {
+    // Only if nothing queued behind us in the meantime, or the next caller
+    // would wait on a promise nobody is going to settle again.
+    if (perDestination.get(key) === mine) perDestination.delete(key);
+  }
+}
+
+async function installOne(
   vfs: Vfs,
   repo: Repo,
   opts: {
@@ -776,6 +858,11 @@ export async function installFromRepo(
   //
   // The files are independent: each writes its own path, and `done` and
   // `bytes` are only ever touched between awaits on one thread.
+  //
+  // E9-107 — and eight is still per install, but no longer the whole story:
+  // `withSlot` above holds every install running at once to ONE budget of
+  // twelve, so three of these pools do not become twenty-four requests on
+  // somebody else's CDN.
   const POOL = 8;
   let next = 0;
   let failure: unknown = null;
@@ -796,7 +883,7 @@ export async function installFromRepo(
         // checked here as well because a caller's own `fetchBytes` need not
         // honour one.
         const urls = urlFor.get(file.path)!;
-        const data = await fetchWithRetry(getBytes, urls, opts.signal, cancelled);
+        const data = await withSlot(() => fetchWithRetry(getBytes, urls, opts.signal, cancelled));
         if (cancelled()) return;
         const target = `${staging}/${file.path}`;
         const dir = target.slice(0, target.lastIndexOf("/"));

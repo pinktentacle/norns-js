@@ -73,3 +73,7 @@ tools/files/
 # carrying to another machine, and swept into a commit by `git add -A`
 # before anybody noticed. The file stays; the tracking does not.
 tools/*.zip
+
+# E9-117 — the Lua interpreter, built by tools/lua53/build.sh. Generated,
+# like every other wasm artefact here: `npm run lua` makes it.
+src/lua/lua53/

@@ -62,10 +62,10 @@ function fromContents(dir) {
   // that unpacked the same archives in another order answers something else,
   // and `pins:check` calls it stale over a difference that is not one.
   //
-  // Third time in this file, after the modification times in `fengariDiff`
-  // (E9-94) and the abbreviated `index` lines in `diffOf` (E9-98): a
-  // generated document must record nothing about the machine that generated
-  // it.
+  // Third time in this file, after the modification times in the fengari
+  // diff (E9-94, and that function left with fengari in E9-118) and the
+  // abbreviated `index` lines in `diffOf` (E9-98): a generated document
+  // must record nothing about the machine that generated it.
   const names = readdirSync(dir)
     .filter((n) => !n.startsWith("."))
     .sort();
@@ -159,9 +159,10 @@ function emscriptenVersion() {
  * patch better: `git apply --3way` can use a full index line and cannot use
  * an abbreviated one.
  *
- * Same family as the modification times in `fengariDiff` (E9-94), and the
- * same lesson: a generated file that embeds anything about THIS machine is
- * a check that fails on every other one.
+ * Same family as the modification times in the fengari diff (E9-94, gone
+ * with fengari in E9-118), and the same lesson: a generated file that
+ * embeds anything about THIS machine is a check that fails on every other
+ * one.
  */
 function diffOf(name) {
   return execFileSync("git", ["-C", join(VENDOR, name), "diff", "--full-index"], {
@@ -323,75 +324,47 @@ if (nested.length > 0) {
 }
 
 /**
- * E9-64 — fengari, which is vendored from npm rather than from git.
+ * E9-117 — Lua, which is a tarball rather than a checkout or a patch.
  *
- * `third_party/fengari` is the published package with
- * `patches/fengari.patch` applied: 64-bit integers, because norns' Lua has
- * them and fengari's were 32-bit. It is not a git checkout, so the loop
- * above cannot diff it; the pristine copy is the one npm installed, and
- * that is what this compares against. A `node_modules` that is not there —
- * an unpacked source tarball — reports nothing rather than failing, since
- * the patch is in the repository either way.
+ * `tools/lua53/build.sh` fetches it and VERIFIES THE HASH before it
+ * unpacks anything, so the build script is where the pin actually lives
+ * and this reads it back rather than restating it. A second copy of a
+ * sha256 is a second thing to forget.
+ *
+ * Unconditional, unlike the trees above: this one does not depend on what
+ * `third_party/` holds here, because the script does not either.
  */
-function fengariDiff() {
-  const mine = join(VENDOR, "fengari", "src");
-  const theirs = join(ROOT, "node_modules", "fengari", "src");
-  if (!existsSync(mine) || !existsSync(theirs)) return null;
-  // The header lines carry an absolute path AND A MODIFICATION TIME, and
-  // both have to go. The path because it is this machine's; the time
-  // because it is this INSTALL's — `npm ci` on another machine rewrites
-  // every mtime in `node_modules`, and the patch came back different in
-  // 769 lines of which 26 were timestamps. `pins:check` then reported
-  // `patches/fengari.patch is out of date` on a tree where nothing had
-  // changed, which is one of the five checks the publishing runbook says
-  // must pass. Measured by running the same diff in two checkouts.
-  //
-  // A unified diff's timestamps are optional; `patch -p0` does not read
-  // them. Taking everything before the tab drops the time, and `.pop()`
-  // on the path leaves the bare filename.
-  const relabel = (l) =>
-    l.startsWith("--- ") || l.startsWith("+++ ")
-      ? l.slice(0, 4) + "src/" + l.slice(4).split("\t")[0].split(/[\/]/).pop()
-      : l;
+function luaPin() {
   try {
-    execFileSync("diff", ["-ru", "--exclude=package.json", theirs, mine], {
-      encoding: "utf8",
-      maxBuffer: 64 * 1024 * 1024,
-    });
-    return ""; /* identical: the patch has not been applied */
-  } catch (e) {
-    /* `diff` exits 1 when files differ, which is the normal case here. */
-    if (typeof e.stdout !== "string") return null;
-    return e.stdout
-      .split("\n")
-      .filter((l) => !l.startsWith("diff -ru"))
-      .map(relabel)
-      .join("\n");
-  }
-}
-
-const fengariVersion = (() => {
-  try {
-    return JSON.parse(readFileSync(join(VENDOR, "fengari", "package.json"), "utf8")).version;
+    const sh = readFileSync(join(ROOT, "tools", "lua53", "build.sh"), "utf8");
+    const g = (k) => sh.match(new RegExp('^' + k + '="([^"]+)"', "m"))?.[1] ?? null;
+    const version = g("VERSION");
+    const sha = g("SHA256");
+    if (!version || !sha) return null;
+    return { version, sha, url: `https://www.lua.org/ftp/lua-${version}.tar.gz` };
   } catch {
     return null;
   }
-})();
+}
 
-if (fengariVersion !== null) {
-  L.push("## `fengari`, vendored from npm and patched");
+const lua = luaPin();
+if (lua !== null) {
+  L.push("## `lua53`, a release tarball with a hash");
   L.push("");
-  L.push("The Lua runtime. `third_party/fengari` is **fengari@" + fengariVersion + "** as npm");
-  L.push("publishes it, with `patches/fengari.patch` applied: integers become 64-bit");
-  L.push("BigInt inside the VM, because norns' Lua has 64-bit integers and fengari's");
-  L.push("were 32-bit — `1000000 * 1000000` came back as -727379968 and nothing said");
-  L.push("so. `test/integers.test.ts` is what that measurement became. MIT, as the package is.");
+  L.push("The Lua runtime, and the whole of ADR-02: norns runs **Lua " + lua.version + "**, so");
+  L.push("this does. `tools/lua53/build.sh` downloads it, refuses to unpack it unless");
+  L.push("the hash matches, and compiles 33 translation units to `src/lua/lua53/`.");
+  L.push("No patch — nothing in it needed changing. MIT.");
   L.push("");
   L.push("```");
-  L.push("cp -r node_modules/fengari third_party/fengari");
-  L.push("rm -rf third_party/fengari/node_modules");
-  L.push("(cd third_party/fengari && patch -p0 < ../../patches/fengari.patch)");
+  L.push(lua.url);
+  L.push("sha256  " + lua.sha);
   L.push("```");
+  L.push("");
+  L.push("Until E9-117 this was **fengari**, Lua written in JavaScript, vendored from");
+  L.push("npm and patched to 64-bit integers because its own were 32-bit. The patch");
+  L.push("is gone with it: Lua's integers are 64-bit, and `test/integers.test.ts` —");
+  L.push("which that patch is what created — still passes.");
   L.push("");
 }
 
@@ -429,12 +402,6 @@ if (write) {
     const diff = diffOf(t.name);
     writeFileSync(join(PATCHES, `${t.name}.patch`), diff, "utf8");
     process.stdout.write(`patches/${t.name}.patch  ${(diff.length / 1024).toFixed(1)} KB\n`);
-  }
-  const fd = fengariDiff();
-  if (fd) {
-    writeFileSync(join(PATCHES, "fengari.patch"), fd, "utf8");
-    process.stdout.write(`patches/fengari.patch  ${(fd.length / 1024).toFixed(1)} KB
-`);
   }
   writeFileSync(OUT, body, "utf8");
   process.stdout.write(`PINS.md  ${trees.length} trees, ${patched.length} patched\n`);
@@ -504,14 +471,6 @@ if (write) {
     const p = join(PATCHES, `${t.name}.patch`);
     if (!existsSync(p) || readFileSync(p, "utf8") !== diffOf(t.name)) {
       process.stderr.write(`patches/${t.name}.patch is out of date\n`);
-      stale = true;
-    }
-  }
-  const fdCheck = fengariDiff();
-  if (fdCheck !== null) {
-    const fp = join(PATCHES, "fengari.patch");
-    if (!existsSync(fp) || readFileSync(fp, "utf8") !== fdCheck) {
-      process.stderr.write("patches/fengari.patch is out of date\n");
       stale = true;
     }
   }

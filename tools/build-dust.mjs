@@ -120,6 +120,30 @@ const tree = {};
 // Hoisted: the copy loop below needs it, and it used to be decided after.
 const write = process.argv.includes("--write");
 
+// E9-128 — THE SIDECARS ARE CLEARED FIRST, because this script only ever
+// added to them.
+//
+// `public/dust-bin/` is where a file too big to inline goes: the index in
+// `dust.json` points at `/dust-bin/<script>/...` and the page fetches it
+// when something reads it. Nothing else writes there and it is gitignored,
+// so everything in it came from a previous run of THIS script.
+//
+// Which is the bug. A `--no-scripts` run writes a new index that names only
+// the stock 808 kit, and left every sidecar the last `--scripts` run had
+// put there: `vite build` copies `public/` wholesale, so `dist/dust-bin/`
+// came out at 19 MB holding amen, beets, dreamsequence and foulplay — other
+// people's sample files, in the build whose whole purpose is to serve none
+// of them. Seventeen of the thirty-five scripts tested with carry no licence
+// at all, which means all rights reserved.
+//
+// Measured, not reasoned about: `dist/dust-bin` 19 MB against a `dust.json`
+// that named 0 files under `dust/code`. The index was right and the folder
+// beside it was not, which is exactly how this kind of thing survives a
+// check. Same family as E9-123, one layer down.
+if (write) {
+  fs.rmSync(BIN_DIR, { recursive: true, force: true });
+}
+
 /**
  * `--redistributable` leaves out the scripts nobody has given us permission
  * to serve (E7-13).

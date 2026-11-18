@@ -88,15 +88,20 @@ Still owed before a public deploy, and tracked separately:
   compatible with GPL-3.0 for combination, and the combined work is offered
   under the AGPL. The source link covers it.
 
-## The Lua runtime, vendored (E9-64)
+## The Lua runtime, compiled from source (E9-117)
 
-`third_party/fengari` is **fengari@0.1.5** as npm publishes it, with
-`patches/fengari.patch` applied — 64-bit integers, because norns' Lua has
-them. Fengari is **MIT** and the patch does not change that: it is a
-derivative work under the same terms, kept as a diff so what is ours and
-what is theirs stay separable. The package is still a dependency in
-`package.json`; the vendored copy is what the build resolves, and
-`tools/pins.mjs --check` fails if the patch drifts from it.
+The interpreter in the bundle is **Lua 5.3.6**, PUC-Rio's own, fetched from
+`lua.org` by `tools/lua53/build.sh` against a sha256 and compiled to wasm
+with this project's emscripten. **MIT**, unmodified — there is no patch,
+which is the whole of what there is to say about the derivative work.
+`src/lua/lua53/lua53.wasm` is 233 KB of the bundle and `PINS.md` names the
+tarball and its hash.
+
+Until E9-117 it was **fengari@0.1.5**, Lua written in JavaScript, vendored
+under `third_party/fengari` with `patches/fengari.patch` applied for 64-bit
+integers. Both the tree and the patch are gone (E9-118): the package stays
+a devDependency because `spike/lua-vm/` measures against it, and nothing a
+visitor is served contains it.
 
 ## The DSP libraries compiled into scsynth (E9-58)
 

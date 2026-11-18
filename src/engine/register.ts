@@ -402,6 +402,20 @@ export function registerEngine(
   registry.implement("audio_pitch_on", () => toSclang("/crone/pitch/on"));
   registry.implement("audio_pitch_off", () => toSclang("/crone/pitch/off"));
 
+  // E9-112 — THE AUDIO LOAD, FROM THE SERVER THAT KNOWS IT.
+  //
+  // Stubbed at `0.0` until now, with a note saying a real value would come
+  // from the worklet. It does not have to: scsynth measures its own DSP
+  // against the block period and answers `/status` with it, which is the
+  // same quantity jack gives matron on hardware — the AUDIO thread's
+  // share, not the page's. `main.ts` asks once a second and the reply is
+  // cached in `host.status`.
+  //
+  // Rounded to a whole percent here rather than in Lua: `home.lua:55` does
+  // `math.floor` on it anyway, and 0.29 floored is 0, which is honest for
+  // a server that is doing almost nothing.
+  registry.implement("audio_get_cpu_load", () => [host.status.avgCpu]);
+
   // --- the virtual port graph (E4-12) ----------------------------------
   //
   // There is no JACK, but there IS a real graph to model: `core/audio.lua`

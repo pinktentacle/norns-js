@@ -1,28 +1,39 @@
-// Fengari access and the marshalling helpers everything else uses.
+// Interpreter access and the marshalling helpers everything else uses.
 //
-// Fengari is Lua 5.3 reimplemented in JavaScript (MIT). It is the runtime
-// because norns is 5.3 and wasmoon is 5.4: E0 recorded that accepting the
-// mismatch means a script using 5.4-only syntax works in the browser and then
-// fails on hardware, which is the one failure mode this project exists to
-// avoid. See research/lua-runtime.md.
+// THE SEAM, and that is the whole job of this file. Sixteen other files
+// import `lua`, `lauxlib`, `lualib` and `to_luastring` from here and use
+// forty-eight names between them; none of them knows which Lua answers.
+// That is what made E9-117 a port rather than a rewrite.
 //
-// Fengari ships as CommonJS. A default import is still the right way in: both
-// Vite and Vitest convert it, and `createRequire` — which the spike used —
-// is a Node builtin that Vite externalises, so the page died on the first
-// line with "Module node:module has been externalized for browser
-// compatibility". The same file has to work in both places.
+// It is PUC Lua 5.3.6 compiled to wasm (`./wasm53.ts`, `tools/lua53/`).
+// Until E9-117 it was fengari, Lua 5.3 reimplemented in JavaScript. The
+// VERSION is the constant across that change and the reason for both:
+// norns is 5.3 and wasmoon is 5.4, and E0 recorded that accepting the
+// mismatch means a script using 5.4-only syntax works in the browser and
+// then fails on hardware, which is the one failure mode this project
+// exists to avoid. What changed is the speed — 2.4—13x a script,
+// `docs/13-CPU.md`. See research/lua-runtime.md.
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import fengariDefault from "fengari";
+import { lua as wasmLua, lauxlib as wasmAux, lualib as wasmLib, to_luastring as wasmStr,
+  initLua, luaReady, luaVersion } from "./wasm53.js";
 
-const fengari: any = fengariDefault;
+export const lua = wasmLua;
+export const lauxlib = wasmAux;
+export const lualib = wasmLib;
+export const to_luastring: (s: string) => any = wasmStr;
 
-export const lua = fengari.lua;
-export const lauxlib = fengari.lauxlib;
-export const lualib = fengari.lualib;
-export const to_luastring: (s: string) => Uint8Array = fengari.to_luastring;
+/**
+ * Bring the interpreter up. Await once, before any state is created.
+ *
+ * THE ONE LINE THE PORT COSTS ITS CALLERS. fengari was a JavaScript module
+ * and needed no such call; a wasm module has to be instantiated, and that
+ * is asynchronous. `main.ts` awaits it before `createHost`; the tests that
+ * build a state do it in a `beforeAll`.
+ */
+export { initLua, luaReady, luaVersion };
 
-/** An opaque Fengari lua_State. */
+/** An opaque lua_State. */
 export type LuaState = unknown;
 
 /** The value types we move across the boundary. */
@@ -56,7 +67,9 @@ export function pushValue(L: LuaState, v: LuaValue): number {
     if (Number.isInteger(v)) lua.lua_pushinteger(L, v);
     else lua.lua_pushnumber(L, v);
   } else if (typeof v === "string") {
-    lua.lua_pushliteral ? lua.lua_pushstring(L, to_luastring(v)) : lua.lua_pushstring(L, to_luastring(v));
+    // One branch, since E9-117. It used to test for `lua_pushliteral` and
+    // then do the same thing either way, which was a fengari-era leftover.
+    lua.lua_pushstring(L, to_luastring(v));
   } else if (v instanceof Uint8Array) {
     // A binary string, byte for byte. `screen_peek` returns exactly w*h bytes
     // valued 0-15; encoding that as UTF-8 text would corrupt every byte above

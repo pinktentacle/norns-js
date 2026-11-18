@@ -114,6 +114,15 @@ export interface MaidenPanel {
   show(): void;
   hide(): void;
   toggle(): void;
+  /**
+   * E9-109 — fetch these catalogue scripts, saying who wants them.
+   *
+   * Forwarded to the project activity, which owns the queue. Resolves to
+   * the names it could not find. A panel built without a `project` has no
+   * installer at all, and answers that every name is missing rather than
+   * pretending to have queued them.
+   */
+  want(names: readonly string[], neededBy: string): Promise<string[]>;
   dispose(): void;
 }
 
@@ -362,6 +371,24 @@ export function createMaidenPanel(opts: MaidenPanelOptions): MaidenPanel {
   tree.className = "mdn-tree";
   side.append(sideHead, ask.element, tree);
 
+  /**
+   * Show or hide the file tree, from the keyboard or from the button.
+   *
+   * One function rather than two copies of three lines: `data-side` is
+   * what the stylesheet reads, `hidden` is what keeps it out of the tab
+   * order, and Ace has to be told because its own size changed.
+   */
+  const showSide = (on: boolean): void => {
+    side.hidden = !on;
+    host.dataset["side"] = on ? "on" : "off";
+    filesButton.setAttribute("aria-pressed", String(on));
+    editorRef?.resize(true);
+  };
+  /** Ace, once it exists. `showSide` can be called before it does. */
+  let editorRef: { resize(force: boolean): void } | null = null;
+  /** The same 720px the stylesheet uses, asked of the window. */
+  const narrow = (): boolean => (globalThis.innerWidth || 0) <= 720;
+
   // --- the editor -------------------------------------------------------
   const main = document.createElement("div");
   main.className = "mdn-main";
@@ -371,6 +398,26 @@ export function createMaidenPanel(opts: MaidenPanelOptions): MaidenPanel {
   tabs.className = "mdn-tabs";
   const tools = document.createElement("div");
   tools.className = "mdn-tools";
+  /**
+   * E9-110 — THE TREE'S OWN BUTTON, because Ctrl-B is not a gesture.
+   *
+   * Under 720px the file tree is an overlay rather than a column (see the
+   * stylesheet), and something has to open it again. maiden has had a
+   * toggle since it had a sidebar and it is Ctrl-B, which is no use at all
+   * on the machine this was reported from.
+   *
+   * It lives in the editor's own toolbar, on the left, where the thing it
+   * covers is: press it and the tree comes over the editor, pick a file
+   * and the tree goes away again. Hidden by the stylesheet on a screen
+   * wide enough for three columns, where the tree is always there and a
+   * button that said `files` beside it would be a button that lies.
+   */
+  const filesButton = document.createElement("button");
+  filesButton.className = "mdn-files";
+  filesButton.type = "button";
+  filesButton.title = "the dust tree";
+  filesButton.textContent = "files";
+  tools.append(filesButton);
   const playButton = document.createElement("button");
   playButton.className = "mdn-play";
   playButton.type = "button";
@@ -517,6 +564,7 @@ export function createMaidenPanel(opts: MaidenPanelOptions): MaidenPanel {
   host.append(rail, side, main, exitAsk.element);
 
   const editor = ace.edit(editorHost);
+  editorRef = editor;
   /** What the editor shows when nothing is open. */
   const empty = ace.createEditSession("", "ace/mode/text");
   editor.setSession(empty);
@@ -688,6 +736,11 @@ export function createMaidenPanel(opts: MaidenPanelOptions): MaidenPanel {
 
   const openFile = (entry: EditorEntry): void => {
     note = null;
+    // E9-110 — ON A NARROW SCREEN THE TREE IS OVER THE EDITOR, so choosing
+    // a file is also the moment to get out of the way. Asked of the
+    // stylesheet rather than of the machine profile, because what matters
+    // is whether the tree is covering anything and that is a width.
+    if (narrow()) showSide(false);
     if (buffers.has(entry.path)) {
       showBuffer(entry.path);
       return;
@@ -870,14 +923,11 @@ export function createMaidenPanel(opts: MaidenPanelOptions): MaidenPanel {
     bindKey: { win: "Ctrl-E", mac: "Command-E" },
     exec: () => setActivity(activity === "repl" ? "edit" : "repl"),
   });
+  filesButton.addEventListener("click", () => showSide(side.hidden === true), { signal });
   editor.commands.addCommand({
     name: "toggle sidebar",
     bindKey: { win: "Ctrl-B", mac: "Command-B" },
-    exec: () => {
-      side.hidden = !side.hidden;
-      host.dataset["side"] = side.hidden ? "off" : "on";
-      editor.resize(true);
-    },
+    exec: () => showSide(side.hidden === true),
   });
 
   // Ctrl-S belongs to the browser otherwise, and "save page as" over an
@@ -1199,7 +1249,9 @@ export function createMaidenPanel(opts: MaidenPanelOptions): MaidenPanel {
 
   host.hidden = true;
   host.dataset["activity"] = "edit";
-  host.dataset["side"] = "on";
+  // E9-110 — a narrow screen starts with the editor, not with the
+  // tree over it. Wide screens are unchanged: three columns, tree shown.
+  showSide(!narrow());
   if (repl !== null) repl.element.hidden = true;
 
   return {
@@ -1211,6 +1263,12 @@ export function createMaidenPanel(opts: MaidenPanelOptions): MaidenPanel {
     toggle() {
       if (open) hide();
       else show();
+    },
+    async want(names, neededBy) {
+      // A panel built without a `project` has no installer at all, so it
+      // answers that every name is missing rather than pretending.
+      if (project === null) return [...names];
+      return project.want(names, neededBy);
     },
     dispose() {
       ac.abort();

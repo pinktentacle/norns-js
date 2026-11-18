@@ -3,7 +3,17 @@
 // R-01 is "upstream `lua/core/*` runs **unmodified**", so nothing here patches
 // a norns file. Everything norns expects from its environment is supplied
 // around it instead: a module searcher, the `_norns` table, and the few pieces
-// of the standard library Fengari does not ship.
+// of the standard library that a browser cannot have.
+//
+// E9-118 — READ THE FENGARI NOTES BELOW AS HISTORY. Several of the shims
+// here were written against gaps in fengari rather than gaps in the
+// browser: `lua_gc`, `os.clock`, `os.tmpname`, parts of `io`. Since E9-117
+// the interpreter is PUC Lua 5.3 compiled to wasm and has all of them —
+// but a browser still has no filesystem, no processes and no monotonic
+// clock of norns' kind, so each shim has to be re-asked one at a time.
+// None of that re-asking has been done. What IS measured is that every
+// test passes and the page boots with them in place, which is a reason to
+// leave them alone and not a reason to believe each one is needed.
 //
 // Sources are passed in as a map rather than read from disk, because the same
 // host has to work in a browser where there is no filesystem. `loadNornsLua`
