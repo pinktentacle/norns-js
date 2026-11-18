@@ -739,14 +739,21 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     try {
       const res = await fetch(`${nornsScUrl}/ugens.json`);
       if (!res.ok) {
-        log("ugens.json is missing; SynthDefs will not be checked before sending");
+        log(
+          "ugens.json is missing; SynthDefs will not be checked before sending " +
+            "— one unknown UGen will take the audio server down for the session. " +
+            "Run: npm run ugens",
+        );
         return 0;
       }
       const list = (await res.json()) as string[];
       FS.writeFile("/sc/ugens.txt", list.join("\n"));
       return list.length;
     } catch (e) {
-      log(`ugens.json: ${(e as Error).message}`);
+      log(
+        `ugens.json: ${(e as Error).message} — SynthDefs will not be checked, ` +
+          "and one unknown UGen will take the audio server down for the session.",
+      );
       return 0;
     }
   }

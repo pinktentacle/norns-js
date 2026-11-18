@@ -220,6 +220,7 @@ The second takes seconds:
 npm run clock           # the clock worklet
 npm run dust            # the filesystem image — needs `community patches/`
 npm run audio           # stage 1's wasm, into public/
+npm run ugens           # the UGens THIS scsynth has, for the SynthDef check
 npm run crone:worklet   # regenerated far less often, so it is separate
 ```
 
@@ -230,6 +231,12 @@ until the script was written and the list was followed:
   `wasm-dist/sclang-nopreload/`; the sclang from `build.sh` keeps its 2 MB
   `--preload-file` class library and is never copied. Skip it and `npm run
   audio` stops with `missing — build it first`.
+* **`npm run ugens` is not optional either**, and it is the one that fails
+  invisibly. It writes the names of the UGens this scsynth was compiled
+  with; the page checks every SynthDef against that list before sending it,
+  because scsynth THROWS on an unknown UGen and this build has exceptions
+  off — the throw kills the thread that handles `/d_recv` and it never
+  comes back. No def loads, nothing sounds, and `/status` keeps answering.
 * **`npm run dust` needs `community patches/`**, which is 91 MB of cloned
   scripts and is not in this repository. A tree without it wants
   `node tools/build-dust.mjs --no-scripts --write`, which is what a

@@ -50,6 +50,20 @@
       report and writes nothing, which looks exactly like success. The
       publishing runbook said that for a week.
 
+  A FIFTH, AND THE WORST OF THEM (E9-105): `tools/build-ugen-list.mjs` was
+  in no npm script and in no list anywhere. It writes
+  `public/norns-sc/ugens.json`, the names of the UGens THIS scsynth was
+  compiled with, and the page checks every SynthDef against it before
+  sending one. Without that check scsynth THROWS on an unknown UGen, this
+  build has exceptions off, the throw kills the thread that handles
+  `/d_recv`, and that thread never comes back: no def loads, nothing sounds
+  and nothing says so, while `/status` keeps answering.
+
+  It existed on the machine this was written on because somebody had run it
+  by hand in November. A fresh machine built everything, deployed, and the
+  live page said `ugens.json: Unexpected token '<'` — the file was never
+  generated, so the server was returning the SPA fallback.
+
   AND ONE ORDERING TRAP: `npm run fonts` writes `src/screen/fonts.h`, which
   `src/screen/screen.c` includes. It is an INPUT to stage 1, not an output
   of stage 2, so it runs first here. The file is tracked and normally
@@ -211,6 +225,12 @@ $steps = @(
     Run  = @("tools/build-audio-assets.mjs", "--write")
     Makes = @("public/sclang", "public/scsynth", "public/norns-sc", "public/pack")
     Why  = "stage 1's wasm, copied into public/ where the page can fetch it"
+  },
+  @{
+    Name = "ugens"; Stage = 2; How = "node"; Always = $true
+    Run  = @("tools/build-ugen-list.mjs", "--write")
+    Makes = @("public/norns-sc/ugens.json")
+    Why  = "the list of UGens THIS scsynth has, without which one bad SynthDef is fatal"
   },
   @{
     Name = "worklet"; Stage = 2; How = "node"; Always = $true
