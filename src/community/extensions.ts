@@ -118,11 +118,36 @@ export async function declareExtensions(vfs: Vfs, opts: DeclareOptions = {}): Pr
     ours.add(path);
   };
 
+  /**
+   * E9-141 — ASKED FOR AT ONCE, not one after another.
+   *
+   * This was a `for` with an `await` in it: sixteen network round trips in
+   * single file, on the boot path, before anything else can happen. They
+   * are independent static files and nothing between them depends on the
+   * one before.
+   *
+   * FOUND BY THE TIMESTAMPS E9-130 ADDED, in the first log that had them:
+   *
+   *     3.845 storage: 69.6 MB used of 10309.6 MB, best-effort
+   *    14.764 extensions: 166 declared in …
+   *
+   * Eleven seconds, on a phone, with nothing between the two lines but
+   * this function. How much of it is these requests is not something this
+   * machine can measure — it is one round trip on a LAN — but sixteen in
+   * series on the boot path is wrong whatever the latency, and E9-106
+   * made exactly this change for the dust tree for exactly this reason.
+   *
+   * The writes stay in PER_PACKAGE order so the set this call vouches for
+   * does not depend on which request answered first.
+   */
+  const wanted = PER_PACKAGE.filter(([name]) => names.has(name));
+  const sources = await Promise.all(wanted.map(([name, dir]) => text(`/norns-sc/${dir}/${name}.sc`)));
+
   let declared = 0;
-  for (const [name, dir] of PER_PACKAGE) {
-    if (!names.has(name)) continue;
-    const src = await text(`/norns-sc/${dir}/${name}.sc`);
-    if (src === null) continue;
+  for (let i = 0; i < wanted.length; i++) {
+    const src = sources[i];
+    if (src === null || src === undefined) continue;
+    const name = wanted[i]![0];
     put(`${ext}/${name}/${name}.sc`, src);
     put(`${ext}/${name}/${name}.so`, MARKER(name, "file"));
     put(`${ext}/${name}/${name}.cpp`, MARKER(name, "file"));

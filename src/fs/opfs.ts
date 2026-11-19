@@ -339,6 +339,32 @@ export async function restoreFromOpfs(vfs: Vfs, opts: OpfsOptions = {}): Promise
   return { files, tombstones, placeholders, references, bytes, ghosts: ghosts.length };
 }
 
+/**
+ * E9-143 — ERASE EVERYTHING THIS ORIGIN HAS SAVED.
+ *
+ * The whole `norns-dust` directory, tombstones and reference lists
+ * included, which is the one thing a file-by-file reset cannot be: a
+ * factory default has to leave nothing behind to be restored, and the
+ * bookkeeping files beside the tree are part of what would be.
+ *
+ * STOP THE MIRROR FIRST, which is the caller's job — this cannot do it,
+ * because it does not own one, and a mirror still running would write
+ * the overlay straight back into the directory this has just removed.
+ *
+ * It answers false rather than throwing: a browser that will not give up
+ * its storage is a browser where the page should say so, not one where
+ * the page should fall over.
+ */
+export async function wipeOpfs(opts: OpfsOptions = {}): Promise<boolean> {
+  try {
+    const r = await (opts.root ?? defaultRoot)();
+    await r.removeEntry(ROOT_DIR, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface OpfsMirror {
   /** Everything written so far has reached OPFS. For tests and for a quit. */
   flush(): Promise<void>;

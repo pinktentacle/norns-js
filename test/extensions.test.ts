@@ -228,3 +228,38 @@ describe("the mi-UGens BUILDINFO", () => {
     expect(vfs.read(`${EXT}/mi-UGens/BUILDINFO`)).toBeNull();
   });
 });
+
+// E9-141 — the boot does not wait for them one at a time.
+//
+// Found by the timestamps E9-130 added, in the first log that had them:
+// eleven seconds on a phone between the storage line and `extensions:
+// … declared`, with nothing but this function between the two. The
+// requests are independent static files and nothing between them depends
+// on the one before. E9-106 made this same change for the dust tree.
+//
+// The test is about CONCURRENCY, not speed: it holds every request open
+// until all of them have arrived, which can only finish if they were in
+// flight together.
+describe("the extension sources are fetched together", () => {
+  it("has them all in flight at once, not one after another", async () => {
+    let open = 0;
+    let highWater = 0;
+    const vfs = new Vfs();
+    await declareExtensions(vfs, {
+      fetchJson: async () => ["MiClouds", "MiRings", "MiElements"],
+      fetchText: async (u: string) => {
+        if (!u.endsWith(".sc")) return null;
+        open++;
+        highWater = Math.max(highWater, open);
+        // A real pause, so a serial loop would finish this one before
+        // starting the next and never see two open at a time.
+        await new Promise((r) => setTimeout(r, 15));
+        open--;
+        const name = u.split("/").pop()!.replace(".sc", "");
+        return `${name} : UGen {}
+`;
+      },
+    });
+    expect(highWater, "the sources were fetched one at a time").toBeGreaterThan(1);
+  });
+});

@@ -133,6 +133,40 @@ export interface SettingsPanelOptions {
     addScript(bytes: Uint8Array, name: string): Promise<void>;
     /** The same, from a URL. */
     addScriptFromUrl(url: string): Promise<void>;
+    /**
+     * E9-142 — put `~/dust/code` back to what the build ships, and restart.
+     *
+     * Optional like the rest of `files`: a host with no dust tree has
+     * nothing to reset, and the section is simply not built.
+     */
+    resetScripts?(): Promise<{ scripts: number; files: number }>;
+    /** How many are installed, for the confirm button to name. */
+    installed?(): number;
+    /**
+     * E9-143 — every script's presets and MIDI mappings, then a restart.
+     *
+     * `system.state` and `system.pset` are spared: they live in the same
+     * directory and they are not a script's.
+     */
+    resetParams?(): Promise<{ files: number }>;
+    /**
+     * E9-143 — erase this origin entirely and reload.
+     *
+     * Answers `{ ok: false }` when the browser refuses to give up its
+     * storage, so the panel can say so instead of appearing to work.
+     */
+    factoryReset?(): Promise<{ ok: boolean }>;
+    /**
+     * E9-143 — the clock tempo, which lives at PARAMS > CLOCK > tempo.
+     *
+     * Here as well because that path is four panels into a screen that a
+     * struggling page cannot draw, and this panel is HTML.
+     */
+    tempo?: {
+      /** 0 when Lua has not answered — the row hides itself. */
+      get(): number;
+      set(bpm: number): void;
+    };
   };
 }
 
@@ -696,6 +730,129 @@ export function createSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
   markMax();
   filesPane.append(install);
 
+  // --- starting again (E9-142, E9-143) ------------------------------------
+  //
+  // THREE BUTTONS AND THEY ARE NOT THE SAME SIZE. Asked for one at a time
+  // (user, 2026-11-19) and each with its own scope, which is the point:
+  // "reset" with no object is the kind of button people press once and
+  // regret, so each says what it takes and the hint under it says what it
+  // leaves.
+  //
+  //   the scripts        ~/dust/code         presets and settings stay
+  //   their parameters   ~/dust/data/*       the scripts themselves stay
+  //   factory defaults   everything          nothing stays
+  //
+  // ONE PATTERN FOR ALL THREE. Two clicks in place: the rail's restart
+  // earns a popover because it is a rail button with no room for a
+  // sentence, and these sit in a pane that can hold one. The second label
+  // says what is about to happen rather than "are you sure", and it
+  // disarms itself after six seconds, because a button left armed behind
+  // a closed panel is a trap.
+  const danger = (
+    into: HTMLElement,
+    safe: string,
+    confirm: () => string,
+    run: () => Promise<unknown>,
+  ): HTMLButtonElement => {
+    const row = el("div", "sp-row");
+    const btn = el("button", "sp-toggle sp-danger", safe) as HTMLButtonElement;
+    row.append(btn);
+    into.append(row);
+    let armed: ReturnType<typeof setTimeout> | null = null;
+    const disarm = (): void => {
+      if (armed !== null) clearTimeout(armed);
+      armed = null;
+      btn.textContent = safe;
+      btn.classList.remove("sp-armed");
+    };
+    btn.addEventListener(
+      "click",
+      () => {
+        if (armed === null) {
+          btn.textContent = confirm();
+          btn.classList.add("sp-armed");
+          armed = setTimeout(disarm, 6000);
+          return;
+        }
+        disarm();
+        btn.disabled = true;
+        btn.textContent = "…";
+        // The page restarts or reloads on success, so there is no success
+        // branch to write. A failure has to put the button back, or the
+        // only way out is a reload the user did not ask for.
+        void run().catch(() => {
+          btn.disabled = false;
+          btn.textContent = safe;
+        });
+      },
+      { signal },
+    );
+    return btn;
+  };
+
+  if (opts.files?.resetScripts || opts.files?.resetParams || opts.files?.factoryReset) {
+    const reset = el("section", "sp-section");
+    reset.append(el("h2", undefined, "starting again"));
+
+    if (opts.files?.resetScripts) {
+      danger(
+        reset,
+        "remove every installed script",
+        () => {
+          const n = opts.files?.installed?.() ?? 0;
+          return n === 0 ? "yes, empty it" : `yes, remove ${n} script${n === 1 ? "" : "s"}`;
+        },
+        async () => await opts.files?.resetScripts?.(),
+      );
+      reset.append(
+        el(
+          "p",
+          "sp-hint",
+          "empties ~/dust/code and any half-finished downloads, then restarts. " +
+            "presets, tapes and settings are not touched.",
+        ),
+      );
+    }
+
+    if (opts.files?.resetParams) {
+      danger(
+        reset,
+        "reset every script's parameters",
+        () => "yes, forget every preset",
+        async () => await opts.files?.resetParams?.(),
+      );
+      reset.append(
+        el(
+          "p",
+          "sp-hint",
+          "empties ~/dust/data, so every script comes back at its defaults. " +
+            "the scripts themselves stay installed, and so do the clock, the " +
+            "mixer and your devices.",
+        ),
+      );
+    }
+
+    if (opts.files?.factoryReset) {
+      danger(
+        reset,
+        "factory defaults",
+        () => "yes, erase everything",
+        async () => await opts.files?.factoryReset?.(),
+      );
+      reset.append(
+        el(
+          "p",
+          "sp-hint",
+          "erases everything this page has saved — scripts, presets, tapes, " +
+            "recordings and every setting — and reloads. there is nothing left " +
+            "to undo it with, so export first if you want any of it back.",
+        ),
+      );
+    }
+
+    filesPane.append(reset);
+  }
+
   // --- about (E7-08) ------------------------------------------------------
   //
   // The AGPL's §13: software interacted with over a network must OFFER its
@@ -855,6 +1012,15 @@ export function createSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
 
   // --- opening ----------------------------------------------------------
 
+  /**
+   * Painted when the panel opens, for the same reason `paintPorts` is.
+   *
+   * A section built after this point cannot be named inside `setOpen`
+   * without hoisting it, and the file's own rule is that nothing calls
+   * back into the host at construction time.
+   */
+  const onOpenHooks: Array<() => void> = [];
+
   const setOpen = (on: boolean): void => {
     open = on;
     // PAINTED ON OPENING AND NOT AT CONSTRUCTION, which is not a style
@@ -871,6 +1037,7 @@ export function createSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
       loopMark();
       paintPorts();
       void paintAudio();
+      for (const h of onOpenHooks) h();
     }
     panel.hidden = !on;
     opts.button.setAttribute("aria-expanded", String(on));
@@ -928,6 +1095,95 @@ export function createSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
   const audioNote = el("p", "sp-note", "");
   audioSection.append(audioHint, outRow, inRow, inToggleRow, grantRow, audioNote);
   audioPane.append(audioSection);
+
+  // --- the clock (E9-143) -------------------------------------------------
+  //
+  // IT ALREADY HAS A HOME and this is not it: PARAMS > CLOCK > tempo,
+  // confirmed in a running page with no script loaded —
+  //
+  //     panels = MIX, TAPE, HOME, PARAMS
+  //     groups = LEVELS | REVERB | COMPRESSOR | SOFTCUT | CLOCK
+  //
+  // which is one of four panels reached with E1, and NOT under SYSTEM,
+  // where this file's author first sent somebody looking.
+  //
+  // It is here as well because of how the need was found: a phone whose
+  // clock was at 220, playing a 136 bpm break at 1.62x, and an interface
+  // too slow to navigate four panels into. A setting you cannot reach
+  // when the page is struggling is a setting that does not exist on the
+  // day you need it — and this panel is HTML, so it answers when the
+  // norns screen does not.
+  //
+  // 90 IS THE DEFAULT because `core/state.lua:50` says so, not because it
+  // is a nice number.
+  const tempoApi = opts.files?.tempo;
+  if (tempoApi) {
+    const clockSection = el("section", "sp-section");
+    clockSection.append(el("h2", undefined, "clock"));
+
+    const tempoRow = el("div", "sp-row");
+    tempoRow.append(el("span", "sp-sub", "tempo"));
+    const tempoInput = el("input", "sp-num") as HTMLInputElement;
+    tempoInput.type = "number";
+    tempoInput.min = "1";
+    tempoInput.max = "300";
+    tempoInput.step = "1";
+    const tempoUnit = el("span", "sp-sub", "bpm");
+    const tempoReset = el("button", "sp-reset", "default");
+
+    const markTempo = (): void => {
+      // ZERO MEANS THE PARAMS ARE NOT BUILT YET, not a tempo of zero.
+      // `clock.add_params()` runs in `Script.clear()`, which is part of
+      // the boot gate, so a panel opened in the first ten seconds asks
+      // for a parameter that does not exist and Lua says so. Measured:
+      // "core/paramset.lua:491: invalid paramset index: clock_tempo" at
+      // 9.7 s, and 90 at 12.1 s. An empty box would read as a broken
+      // field; a disabled one reads as not yet.
+      const now = tempoApi.get();
+      const ready = now > 0;
+      tempoInput.disabled = !ready;
+      tempoInput.value = ready ? String(now) : "";
+      tempoInput.placeholder = ready ? "" : "…";
+      tempoReset.disabled = !ready || now === 90;
+    };
+    // ON `change`, NOT ON `input`, for the same reason as the install
+    // limit above: a number field is typed INTO, and "136" passes through
+    // "1", "13" on the way.
+    tempoInput.addEventListener(
+      "change",
+      () => {
+        tempoApi.set(Number(tempoInput.value));
+        markTempo();
+      },
+      { signal },
+    );
+    tempoReset.addEventListener(
+      "click",
+      () => {
+        tempoApi.set(90);
+        markTempo();
+      },
+      { signal },
+    );
+    tempoRow.append(tempoInput, tempoUnit, tempoReset);
+    clockSection.append(tempoRow);
+    clockSection.append(
+      el(
+        "p",
+        "sp-hint",
+        "the same number as PARAMS > CLOCK > tempo, which is four panels along " +
+          "with E1. it belongs to this machine rather than to a script, so it " +
+          "survives every script you load — which is how a break meant for 136 " +
+          "ends up playing at 220.",
+      ),
+    );
+    // Read when the panel opens: Lua may not have answered at build time,
+    // and a script can move the tempo while this is closed.
+    // NOT called here: this asks Lua, and the rule above is that nothing
+    // reaches into the host while the panel is being built.
+    onOpenHooks.push(markTempo);
+    audioPane.append(clockSection);
+  }
 
 
   /** Fill one picker, keeping the stored choice selected if it is still there. */

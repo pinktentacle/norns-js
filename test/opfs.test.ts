@@ -480,3 +480,86 @@ describe("the storage line", () => {
     expect(main.slice(at, at + 900)).toMatch(/\}\s*catch\s*\{/);
   });
 });
+
+// E9-142 — the reset button, and the three things it must do in order.
+//
+// Asked for in the settings and scoped to scripts alone (user,
+// 2026-11-19). The logic sits inline in `main.ts`, which wants a DOM and
+// an AudioWorklet, so it is read the way `rail-panels.test.ts` reads the
+// rail. Proven once in a browser: 813 files under `code/` before, 705
+// after, `opfs: restored 1 file(s), 2.9 KB, 108 deletion(s)` on the way
+// back up, and `kolor` and `tmi` gone while the 35 the build ships
+// returned.
+describe("resetting the scripts", () => {
+  const raw = fs.readFileSync(path.join(__dirname, "..", "src", "main.ts"), "utf8");
+  const body = (): string => {
+    const at = raw.indexOf("resetScripts: async () => {");
+    expect(at, "resetScripts has gone").toBeGreaterThan(-1);
+    return raw.slice(at, raw.indexOf("\n      },", at));
+  };
+
+  // `revert` answers only for a path the BUILD supplies, so the pair is
+  // what makes this a reset rather than a delete: bundled scripts come
+  // back as the build has them, installed ones cease to exist.
+  it("reverts what the build ships and removes what it does not", () => {
+    expect(body()).toMatch(/if\s*\(\s*!vfs\.revert\(p\)\s*\)\s*vfs\.remove\(p\)/);
+  });
+
+  it("takes the half-finished downloads too", () => {
+    expect(body()).toContain(".installing");
+  });
+
+  // THE ONE THAT WOULD BE SILENT. Removals only queue; the mirror is
+  // debounced. A reset that reloaded first would come back with the
+  // scripts still there — E9-135 and E9-140 were both exactly that.
+  it("flushes before it restarts, or the reset does not survive the reload", () => {
+    const b = body();
+    const flush = b.indexOf("mirror.flush()");
+    const restart = b.indexOf("doRestart()");
+    expect(flush, "the mirror is not flushed").toBeGreaterThan(-1);
+    expect(restart, "it does not restart").toBeGreaterThan(-1);
+    expect(flush, "it restarts before the removals reach the disk").toBeLessThan(restart);
+  });
+});
+
+// E9-143 — the other two buttons, and the one that must NOT flush.
+describe("the other two resets", () => {
+  const raw = fs.readFileSync(path.join(__dirname, "..", "src", "main.ts"), "utf8");
+  const bodyOf = (name: string): string => {
+    const at = raw.indexOf(`${name}: async () => {`);
+    expect(at, `${name} has gone`).toBeGreaterThan(-1);
+    return raw.slice(at, raw.indexOf("\n      },", at));
+  };
+
+  // `system.state` and `system.pset` live in the same directory and are
+  // not a script's: they hold the clock tempo, the mixer and the devices.
+  it("spares the system's own files when it empties ~/dust/data", () => {
+    const b = bodyOf("resetParams");
+    expect(b).toContain("/home/we/dust/data");
+    expect(b, "system.state would go with the presets").toMatch(/keep\s*=\s*\/\^system/);
+    expect(b).toMatch(/if\s*\(keep\.test/);
+  });
+
+  it("flushes the removals before it restarts", () => {
+    const b = bodyOf("resetParams");
+    expect(b.indexOf("mirror.flush()")).toBeGreaterThan(-1);
+    expect(b.indexOf("mirror.flush()")).toBeLessThan(b.indexOf("doRestart()"));
+  });
+
+  // THE INVERSION, AND IT IS THE WHOLE CARE IN THAT FUNCTION. Every other
+  // reset flushes so its removals survive. This one must not: the overlay
+  // still holds everything, and flushing would write it straight back
+  // into the directory just erased.
+  it("stops the mirror and does NOT flush it", () => {
+    const b = bodyOf("factoryReset");
+    expect(b).toContain("mirror.stop()");
+    expect(b, "flushing here writes the whole overlay back").not.toContain("mirror.flush()");
+    expect(b.indexOf("mirror.stop()")).toBeLessThan(b.indexOf("wipeOpfs()"));
+  });
+
+  it("reloads rather than restarting, so nothing saves state on the way out", () => {
+    const b = bodyOf("factoryReset");
+    expect(b).toMatch(/location\?\.reload\(\)/);
+    expect(b, "_norns.restart saves system.state as it goes").not.toContain("doRestart()");
+  });
+});

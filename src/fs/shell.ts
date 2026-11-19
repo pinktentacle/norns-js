@@ -522,10 +522,58 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
     // already existing, and if it did not, every matched file was written
     // onto the destination PATH in turn, each overwriting the last. One
     // file, wrongly named, where a folder was meant.
-    const sources = args.flatMap((a) => globIn(vfs, a));
+    /**
+     * E9-144 — A DIRECTORY IS A SOURCE, and `-r` is what says so.
+     *
+     * `globIn` answers with FILES: a pattern with no `*` is kept only if
+     * `vfs.exists` likes it, and a directory is not a file. So every
+     * source that was a folder vanished here, the loop ran over an empty
+     * list, and the command returned ok. `kolor` copies its twelve sample
+     * banks in exactly that shape --
+     *
+     *     cp -r /home/we/dust/code/kolor/samples/bank1 /home/we/dust/audio/kolor/
+     *
+     * -- twelve times, and all twelve did nothing while reporting success.
+     * The script then found no samples in any of them, SuperCollider said
+     * "Buffer UGen: no buffer data" once per voice, and the page was left
+     * running an instrument with nothing in it. Reported from a Pixel as
+     * kolor being unusable; reproduced here in four lines.
+     */
+    const recursive = /(^|\s)-[a-zA-Z]*[rR]/.test(cmd);
+    const sources = args.flatMap((a) => {
+      const p = normalise(a, vfs.home);
+      return vfs.isDir(p) ? [p] : globIn(vfs, a);
+    });
     for (const src of sources) {
       const dir = normalise(dest, vfs.home);
-      const to = vfs.isDir(dir) || sources.length > 1 ? `${dir}/${basename(src)}` : dir;
+      /**
+       * A TRAILING SLASH MEANS "INTO", whether or not it is there yet.
+       *
+       * This asked `vfs.isDir(dest)`, which is false for a folder the
+       * script is about to create -- and then `cp x.wav ~/dust/audio/amen/`
+       * wrote a FILE called `amen` where the folder was meant. Scripts
+       * write the slash when they mean a directory; it is the one piece
+       * of intent the command carries and it was being thrown away.
+       */
+      const into = dest.endsWith("/") || vfs.isDir(dir) || sources.length > 1;
+      const to = into ? `${dir}/${basename(src)}` : dir;
+
+      if (vfs.isDir(src)) {
+        // `cp` without `-r` prints "omitting directory" and carries on,
+        // which is a refusal of that ONE argument and not of the command.
+        if (!recursive) continue;
+        for (const f of vfs.walk(src)) {
+          const target = to + f.slice(src.length);
+          const dref = vfs.remoteAt(f);
+          if (dref !== null) {
+            vfs.copyRemote(target, dref);
+            continue;
+          }
+          const bytes = vfs.read(f);
+          if (bytes) vfs.write(target, bytes);
+        }
+        continue;
+      }
 
       // A SOUND FILE IS COPIED BY REFERENCE. `amen`'s init does
       // `cp .../amen/samples/amenbreak_bpm136.wav ~/dust/audio/amen/`, and

@@ -21,7 +21,7 @@ import { createPadCore, readPad, type PadCore } from "./ui/gamepad.js";
 import { detect, effectiveKind, readSignals, type MachineKind } from "./ui/machine.js";
 import { startCpuMeter } from "./ui/cpu-meter.js";
 import { createLog } from "./ui/log.js";
-import { watchCallCost } from "./norns/call-cost.js";
+import { callCosts, resetCallCosts, watchCallCost } from "./norns/call-cost.js";
 import { registerScreenImages } from "./screen/images.js";
 import { registerHardware, type Hardware } from "./norns/hardware.js";
 import { registerOsc } from "./osc/register.js";
@@ -44,7 +44,7 @@ import { createRunner } from "./editor/runner.js";
 import { installFromRepo, parseRepoUrl } from "./community/install.js";
 import { fetchAndStoreCatalogs } from "./community/maiden-catalogs.js";
 import { needsOf } from "./community/needs.js";
-import { initLua, luaVersion } from "./lua/lua.js";
+import { initLua, lua, luaVersion, to_luastring } from "./lua/lua.js";
 import {
   MISSING_INCLUDE,
   SCRIPT_LOAD,
@@ -55,7 +55,7 @@ import { exportTree, fetchArchive, importTree, installScript } from "./fs/transf
 import { makeCallbacks } from "./norns/callbacks.js";
 import { loadDustWeb } from "./fs/dust-web.js";
 import { registerFs } from "./fs/register.js";
-import { restoreFromOpfs, mirrorToOpfs } from "./fs/opfs.js";
+import { restoreFromOpfs, mirrorToOpfs, wipeOpfs } from "./fs/opfs.js";
 import { GridManager } from "./grid/manager.js";
 import { registerGrid } from "./grid/register.js";
 import { GridView } from "./grid/view.js";
@@ -1138,6 +1138,8 @@ async function main(): Promise<void> {
   const cpuMeter = startCpuMeter();
   /** Hysteresis for the two lines below; see `pollStat`. */
   let cpuBusy = false;
+  /** When the busy span started, for the duration it reports. */
+  let cpuBusyAt = 0;
 
   /**
    * Ask the audio server for its load, once there is one.
@@ -1191,10 +1193,42 @@ async function main(): Promise<void> {
      */
     if (!cpuBusy && main >= 80) {
       cpuBusy = true;
+      cpuBusyAt = performance.now();
+      // The account starts with the trouble, so what it reports is what
+      // happened DURING it rather than since the page booted.
+      resetCallCosts();
       log(`cpu: ${main}% of the main thread — the page is at its limit`);
     } else if (cpuBusy && main < 50) {
       cpuBusy = false;
-      log(`cpu: back to ${main}%`);
+      /**
+       * E9-141 — AND WHERE IT WENT, which the first version could not say.
+       *
+       * A log from a Pixel showed 91% for fourteen and a half seconds with
+       * NOT ONE `slow callback` line in it. That is not a quiet
+       * instrument, it is an answer: no single call into Lua reached the
+       * 120 ms threshold, so the cost was spread — many small callbacks,
+       * or work that is not Lua at all. `call-cost.ts` had been keeping
+       * the totals since E9-138 and nothing ever printed them.
+       *
+       * Three is enough. Sorted by TOTAL rather than worst, because the
+       * steady drip is what pins a thread and the one spike is what gets
+       * noticed.
+       *
+       * AND IT SAYS SO WHEN LUA IS NOT THE ANSWER. An empty account over a
+       * busy span is the most useful thing this line can report: it rules
+       * out every callback at once and sends the next look at drawing,
+       * decoding, garbage collection or the browser's own work.
+       */
+      const secs = ((performance.now() - cpuBusyAt) / 1000).toFixed(1);
+      const top = callCosts()
+        .filter((c) => c.ms >= 1)
+        .slice(0, 3)
+        .map((c) => `${c.path} ${c.ms.toFixed(0)} ms over ${c.calls}`)
+        .join(" · ");
+      log(
+        `cpu: back to ${main}% after ${secs} s — ` +
+          (top === "" ? "nothing in Lua accounts for it" : top),
+      );
     }
     cb.stat(freeMb, 0, main, main, 0, 0, 0);
     // One round trip a second, beside the disk poll that was already here.
@@ -2221,6 +2255,163 @@ async function main(): Promise<void> {
         } catch (err) {
           log(`add failed: ${String((err as Error)?.message ?? err)}`);
         }
+      },
+      /**
+       * E9-142 — put `~/dust/code` back to what the build ships.
+       *
+       * REVERT WHERE THERE IS SOMETHING TO REVERT TO, remove where there
+       * is not. `vfs.revert` only answers for a path the BUILD supplies
+       * and returns false for anything else, so the pair is exactly
+       * right: a bundled script comes back as the build has it, and an
+       * installed one ceases to exist. On the published `--no-scripts`
+       * build nothing is bundled and the folder simply empties, which is
+       * what this is for.
+       *
+       * `.installing/` GOES TOO. Those are script files under another
+       * name, and "swept N interrupted downloads" has been in every log
+       * off that phone for a week — eight of them, still named after
+       * installs that were abandoned days ago.
+       *
+       * THEN THE FLUSH, before anything else happens. The removals only
+       * queue; the mirror is debounced and asynchronous. E9-135 and
+       * E9-140 were both this, and a reset that came back after a reload
+       * would be the same bug a third time.
+       *
+       * AND THEN A RESTART, because the Lua side has a script loaded and
+       * SELECT has a list, and neither is told. `_norns.restart` runs
+       * `cleanup()` and comes back with no script, which is where
+       * somebody who has just removed everything wants to be.
+       */
+      installed: () =>
+        vfs
+          .list("/home/we/dust/code")
+          .filter((e) => e.isDir && vfs.walk(`/home/we/dust/code/${e.name}`).length > 0).length,
+      resetScripts: async () => {
+        const code = "/home/we/dust/code";
+        const staging = "/home/we/dust/.installing";
+        const scripts = vfs
+          .list(code)
+          .filter((e) => e.isDir && vfs.walk(`${code}/${e.name}`).length > 0).length;
+        let files = 0;
+        for (const p of vfs.walk(code)) {
+          if (!vfs.revert(p)) vfs.remove(p);
+          files++;
+        }
+        // The folders themselves, which hold no files now but still list.
+        for (const e of vfs.list(code)) if (e.isDir) vfs.remove(`${code}/${e.name}`);
+        for (const p of vfs.walk(staging)) {
+          vfs.remove(p);
+          files++;
+        }
+        vfs.remove(staging);
+        await mirror.flush();
+        log(`reset: ${scripts} script(s) removed, ${files} file(s) — restarting`);
+        doRestart();
+        return { scripts, files };
+      },
+      /**
+       * E9-143 — every script's presets and mappings, and nothing else.
+       *
+       * `~/dust/data` is where a script keeps what it was set to: its
+       * `.pset` files, its `.pmap` MIDI mappings, and whatever its own
+       * `init` wrote into its data folder. Emptying it is the honest
+       * meaning of "reset the scripts' parameters" — the scripts
+       * themselves stay installed and come back at their defaults.
+       *
+       * `system.state` AND `system.pset` ARE SPARED, and that is the
+       * whole care in this function: they live in the same directory and
+       * they are not a script's. They hold the clock tempo, the mixer
+       * levels, the clock source and which devices are which. Taking
+       * them here would make this button a different button, and the one
+       * below is where that belongs.
+       */
+      resetParams: async () => {
+        const data = "/home/we/dust/data";
+        const keep = /^system\.[^/]*$/;
+        let files = 0;
+        for (const p of vfs.walk(data)) {
+          if (keep.test(p.slice(data.length + 1))) continue;
+          if (!vfs.revert(p)) vfs.remove(p);
+          files++;
+        }
+        for (const e of vfs.list(data)) if (e.isDir) vfs.remove(`${data}/${e.name}`);
+        await mirror.flush();
+        log(`reset: ${files} preset/mapping file(s) removed — restarting`);
+        doRestart();
+        return { files };
+      },
+      /**
+       * E9-143 — a page that has never been used.
+       *
+       * NOT a file-by-file revert. Every other reset here works through
+       * the overlay, which is right when something is meant to survive;
+       * this one is meant to leave NOTHING, and the overlay's own
+       * bookkeeping — the tombstones, the reference and placeholder
+       * lists — is part of what would otherwise survive. So the whole
+       * `norns-dust` directory goes, and the settings this page keeps in
+       * `localStorage` with it.
+       *
+       * THE MIRROR IS STOPPED FIRST and never restarted, because the
+       * next thing that happens is a reload. Flushing would be exactly
+       * wrong here: it would write the overlay — which still holds
+       * everything — straight back into the directory just removed.
+       * Every other reset in this file flushes; this one must not, and
+       * that is why it says so.
+       *
+       * A reload rather than `_norns.restart`: the restart path saves
+       * `system.state` on its way out, which would put the first file
+       * back into an origin that is supposed to be empty.
+       */
+      factoryReset: async () => {
+        mirror.stop();
+        const gone = await wipeOpfs();
+        try {
+          const store = globalThis.localStorage;
+          for (const k of Object.keys(store ?? {})) {
+            if (k.startsWith("norns-js/")) store.removeItem(k);
+          }
+        } catch {
+          // A private window has no storage to clear; the wipe is what matters.
+        }
+        log(gone ? "factory reset: storage erased — reloading" : "factory reset: the browser refused to erase its storage");
+        if (!gone) return { ok: false };
+        setTimeout(() => globalThis.location?.reload(), 50);
+        return { ok: true };
+      },
+      /**
+       * E9-143 — the clock tempo, reachable when the norns screen is not.
+       *
+       * It lives at PARAMS > CLOCK > tempo, which is one of four panels
+       * you reach with E1 — confirmed in the page, with no script loaded:
+       * `panels = MIX, TAPE, HOME, PARAMS` and `groups = LEVELS | REVERB
+       * | COMPRESSOR | SOFTCUT | CLOCK`. It is NOT under SYSTEM, which is
+       * where this file's author first sent somebody looking.
+       *
+       * It is here as well because of how it was found: a phone whose
+       * tempo was at 220 and whose interface was too slow to navigate to
+       * the one place that could change it. A setting you cannot reach
+       * when the page is struggling is a setting that does not exist on
+       * the day you need it, and this panel is HTML — it answers when the
+       * norns screen does not.
+       */
+      tempo: {
+        get: () => {
+          // READ OFF THE STACK, NOT OUT OF THE LOG. The first version
+          // printed the value and scraped `host.output`, which is the
+          // NODE harness's buffer: in the page `print` goes to the
+          // console sink and that array never grows, so the field came
+          // up empty. Measured by opening the panel and finding it so.
+          if (host.run(`__njs_tempo = params:get("clock_tempo")`)) return 0;
+          lua.lua_getglobal(host.L, to_luastring("__njs_tempo"));
+          const v = lua.lua_tonumber(host.L, -1);
+          lua.lua_pop(host.L, 1);
+          return Number.isFinite(v) && v > 0 ? v : 0;
+        },
+        set: (bpm: number) => {
+          const n = Math.max(1, Math.min(300, Math.round(bpm)));
+          host.run(`params:set("clock_tempo", ${n})`);
+          log(`clock: tempo ${n}`);
+        },
       },
     },
   });

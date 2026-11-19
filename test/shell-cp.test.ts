@@ -216,3 +216,51 @@ describe("cd <dir>; ls -d *, which is how a script lists folder NAMES", () => {
     expect(r.refused).toContain("cd ...");
   });
 });
+
+// E9-144 — a directory is a source, and `-r` is what says so.
+//
+// Reported from a Pixel: `kolor` unusable, twelve voices with no samples
+// and "Buffer UGen: no buffer data" once each. Its init copies twelve
+// sample banks with `cp -r <bank> ~/dust/audio/kolor/`, and every one of
+// those copied NOTHING while answering ok — `globIn` expands to files and
+// a directory is not one, so the loop ran over an empty list.
+describe("cp -r, which is how a script moves its sample banks", () => {
+  const withBanks = (): Vfs => {
+    const vfs = new Vfs();
+    vfs.write("/home/we/dust/code/kolor/samples/bank1/kick.wav", "a");
+    vfs.write("/home/we/dust/code/kolor/samples/bank1/hat/closed.wav", "b");
+    return vfs;
+  };
+
+  it("copies the folder INTO the destination, keeping its shape", () => {
+    const vfs = withBanks();
+    const r = runShell(vfs, "cp -r /home/we/dust/code/kolor/samples/bank1 /home/we/dust/audio/kolor/");
+    expect(r.ok).toBe(true);
+    expect(vfs.readText("/home/we/dust/audio/kolor/bank1/kick.wav")).toBe("a");
+    // Nested, because a bank is not always flat.
+    expect(vfs.readText("/home/we/dust/audio/kolor/bank1/hat/closed.wav")).toBe("b");
+  });
+
+  // THE TRAILING SLASH IS THE INTENT, and it was being thrown away: the
+  // destination folder does not exist yet when a script copies into it.
+  it("treats a trailing slash as a directory even before it exists", () => {
+    const vfs = withBanks();
+    runShell(vfs, "cp /home/we/dust/code/kolor/samples/bank1/kick.wav /home/we/dust/audio/kolor/");
+    expect(vfs.readText("/home/we/dust/audio/kolor/kick.wav")).toBe("a");
+    // Not a FILE called `kolor`, which is what it used to write.
+    expect(vfs.readText("/home/we/dust/audio/kolor")).toBeNull();
+  });
+
+  it("omits a directory when -r was not asked for, as cp does", () => {
+    const vfs = withBanks();
+    const r = runShell(vfs, "cp /home/we/dust/code/kolor/samples/bank1 /home/we/dust/audio/kolor/");
+    expect(r.ok).toBe(true);
+    expect(vfs.walk("/home/we/dust/audio")).toEqual([]);
+  });
+
+  it("still copies a plain file to a plain name", () => {
+    const vfs = withBanks();
+    runShell(vfs, "cp /home/we/dust/code/kolor/samples/bank1/kick.wav /home/we/dust/audio/one.wav");
+    expect(vfs.readText("/home/we/dust/audio/one.wav")).toBe("a");
+  });
+});

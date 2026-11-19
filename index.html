@@ -1085,6 +1085,15 @@
   .sp-reset:hover, .sp-toggle:hover, .sp-add:hover { border-color: #4d4d52; color: var(--text); }
   .sp-toggle { padding: .3rem .6rem; }
   .sp-toggle[aria-pressed="true"] { background: #e0a040; border-color: #e0a040; color: #121212; }
+  /* E9-142 - the one button in here that destroys something. Red at rest
+     because the label alone is easy to click past, and FILLED once it is
+     armed, so the second click is visibly not the first. */
+  .sp-danger { color: #CC6666; border-color: #5a3a3a; }
+  .sp-danger:hover { border-color: #CC6666; color: #e08080; }
+  .sp-danger.sp-armed, .sp-danger.sp-armed:hover {
+    background: #CC6666; border-color: #CC6666; color: #121212;
+  }
+  .sp-danger:disabled { opacity: .5; }
   .sp-rows { display: flex; flex-direction: column; gap: 4px; }
   .sp-row { display: flex; align-items: center; gap: 7px; }
   .sp-act { width: 34px; flex: none; color: #9a9aa0; }

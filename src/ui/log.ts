@@ -71,8 +71,56 @@ export function createLog(el: HTMLElement, now: () => number = () => performance
   const text = document.createTextNode("");
   el.append(text);
 
+  /**
+   * E9-145 — ONE SCROLL PER FRAME, NOT ONE PER LINE.
+   *
+   * `el.scrollTop = el.scrollHeight` reads a layout property and then
+   * writes one, which forces the browser to lay the element out there
+   * and then. Once a line, that is nothing. A `kolor` log off a Pixel
+   * has a hundred lines in four seconds — the script prints on every
+   * grid press — and a hundred forced layouts a second on a phone is
+   * not nothing.
+   *
+   * Coalesced onto an animation frame: however many lines arrive
+   * between two frames, the console is scrolled once, which is the most
+   * often anybody could see it move anyway.
+   *
+   * AND ONLY IF IT WAS ALREADY AT THE BOTTOM. Scrolling up through a log
+   * while something is still writing to it used to be impossible — every
+   * new line yanked the view back down. Reading what just went wrong is
+   * the one thing this element is for.
+   */
+  /**
+   * FOLLOWED, NOT MEASURED. Asking `scrollHeight` per line to decide
+   * whether we are at the bottom is the same forced layout this is
+   * avoiding, and asking AFTER appending gets the wrong answer anyway —
+   * the text has already made the element taller. So the element is
+   * asked once per SCROLL event, which the browser fires at most once a
+   * frame and only when something actually moved. Our own scroll below
+   * fires one too, which is how following resumes.
+   *
+   * The slack is a line or two: fractional scroll heights mean an exact
+   * comparison is never true.
+   */
+  let follow = true;
+  el.addEventListener("scroll", () => {
+    follow = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  });
+
+  let scrollQueued = false;
+  const scrollSoon = (): void => {
+    if (!follow || scrollQueued) return;
+    scrollQueued = true;
+    const go = (): void => {
+      scrollQueued = false;
+      el.scrollTop = el.scrollHeight;
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(go);
+    else go();
+  };
+
   return (line: string): void => {
     text.appendData(stamp(line, now()));
-    el.scrollTop = el.scrollHeight;
+    scrollSoon();
   };
 }
