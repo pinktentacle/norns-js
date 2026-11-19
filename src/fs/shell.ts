@@ -201,6 +201,29 @@ function globIn(vfs: Vfs, pattern: string): string[] {
     .map((e) => `${dir}/${e.name}`);
 }
 
+/**
+ * E9-148 — a glob with a trailing slash means DIRECTORIES, and only those.
+ *
+ * `globIn` answers with files, which is right for `ls *.wav` and wrong for
+ * the idiom `kolor` uses to walk its banks: a shell matches only
+ * directories when the pattern ends in a slash, and prints them with the
+ * slash still on, which is how the caller knows to recurse. Answering with
+ * the FILES instead sent `kolor` into every sample as though it were a
+ * folder.
+ */
+function globDirsIn(vfs: Vfs, pattern: string): string[] {
+  const p = normalise(pattern.replace(/\/+$/, ""), vfs.home);
+  const dir = dirname(p);
+  const pat = basename(p);
+  const re = new RegExp("^" + pat.split("*").map(escapeRe).join(".*") + "$");
+  const wantsDot = dotted(pat);
+  return vfs
+    .list(dir)
+    .filter((e) => e.isDir && re.test(e.name) && (wantsDot || !dotted(e.name)))
+    .map((e) => `${dir}/${e.name}/`)
+    .sort();
+}
+
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -287,6 +310,27 @@ function runPipe(text: string, stage: string): string | null {
     return done(rows.filter((l, i) => i === 0 || l !== rows[i - 1]));
   const tail = /^tail\s+-n\s*\+(\d+)/.exec(stage);
   if (tail !== null) return done(rows.slice(Number(tail[1]) - 1));
+  // E9-150 — `wc -l` and `head`, both of which the catalogue writes and
+  // both of which were refused. `ls ~/dust/code | wc -l` is how one script
+  // asks how many are installed; `head -n 1` is how another takes the
+  // first line. Neither was hard; neither had been asked for by name
+  // before the audit that found them.
+  const wc = /^wc(\s+-(\w+))?\s*$/.exec(stage);
+  if (wc !== null) {
+    // `-l` counts lines; bare `wc` prints lines, words and bytes, and
+    // nothing in the catalogue reads more than the first number.
+    const flags = wc[2] ?? "l";
+    if (!/^[lwc]+$/.test(flags)) return null;
+    const n = /l/.test(flags) ? rows.length : /w/.test(flags) ? text.split(/\s+/).filter(Boolean).length : text.length;
+    return `${n}
+`;
+  }
+  // `head -1` as well as `head -n 1`: the short form is what the
+  // catalogue writes, and the first version of this regex took only the
+  // long one and refused the other.
+  const head = /^head\s*(?:-n\s*)?-?(\d+)?\s*$/.exec(stage);
+  if (head !== null) return done(rows.slice(0, Number(head[1] ?? 10)));
+
   const grep = /^grep\s+(-\w+\s+)?(.+)$/.exec(stage);
   if (grep !== null) {
     const flags = grep[1] ?? "";
@@ -300,7 +344,16 @@ function runPipe(text: string, stage: string): string | null {
 }
 
 export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
-  const cmd = command.trim();
+  /**
+   * E9-148 — A STDERR REDIRECT IS NOT PART OF THE COMMAND.
+   *
+   * `kolor` lists its sample folders with a glob of directories followed
+   * by `2>/dev/null`, and the redirect was being parsed as part of the
+   * glob -- which matched nothing, so the listing came back empty and the
+   * script went looking elsewhere. There is no stderr here to redirect;
+   * dropping it is the whole of the right answer.
+   */
+  const cmd = command.trim().replace(/\s*2>\s*(?:\/dev\/null|&1)\s*$/, "").trim();
 
   // --- nothing writes into Extensions ------------------------------------
   //
@@ -392,6 +445,45 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
     return OK(rel.join("\n") + (rel.length ? "\n" : ""));
   }
 
+  // --- `ls ... | <filter>` -------------------------------------------
+  //
+  // E9-148 — THE PIPE WAS BEING READ AS PART OF THE PATH, and this is the
+  // one that cost a release. `kolor`'s `list_files` asks for the files in
+  // a folder the way everybody does:
+  //
+  //     ls -p /home/we/dust/audio/kolor/bank1/ | grep -v /
+  //
+  // The `util.scandir` branch below takes `words(cmd).at(-1)` as the
+  // directory -- and the last word of that line is the `/` belonging to
+  // `grep`. So it listed the ROOT, answered `home/`, and kolor spent the
+  // rest of its init trying to load a sample called
+  // `/home/we/dust/audio/kolor/bank1/home/`. Twelve times, once per bank.
+  //
+  // `runPipe` already does `grep -v /`; the ls branches simply never
+  // reached it. The listing is computed from the left of the pipe and the
+  // stages are applied to its output, which is what a shell does.
+  if (/^ls\s/.test(cmd) && /[|>]/.test(cmd)) {
+    // E9-150 — `pipeline()`, not a `split("|")`. It keeps a pipe that is
+    // inside quotes with its stage and picks up a redirect, which the
+    // first version of this did neither of.
+    const { head, pipes, redirect } = pipeline(cmd);
+    const r = runShell(vfs, head, depth + 1);
+    if (!r.ok) return r;
+    let text = r.out;
+    for (const stage of pipes) {
+      const piped = runPipe(text, stage);
+      if (piped === null) return NO(`ls: unsupported pipe — ${stage.slice(0, 40)}`);
+      text = piped;
+    }
+    if (redirect !== null) {
+      const prev = redirect.append ? (vfs.read(redirect.path) ?? new Uint8Array()) : null;
+      const before = prev === null ? "" : new TextDecoder().decode(prev);
+      vfs.write(redirect.path, before + text);
+      return OK("");
+    }
+    return OK(text);
+  }
+
   // --- `ls -1 <glob> | sort`, the PSET list ---------------------------
   if (/^ls\s+-1\s/.test(cmd)) {
     const target = unquote(cmd.replace(/^ls\s+-1\s+/, "").split("|")[0]!.trim());
@@ -474,7 +566,8 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
     // removed wherever it sits, is the one thing being named.
     const target = unquote(cmd.replace(/^ls\s+(?:-\S+\s+)*/, ""));
     if (/[*?]/.test(target)) {
-      const hits = globIn(vfs, target).sort();
+      // A trailing slash asks for directories; see `globDirsIn`.
+      const hits = target.endsWith("/") ? globDirsIn(vfs, target) : globIn(vfs, target).sort();
       return OK(hits.join("\n") + (hits.length ? "\n" : ""));
     }
     const dir = normalise(target, vfs.home);
@@ -499,9 +592,42 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
 
   // --- rm --------------------------------------------------------------
   if (/^rm\s/.test(cmd)) {
+    /**
+     * E9-150 — `rm -rf <dir>` DELETED NOTHING, AND SAID IT HAD.
+     *
+     * The same fault as `cp -r` in E9-144 and found the same way, by
+     * running the shapes the catalogue actually writes: `globIn` answers
+     * with FILES, a directory is not one, so a folder argument expanded
+     * to nothing and the loop had nothing to do. `rm` appears 45 times
+     * in the catalogue and `rm -rf` is most of them — a script clearing
+     * its own cache, a downloader clearing a staging folder.
+     *
+     * Worse than `cp`'s version, because this one looks like it worked:
+     * nothing is missing afterwards, which is exactly what you expect to
+     * see when a delete succeeds.
+     *
+     * Without `-r`, a directory is refused by `rm` itself, and the other
+     * arguments are still removed — so this skips it rather than failing
+     * the command.
+     */
+    const recursive = /(^|\s)-[a-zA-Z]*[rR]/.test(cmd);
     for (const w of argsOf(cmd)) {
       if (w.startsWith("-")) continue;
-      for (const hit of globIn(vfs, unquote(w))) vfs.remove(hit);
+      const bare = unquote(w);
+      const p = normalise(bare, vfs.home);
+      if (vfs.isDir(p)) {
+        if (!recursive) continue;
+        for (const f of vfs.walk(p)) vfs.remove(f);
+        // Deepest first, so a folder is empty by the time it goes.
+        const dirs = vfs
+          .walk(p)
+          .concat([p])
+          .sort((a, b) => b.length - a.length);
+        for (const d of dirs) vfs.remove(d);
+        vfs.remove(p);
+        continue;
+      }
+      for (const hit of globIn(vfs, bare)) vfs.remove(hit);
     }
     return OK("");
   }
@@ -695,7 +821,31 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
   // than half-answered: a device list that comes back empty reads as "no
   // devices" instead of "not asked".
   if (/^cat\s/.test(cmd)) {
-    if (/[|<>]/.test(cmd)) return NO(`cat in a pipeline: ${cmd}`);
+    // E9-150 — A PIPELINE IS NOT A DIFFERENT COMMAND. This refused
+    // anything containing `|` or `>`, so `cat /tmp/foo | sort | uniq >
+    // /tmp/files` — which the catalogue writes verbatim — was answered
+    // with nothing at all, and `sort` and `uniq` have been in `runPipe`
+    // the whole time. The `<` stays refused: nothing reads a file that
+    // way here, and pretending to would be worse than saying no.
+    if (/</.test(cmd)) return NO(`cat with an input redirect: ${cmd}`);
+    const { head, pipes, redirect } = pipeline(cmd);
+    if (pipes.length > 0 || redirect !== null) {
+      const inner = runShell(vfs, head, depth + 1);
+      if (!inner.ok) return inner;
+      let text = inner.out;
+      for (const stage of pipes) {
+        const piped = runPipe(text, stage);
+        if (piped === null) return NO(`cat: unsupported pipe — ${stage.slice(0, 40)}`);
+        text = piped;
+      }
+      if (redirect !== null) {
+        const prev = redirect.append ? (vfs.read(redirect.path) ?? new Uint8Array()) : null;
+        const before = prev === null ? "" : new TextDecoder().decode(prev);
+        vfs.write(redirect.path, before + text);
+        return OK("");
+      }
+      return OK(text);
+    }
     const args = words(cmd)
       .slice(1)
       .filter((w) => !w.startsWith("-"))

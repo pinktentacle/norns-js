@@ -13,6 +13,10 @@ import { defineConfig } from "vitest/config";
 const COI_HEADERS = {
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Embedder-Policy": "require-corp",
+  // E9-149 — so `?profile` works on localhost too. It permits the
+  // browser's sampling profiler to be reached from script and starts
+  // nothing; `public/_headers` carries the same line to Cloudflare.
+  "Document-Policy": "js-profiling",
 };
 
 import { execSync } from "node:child_process";

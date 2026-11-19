@@ -21,7 +21,8 @@ import { createPadCore, readPad, type PadCore } from "./ui/gamepad.js";
 import { detect, effectiveKind, readSignals, type MachineKind } from "./ui/machine.js";
 import { startCpuMeter } from "./ui/cpu-meter.js";
 import { createLog } from "./ui/log.js";
-import { callCosts, resetCallCosts, watchCallCost } from "./norns/call-cost.js";
+import { profileRequest, startProfile } from "./ui/profiler.js";
+import { callCosts, resetCallCosts, timed, watchCallCost } from "./norns/call-cost.js";
 import { registerScreenImages } from "./screen/images.js";
 import { registerHardware, type Hardware } from "./norns/hardware.js";
 import { registerOsc } from "./osc/register.js";
@@ -210,6 +211,25 @@ async function main(): Promise<void> {
           ` — worst ${c.worstMs.toFixed(0)} ms over ${c.calls} call${c.calls === 1 ? "" : "s"}`,
       ),
   });
+
+  /**
+   * E9-149 — `?profile` samples the real stack, from here.
+   *
+   * Started BEFORE the tree is restored, because the boot is part of what
+   * a phone is waiting through: there are eight seconds between the
+   * storage line and the extensions line on one, and nothing instrumented
+   * sits in between.
+   *
+   * The download is handed over late — `download` is declared two
+   * thousand lines below and a profile started after it would miss the
+   * boot. The summary reaches the log either way, and the log is the
+   * channel that works from a phone.
+   */
+  let offerFile: ((bytes: Uint8Array, name: string) => void) | null = null;
+  const profile = profileRequest(globalThis.location?.search ?? "");
+  if (profile !== null) {
+    startProfile(profile, (l) => log(l), (b, n) => offerFile?.(b, n));
+  }
 
   log("restoring saved files…");
   await restoreFromOpfs(vfs, { log: (l) => log(l) });
@@ -757,12 +777,27 @@ async function main(): Promise<void> {
     }
   }, REFRESH_MS);
 
+  /**
+   * E9-149 — THE FRAME IS TIMED, in the same account as the callbacks.
+   *
+   * A Pixel log had 17 seconds of a pinned main thread and the callback
+   * account came to 978 ms of it — under six per cent — so the line that
+   * reports a busy span was naming everything it could and still leaving
+   * the answer out. This is where the rest of a frame goes: pulling the
+   * cairo surface into a greyscale buffer, and blitting it to a canvas.
+   *
+   * SEPARATELY, because they are different work and the point is to tell
+   * them apart: `screen.greyscale` crosses the wasm boundary for 128x64
+   * bytes, `canvas.draw` is a putImageData the browser may or may not
+   * accelerate, and `padFrame` runs on EVERY frame whether anything is
+   * dirty or not.
+   */
   const present = (now: number): void => {
-    padFrame(now);
+    timed("draw:pad", () => padFrame(now));
     if (dirty) {
       dirty = false;
-      screen.greyscale(grey);
-      canvas.draw(grey, screen.panel());
+      timed("draw:screen", () => screen.greyscale(grey));
+      timed("draw:canvas", () => canvas.draw(grey, screen.panel()));
       // THE LOADING VEIL LIFTS ON THE FIRST FRAME THAT HAS SOMETHING IN IT.
       //
       // Not on the first frame: a blank one is still the instrument's
@@ -1227,7 +1262,7 @@ async function main(): Promise<void> {
         .join(" · ");
       log(
         `cpu: back to ${main}% after ${secs} s — ` +
-          (top === "" ? "nothing in Lua accounts for it" : top),
+          (top === "" ? "nothing instrumented accounts for it" : top),
       );
     }
     cb.stat(freeMb, 0, main, main, 0, 0, 0);
@@ -2140,6 +2175,8 @@ async function main(): Promise<void> {
     // Not immediately: the navigation to the blob has to start first.
     setTimeout(() => URL.revokeObjectURL(url), 10_000);
   };
+  // E9-149 — the profile started before this existed; give it the door now.
+  offerFile = download;
 
   // The profile decides default widths and whether a gamepad is read, so it
   // is applied once the stage exists and again whenever the gear changes it.

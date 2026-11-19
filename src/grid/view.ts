@@ -16,6 +16,7 @@
 
 import { alphaFor, quantise } from "./ramp.js";
 import type { GridDescriptor, GridTransport } from "./device.js";
+import { timed } from "../norns/call-cost.js";
 
 export interface GridViewOptions {
   readonly canvas: HTMLCanvasElement;
@@ -131,7 +132,24 @@ export class GridView implements GridTransport {
 
   // --- drawing ----------------------------------------------------------
 
+  /**
+   * E9-149 — TIMED, because a log said the cost was not in Lua.
+   *
+   * 17 seconds of a pinned main thread on a Pixel, and the callback
+   * account came to 978 ms of it — under six per cent. What is left is
+   * drawing, and this is one of the two places it happens: a grid redraw
+   * runs once per `refresh()`, so a script at 60 fps draws 256 rounded
+   * rectangles sixty times a second.
+   *
+   * `timed` is `call-cost.ts`, the same accounting the Lua callbacks use,
+   * so the line that reports a busy span names this beside them instead
+   * of leaving a hole where the answer should be.
+   */
   private draw(): void {
+    timed("draw:grid", () => this.drawNow());
+  }
+
+  private drawNow(): void {
     const ctx = this.ctx;
     const canvas = this.opts.canvas;
     const w = this.opts.cols();

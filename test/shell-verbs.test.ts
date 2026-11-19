@@ -152,12 +152,26 @@ describe("cat", () => {
     expect(r.out).toBe("");
   });
 
-  it("refuses a pipeline rather than answering half of it", () => {
-    // amenbreak: `cat /tmp/foo | sort | uniq > /tmp/files`. Answering the
-    // `cat` and dropping the rest would write the wrong file.
-    const r = runShell(new Vfs(), "cat /tmp/foo | sort | uniq > /tmp/files");
+  // E9-150 — THIS USED TO ASSERT A REFUSAL, and the refusal was the right
+  // answer while the alternative was answering the `cat` and dropping the
+  // rest, which would have written the wrong file. It is no longer the
+  // alternative: `sort` and `uniq` were in the pipe runner the whole time
+  // and `cat` simply never reached them.
+  it("runs the pipeline amenbreak writes, and lands it where it was sent", () => {
+    const v = new Vfs();
+    v.write("/tmp/foo", "b\na\nb\n");
+    const r = runShell(v, "cat /tmp/foo | sort | uniq > /tmp/files");
+    expect(r.ok).toBe(true);
+    expect(v.readText("/tmp/files")).toBe("a\nb\n");
+  });
+
+  it("still refuses a stage it cannot do, rather than half-answering", () => {
+    const v = new Vfs();
+    v.write("/tmp/foo", "x\n");
+    const r = runShell(v, "cat /tmp/foo | awk '{print $1}' > /tmp/files");
     expect(r.ok).toBe(false);
-    expect(r.refused).toMatch(/pipeline/);
+    expect(r.refused).toMatch(/unsupported pipe/);
+    expect(v.readText("/tmp/files"), "it wrote before it refused").toBeNull();
   });
 });
 

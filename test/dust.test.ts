@@ -382,3 +382,65 @@ describe("norns finds the installed scripts", () => {
     expect(host.run(`assert(_GM[1][1]:match('/lib/mod%.lua$'), 'got ' .. tostring(_GM[1][1]))`)).toBeNull();
   });
 });
+
+// E9-148 — the three things `kolor`'s `list_files` asks for.
+//
+// All three were wrong, and together they are why twelve banks of samples
+// never loaded on a phone even after `cp -r` was fixed. From its source:
+//
+//     local cmd = "ls -ad " .. d .. "*/ 2>/dev/null"
+//     local cmd = "ls -p " .. d .. " | grep -v /"
+//
+// The second is the one that cost a release: the `util.scandir` branch
+// takes `words(cmd).at(-1)` as the directory, and the last word of that
+// line is the `/` belonging to `grep`. It listed the ROOT, answered
+// `home/`, and kolor spent its init trying to load a sample called
+// `/home/we/dust/audio/kolor/bank1/home/` — twelve times, once per bank,
+// which is exactly what the log said.
+describe("listing a folder the way a script actually asks", () => {
+  const banked = (): Vfs => {
+    const v = new Vfs();
+    v.write("/home/we/dust/audio/kolor/bank1/01.wav", "a");
+    v.write("/home/we/dust/audio/kolor/bank1/02.wav", "b");
+    v.write("/home/we/dust/audio/kolor/bank1/sub/03.wav", "c");
+    return v;
+  };
+  const D = "/home/we/dust/audio/kolor/bank1/";
+
+  it("does not read the pipe's argument as the directory", () => {
+    const r = runShell(banked(), `ls -p ${D} | grep -v /`);
+    expect(r.ok).toBe(true);
+    expect(r.out, "it listed the root and answered `home/`").not.toContain("home/");
+    expect(r.out.trim().split("\n")).toEqual(["01.wav", "02.wav"]);
+  });
+
+  it("drops a stderr redirect rather than globbing it", () => {
+    const withIt = runShell(banked(), `ls -ad ${D}*/ 2>/dev/null`);
+    const without = runShell(banked(), `ls -ad ${D}*/`);
+    expect(withIt.out).toBe(without.out);
+    expect(withIt.out.trim()).not.toBe("");
+  });
+
+  it("answers a trailing-slash glob with directories, slash and all", () => {
+    const r = runShell(banked(), `ls -ad ${D}*/`);
+    expect(r.out.trim().split("\n")).toEqual(["/home/we/dust/audio/kolor/bank1/sub/"]);
+  });
+
+  it("still answers a plain glob with files", () => {
+    const r = runShell(banked(), `ls ${D}*.wav`);
+    expect(r.out.trim().split("\n")).toEqual([
+      "/home/we/dust/audio/kolor/bank1/01.wav",
+      "/home/we/dust/audio/kolor/bank1/02.wav",
+    ]);
+  });
+
+  it("counts, now that `wc -l` is one of the pipes it can do", () => {
+    expect(runShell(banked(), `ls -p ${D} | wc -l`).out).toBe("3\n");
+  });
+
+  it("refuses a pipe it cannot do, instead of answering wrongly", () => {
+    const r = runShell(banked(), `ls -p ${D} | awk '{print $1}'`);
+    expect(r.ok).toBe(false);
+    expect(r.refused).toContain("unsupported pipe");
+  });
+});

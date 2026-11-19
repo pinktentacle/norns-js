@@ -23,7 +23,20 @@
 # wholesale by vite, so this lands at `dist/_headers`. The hosts read it and
 # do not serve it.
 
+# E9-149 — AND ONE THAT ONLY PERMITS SOMETHING.
+#
+# `Document-Policy: js-profiling` is what lets a page construct a
+# `Profiler` and sample its own stacks. It does not start anything, costs
+# nothing when nothing asks, and is the only way the browser's own
+# sampling profiler can be reached from script. Without it `new Profiler`
+# throws, and the only profile anybody can take of a phone is one taken
+# by plugging the phone into a computer.
+#
+# The page asks for a profile when `?profile` is in the URL and at no
+# other time; see `src/ui/profiler.ts`.
+
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
   Cross-Origin-Resource-Policy: same-origin
+  Document-Policy: js-profiling
