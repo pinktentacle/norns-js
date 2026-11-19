@@ -262,7 +262,9 @@ for (const category of categories) {
 // picks a file at random — died in `init` on `math.random(1, 0)`.
 //
 // The sounds are synthesised, not Roland's: see tools/kit-808.mjs for why,
-// and the README that travels with them says so in the folder itself.
+// and the `.README.txt` that travels with them says so in the folder
+// itself. DOTTED since E9-130, because bakeneko picked the undotted one at
+// random and fed a text file to decodeAudioData.
 const KIT_DIR = '/home/we/dust/audio/common/808';
 let kitFiles = 0;
 let kitBytes = 0;

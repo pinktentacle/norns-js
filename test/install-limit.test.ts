@@ -24,6 +24,11 @@ const listingOf = (n: number): unknown => ({
   files: Array.from({ length: n }, (_, i) => ({ name: `/lib/f${i}.lua`, size: 10 })),
 });
 
+/** A listing of named files, for the durability tests at the bottom. */
+const treeOf = (names: readonly string[]): unknown => ({
+  files: names.map((name) => ({ name: "/" + name, size: 4 })),
+});
+
 const install = (n: number, maxFiles?: number): Promise<unknown> =>
   installFromRepo(new Vfs(), { owner: "a", repo: "big" }, {
     fetchJson: async () => listingOf(n),
@@ -117,5 +122,67 @@ describe("the setting behind it", () => {
     s.subscribe((_st, what) => seen.push(what));
     s.setInstallMaxFiles(1500);
     expect(seen).toEqual(["files"]);
+  });
+});
+
+// E9-140 — "installed" has to mean on disk.
+//
+// Reported from a Pixel 9 Pro: `tmi` would not load because
+// `kolor/lib/lattice.lua` was missing from a `kolor` that was installed.
+// The file is in the upstream repository and the filter takes it; it had
+// never reached that phone's storage. The log named it twice over —
+// `swept 8 interrupted downloads: … kolor, tmi` at boot, and the page's
+// own MISSING INCLUDE line afterwards.
+//
+// The move into `code/` is synchronous, so the OVERLAY is never half
+// moved. The OPFS mirror is debounced and asynchronous, so the DISK can
+// be, and a page that goes away mid-flush leaves exactly what was
+// reported. `commit` is awaited after the move so the install does not
+// finish until the disk agrees.
+describe("an install is not finished until it is durable", () => {
+  it("awaits commit, and only after the files are in place", async () => {
+    const vfs = new Vfs();
+    const seen: string[] = [];
+    await installFromRepo(vfs, { owner: "o", repo: "thing" }, {
+      name: "thing",
+      fetchJson: async () => treeOf(["thing.lua", "lib/helper.lua"]),
+      fetchBytes: async () => new TextEncoder().encode("-- x"),
+      commit: async () => {
+        // Everything is already in the tree when this runs; that is the
+        // whole point of where it sits.
+        seen.push(...vfs.walk("/home/we/dust/code/thing"));
+      },
+    });
+    expect(seen).toContain("/home/we/dust/code/thing/thing.lua");
+    expect(seen).toContain("/home/we/dust/code/thing/lib/helper.lua");
+  });
+
+  it("does not commit an install that was cancelled", async () => {
+    const vfs = new Vfs();
+    let committed = 0;
+    const ac = new AbortController();
+    ac.abort();
+    await expect(
+      installFromRepo(vfs, { owner: "o", repo: "thing" }, {
+        name: "thing",
+        signal: ac.signal,
+        fetchJson: async () => treeOf(["thing.lua"]),
+        fetchBytes: async () => new TextEncoder().encode("-- x"),
+        commit: async () => void committed++,
+      }),
+    ).rejects.toThrow();
+    expect(committed, "a cancelled install made its nothing durable").toBe(0);
+  });
+
+  // The Node harness and every test that does not pass one.
+  it("installs without a commit, for a caller that has no mirror", async () => {
+    const vfs = new Vfs();
+    const r = await installFromRepo(vfs, { owner: "o", repo: "thing" }, {
+      name: "thing",
+      fetchJson: async () => treeOf(["thing.lua"]),
+      fetchBytes: async () => new TextEncoder().encode("-- x"),
+    });
+    expect(r.files).toBe(1);
+    expect(vfs.readText("/home/we/dust/code/thing/thing.lua")).toBe("-- x");
   });
 });

@@ -28,8 +28,19 @@ describe("the synthesised 808 kit", () => {
 
   it("says in the folder that it is not the Roland samples", () => {
     // The one claim that must survive somebody opening the directory.
-    expect(kit().get("README.txt")?.toString("utf8")).toBe(KIT_README);
+    expect(kit().get(".README.txt")?.toString("utf8")).toBe(KIT_README);
     expect(KIT_README).toContain("NOT the Roland");
+  });
+
+  // E9-130. Undotted, `bakeneko` drew it from the folder it picks at
+  // random, handed a text file to `decodeAudioData`, and its SuperCollider
+  // engine compared the resulting nil against a number — five forty-line
+  // dumps in one boot on a phone. `src/fs/shell.ts` hides dotfiles now;
+  // this is the other half, for a caller that enumerates some other way.
+  it("hides it from the scripts that list this folder for sounds", () => {
+    const names = [...kit().keys()];
+    expect(names).not.toContain("README.txt");
+    expect(names.filter((n) => !n.endsWith(".wav"))).toEqual([".README.txt"]);
   });
 
   it("writes WAVs the same parser the manifest uses can read", () => {

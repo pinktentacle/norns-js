@@ -20,6 +20,15 @@
 // carries a README saying so, because somebody comparing this to a 909 or
 // to the real thing deserves to know which they are hearing.
 //
+// E9-130 — AND IT IS A DOTFILE, `.README.txt`. The first version was not,
+// and `bakeneko` — which this very comment says picks a file from the
+// folder at random — drew it, handed a text file to `decodeAudioData`, and
+// got a nil buffer that its SuperCollider engine then compared against a
+// number. Five forty-line error dumps in one boot. `src/fs/shell.ts` now
+// honours the leading dot the way `ls` and a glob do, which is the half of
+// this that protects every other folder; the rename is the half that makes
+// this one correct even for a caller that enumerates some other way.
+//
 // WHY THE NAMES ARE NOT INVENTED. Scripts name these files directly —
 // `bakeneko`'s first track is `808-BD.wav` — so the set was read off the
 // catalogue: every `808-XX.wav` any of the 354 scripts mentions. Seventeen,
@@ -240,13 +249,18 @@ export const KIT_README =
   "\n" +
   "They are made by this project and are covered by its licence. If you want\n" +
   "the real thing, drop your own files in here; nothing depends on these\n" +
-  "bytes, only on the names.\n";
+  "bytes, only on the names.\n" +
+  "\n" +
+  "This file is dotted so that the scripts described above do not find it.\n" +
+  "An earlier version was called README.txt, bakeneko duly picked it at\n" +
+  "random, and SuperCollider spent forty lines explaining that a text file\n" +
+  "is not a sound.\n";
 
 /** The kit, as a map of filename to bytes. Deterministic. */
 export function kit808() {
   const out = new Map();
   for (const [name, make] of Object.entries(VOICES)) out.set(`${name}.wav`, wav(make()));
-  out.set("README.txt", Buffer.from(KIT_README, "utf8"));
+  out.set(".README.txt", Buffer.from(KIT_README, "utf8"));
   return out;
 }
 

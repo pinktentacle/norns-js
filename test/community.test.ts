@@ -29,6 +29,43 @@ import { HAS_CORPUS, corpusScripts } from "./support/corpus.js";
 /** Top-level `.lua` in each script directory, which is what SELECT lists. */
 const scripts = corpusScripts;
 
+/**
+ * E9-134 — AN ADDRESS IS NOT A MEASUREMENT.
+ *
+ * This file writes `docs/measurements/community-sweep.json` as it runs, so
+ * the copy in the tree is whatever the last corpus run produced. Several
+ * scripts `print` a table, and Lua's `tostring` gives it a heap address —
+ * `table: 0x2dc2f0` one run, `table: 0x2dc448` the next. Nothing about the
+ * behaviour changed; the allocator moved.
+ *
+ * So the file came up modified after every run, and every one of those
+ * diffs was noise. That is worse than untidy: it is 2000 lines of churn
+ * for a real regression to hide in, and it trains whoever sees it to
+ * commit the file without reading it. E9-132 had to compare forty scripts
+ * field by field to establish that a diff this size said nothing.
+ *
+ * Only the four types Lua prints with an address, so a hex number a script
+ * computed is left alone.
+ *
+ * WHAT IS LEFT, measured by running the corpus twice and diffing: one
+ * line. `amen` prints a table with `pairs`, and PUC Lua seeds its string
+ * hash per state, so the KEYS come out in a different order each run.
+ * That is the interpreter's own behaviour and normalising it here would
+ * be rewriting a script's output to look tidy. One reviewable line is a
+ * fair place to stop; it was forty before.
+ *
+ * AND A `--no-scripts` RUN DOES NOT TOUCH THE FILE, which is worth
+ * stating because the obvious failure would be silent: with no corpus
+ * this writes `[]` and erases the measurement. It does not, because
+ * vitest skips `beforeAll` when every test in the file is skipped —
+ * checked by restoring the file, running the suite on a `--no-scripts`
+ * tree, and finding it unmodified. The release kit runs `npm test` on
+ * exactly such a tree.
+ */
+function stableAddresses(log: string): string {
+  return log.replace(/\b(table|function|userdata|thread): 0x[0-9a-f]+/g, "$1: 0x…");
+}
+
 const results = new Map<string, ScriptRun>();
 
 beforeAll(() => {
@@ -47,7 +84,7 @@ beforeAll(() => {
     errors: r.errors,
     hostError: r.hostError,
     initDone: r.initDone,
-    log: r.log,
+    log: stableAddresses(r.log),
   }));
   fs.mkdirSync("docs/measurements", { recursive: true });
   fs.writeFileSync(

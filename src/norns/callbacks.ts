@@ -18,6 +18,7 @@
 //      integers**, not an array.
 
 import { lua, to_luastring, pushValue, type LuaState, type LuaValue } from "../lua/lua.js";
+import { timed } from "./call-cost.js";
 
 /** A failure calling into Lua. Never thrown past the audio thread. */
 export interface CallbackError {
@@ -53,7 +54,8 @@ export function callNorns(L: LuaState, path: string, args: readonly LuaValue[]):
     return null;
   }
   for (const a of args) pushValue(L, a);
-  const status = lua.lua_pcall(L, args.length, 0, 0);
+  // E9-138 — timed by name. See `call-cost.ts`; two clock reads, always on.
+  const status = timed(path, () => lua.lua_pcall(L, args.length, 0, 0));
   if (status !== lua.LUA_OK) {
     const message = lua.lua_tojsstring(L, -1);
     lua.lua_pop(L, 1);
@@ -70,7 +72,9 @@ export function callGlobal(L: LuaState, name: string, args: readonly LuaValue[] 
     return null;
   }
   for (const a of args) pushValue(L, a);
-  const status = lua.lua_pcall(L, args.length, 0, 0);
+  // Same instrument, and the name it reports is the global's — `redraw`
+  // and `init` are where a script's own cost actually lands.
+  const status = timed(name, () => lua.lua_pcall(L, args.length, 0, 0));
   if (status !== lua.LUA_OK) {
     const message = lua.lua_tojsstring(L, -1);
     lua.lua_pop(L, 1);

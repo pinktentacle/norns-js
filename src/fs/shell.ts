@@ -89,6 +89,63 @@ export function globToRegExp(pattern: string): RegExp {
   return new RegExp("^" + out + "$");
 }
 
+/**
+ * E9-130 — A LEADING DOT IS HIDDEN, and this shim did not know it.
+ *
+ * `ls` without `-a` omits every entry whose name begins with a dot, and a
+ * glob's `*` does not match one either: two spellings of one POSIX rule,
+ * and the whole reason a Unix directory can hold housekeeping that listing
+ * it does not show. Here `vfs.list` was handed straight back, so there was
+ * no such thing as a hidden file and every caller of `util.scandir` saw
+ * everything there was.
+ *
+ * WHAT IT COST, measured in a log off a Pixel. `audio/common/808/` is a
+ * sample folder, and E9-41 put a `README.txt` in it to say the sounds are
+ * synthesised rather than Roland's. `bakeneko` lists that folder and picks
+ * a file at random — the README itself says so, in the sentence above the
+ * one that put it there — so it drew the text file, `decodeAudioData`
+ * refused it, and `Buffer.read`'s action ran with a nil buffer:
+ *
+ *     ERROR: Nil does not understand the message '>'.
+ *       Engine_Goldeneye_ef20e1.sc:100   if (bufnum.numChannels>1,{
+ *
+ * Five of those in one boot, each a forty-line SuperCollider dump with
+ * source extracts. On hardware that folder holds `.wav` and nothing else,
+ * so no script has ever had to defend against it.
+ *
+ * FIXED HERE RATHER THAN BY MOVING THE FILE, because the file is not the
+ * bug. `.gitignore`, `.DS_Store` and a whole `.git/` arrive with every
+ * installed script, and without this rule each of them is handed to the
+ * next thing that enumerates a folder and assumes everything in it is its
+ * own. The README moves too — to `.README.txt`, which is where a note for
+ * humans belongs once the machine can be told to look past it.
+ */
+function dotted(name: string): boolean {
+  return name.startsWith(".");
+}
+
+/**
+ * One short flag, wherever it sits in a run of them.
+ *
+ * `-pL` and `-apL` carry the same `-p`, and a substring test for `"-p"`
+ * sees it only in the first: written that way, `ls -apL` missed the
+ * `util.scandir` branch entirely and fell through to the plain listing at
+ * the bottom — no trailing slashes, no directories first, which is
+ * precisely the thing `util.scandir` reads. Found by the test for `-a`.
+ *
+ * ANCHORED ON THE DASH THAT OPENS A RUN, so the `a` inside
+ * `--group-directories-first` is not read as a flag: a long option starts
+ * with two dashes, and the second is not a letter.
+ */
+function hasFlag(cmd: string, letter: string): boolean {
+  return new RegExp(`\\s-[a-zA-Z]*${letter}`).test(cmd);
+}
+
+/** `-a` or `-A`, which is what asks for the hidden ones. */
+function listsAll(cmd: string): boolean {
+  return hasFlag(cmd, "a") || hasFlag(cmd, "A");
+}
+
 function unquote(s: string): string {
   return s.trim().replace(/["']/g, "");
 }
@@ -136,9 +193,11 @@ function globIn(vfs: Vfs, pattern: string): string[] {
   const pat = basename(p);
   if (!pat.includes("*")) return vfs.exists(p) ? [p] : [];
   const re = new RegExp("^" + pat.split("*").map(escapeRe).join(".*") + "$");
+  // A pattern that itself begins with a dot is asking for them; `*` is not.
+  const wantsDot = dotted(pat);
   return vfs
     .list(dir)
-    .filter((e) => !e.isDir && re.test(e.name))
+    .filter((e) => !e.isDir && re.test(e.name) && (wantsDot || !dotted(e.name)))
     .map((e) => `${dir}/${e.name}`);
 }
 
@@ -343,11 +402,14 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
   // --- `ls -pL --group-directories-first "<dir>"`, util.scandir -------
   // The `-p` is what matters: directories come back with a trailing slash,
   // and `util.scandir` relies on it to tell them apart.
-  if (/^ls\s/.test(cmd) && /-p/.test(cmd)) {
+  if (/^ls\s/.test(cmd) && hasFlag(cmd, "p")) {
     const target = unquote(words(cmd).at(-1) ?? "");
     const dir = normalise(target, vfs.home);
     if (!vfs.isDir(dir)) return OK("");
-    const entries = vfs.list(dir);
+    // THE PATH THAT BIT US: `util.scandir` is this command, and this is
+    // where the 808 README reached bakeneko.
+    const showAll = listsAll(cmd);
+    const entries = vfs.list(dir).filter((e) => showAll || !dotted(e.name));
     const dirs = entries.filter((e) => e.isDir).map((e) => e.name + "/");
     const files = entries.filter((e) => !e.isDir).map((e) => e.name);
     const all = /--group-directories-first/.test(cmd) ? [...dirs, ...files] : [...dirs, ...files].sort();
@@ -385,9 +447,10 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
     // of folders matched nothing at all, which is how beets came to think
     // it had no loops to offer. `-d` means an entry is named as itself.
     const rx = globToRegExp(pattern);
+    const wantsDot = dotted(pattern) || listsAll(rest);
     const names = (vfs.isDir(base) ? vfs.list(base) : [])
       .map((e) => e.name)
-      .filter((n) => rx.test(n))
+      .filter((n) => rx.test(n) && (wantsDot || !dotted(n)))
       .sort();
     return OK(names.join("\n") + (names.length ? "\n" : ""));
     }
@@ -416,8 +479,10 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
     }
     const dir = normalise(target, vfs.home);
     if (!vfs.isDir(dir)) return OK("");
+    const showAll = listsAll(cmd);
     const names = vfs
       .list(dir)
+      .filter((e) => showAll || !dotted(e.name))
       .map((e) => e.name)
       .sort();
     return OK(names.join("\n") + (names.length ? "\n" : ""));

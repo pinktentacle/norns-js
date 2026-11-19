@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { MidiDevice, chunkForLua, isRealTime, type MidiPort } from "../src/midi/device.js";
 import { MidiManager } from "../src/midi/manager.js";
+import { createVirtualMidiPort } from "../src/midi/virtual.js";
 import { registerMidi } from "../src/midi/register.js";
 import { pairPorts, startWebMidi, type WebMidiAccessLike, type WebMidiPortLike } from "../src/midi/web.js";
 import { NornsRegistry } from "../src/norns/registry.js";
@@ -311,7 +312,6 @@ describe("the two _norns functions", () => {
 
 describe("the virtual loopback", () => {
   it("returns what was sent, and not before the send has returned", async () => {
-    const { createVirtualMidiPort } = await import("../src/midi/virtual.js");
     const got: number[][] = [];
     const m = new MidiManager({
       midiAdd: () => {},
@@ -331,7 +331,6 @@ describe("the virtual loopback", () => {
   });
 
   it("chunks sysex on the way back, like any other device", async () => {
-    const { createVirtualMidiPort } = await import("../src/midi/virtual.js");
     const got: number[][] = [];
     const m = new MidiManager({
       midiAdd: () => {},
@@ -350,7 +349,6 @@ describe("the virtual loopback", () => {
   });
 
   it("stops echoing once detached", async () => {
-    const { createVirtualMidiPort } = await import("../src/midi/virtual.js");
     const got: number[][] = [];
     const m = new MidiManager({
       midiAdd: () => {},

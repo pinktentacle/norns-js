@@ -20,6 +20,8 @@ import { createInput, type Side } from "./ui/input.js";
 import { createPadCore, readPad, type PadCore } from "./ui/gamepad.js";
 import { detect, effectiveKind, readSignals, type MachineKind } from "./ui/machine.js";
 import { startCpuMeter } from "./ui/cpu-meter.js";
+import { createLog } from "./ui/log.js";
+import { watchCallCost } from "./norns/call-cost.js";
 import { registerScreenImages } from "./screen/images.js";
 import { registerHardware, type Hardware } from "./norns/hardware.js";
 import { registerOsc } from "./osc/register.js";
@@ -120,10 +122,8 @@ function peakOf(analyser: AnalyserNode): number {
   return peak;
 }
 
-function log(line: string): void {
-  logEl.textContent += line + "\n";
-  logEl.scrollTop = logEl.scrollHeight;
-}
+/** E9-130 — stamped and appended; see `src/ui/log.ts` for both reasons. */
+const log = createLog(logEl);
 
 /**
  * Baked in by vite (see `define` in vite.config.ts), so a page can say which
@@ -196,8 +196,59 @@ async function main(): Promise<void> {
   // Whatever this origin saved last time, BEFORE Lua starts. `state.resume`
   // reads `system.state` during `_startup`, so a file that arrives later
   // arrives after the only moment anything reads it. See src/fs/opfs.ts.
+  /**
+   * E9-138 — name the callback that held the thread.
+   *
+   * Started before anything can call into Lua, because the costly
+   * callback is as likely to be `init` as anything a script does later.
+   * See `src/norns/call-cost.ts` for why this is on without being asked.
+   */
+  watchCallCost({
+    onSlow: (c) =>
+      log(
+        `slow callback: ${c.path} took ${c.ms.toFixed(0)} ms` +
+          ` — worst ${c.worstMs.toFixed(0)} ms over ${c.calls} call${c.calls === 1 ? "" : "s"}`,
+      ),
+  });
+
   log("restoring saved files…");
   await restoreFromOpfs(vfs, { log: (l) => log(l) });
+
+  /**
+   * E9-137 — SAY HOW MUCH ROOM THERE IS, AND WHETHER IT IS KEPT.
+   *
+   * Two numbers that decide whether an install survives, and neither was
+   * ever written down. A phone is where they bite: the quota is a share of
+   * the device's FREE space, so a full phone gets a small one, and
+   * `tmi` — fifteen files — pulls `kolor` behind it, which is 446 files
+   * and 58.7 MB. Measured on this machine at 12520 MB of quota, which is
+   * why nothing here has ever hit it.
+   *
+   * `persisted` is the other half and the quieter one. Without
+   * `navigator.storage.persist()` an origin is BEST-EFFORT: the browser
+   * may evict it under storage pressure, and Android does. That is a
+   * script collection disappearing between two sessions with nothing
+   * said. This line does not ask for persistence — Firefox prompts for
+   * it, and a prompt on page load is not ours to spend — it only reports
+   * which of the two kinds of storage the page is standing on.
+   *
+   * Failure is silent on purpose: a browser without the Storage API
+   * simply does not get the line, which is one line less rather than one
+   * boot less.
+   */
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (est) {
+      const mb = (n: number): string => (n / 1048576).toFixed(1);
+      const kept = (await navigator.storage?.persisted?.()) === true;
+      log(
+        `storage: ${mb(est.usage ?? 0)} MB used of ${mb(est.quota ?? 0)} MB` +
+          (kept ? ", persistent" : ", best-effort — the browser may clear it"),
+      );
+    }
+  } catch {
+    // See above: no line rather than no boot.
+  }
 
   // E9-33 — what the server has, said where thirteen scripts look for it.
   //
@@ -340,7 +391,7 @@ async function main(): Promise<void> {
             return;
           }
           const name = f.dest.split("/").filter(Boolean).pop() ?? repo.repo;
-          const r = await installFromRepo(vfs, repo, { name });
+          const r = await installFromRepo(vfs, repo, { name, commit: () => mirror.flush() });
           log(`fetch: ${repo.owner}/${repo.repo} → ${f.dest} (${r.files} files)`);
         } else {
           const res = await fetch(f.url);
@@ -461,6 +512,25 @@ async function main(): Promise<void> {
     // SELECT answers asynchronously and norns redraws when it does, but the
     // redraw metro is E3, so the page asks for one itself.
     onChanged: () => void (dirty = true),
+    /**
+     * E9-135 — FLUSH, THEN GO.
+     *
+     * `_norns.restart` clears the script and saves `system.state` in the
+     * instant before this runs, and that save only reaches the overlay.
+     * The mirror is debounced by 150 ms and the reload was at 50, so the
+     * write lost by 100 ms every time: the page came back, restored the
+     * PREVIOUS `system.state` from OPFS, found the script still named in
+     * it, and resumed into it. Reported from a Pixel as a restart that
+     * does not restart.
+     *
+     * `flush()` cancels the debounce and settles the write — it exists
+     * for exactly this, "for tests and for a quit". `finally`, not
+     * `then`: a storage error is a reason to lose the state, never a
+     * reason to leave the machine with a dead screen and no way back.
+     */
+    reload: () => {
+      void mirror.flush().finally(() => globalThis.location?.reload());
+    },
   });
 
   // E5-24 — the last fifteen of the 178.
@@ -814,11 +884,17 @@ async function main(): Promise<void> {
    *
    * `_norns.restart` runs the shutdown hooks, clears the script, marks the
    * shutdown CLEAN, saves the state, and mutes the DAC before asking for
-   * the reset (core/norns.lua:248). Reloading the page instead would skip
-   * all five: the clean-shutdown flag is what `state.resume` reads to
-   * decide whether to come back into the script you were playing, so a
-   * bare reload comes back to an empty SELECT and looks like it lost your
-   * work.
+   * the reset (core/norns.lua:248). A bare reload skips all five.
+   *
+   * E9-135 — AND THE REASON IS NOT THE ONE THIS SAID. It used to claim a
+   * bare reload "comes back to an empty SELECT and looks like it lost your
+   * work", as though the full restart came back into the script. It does
+   * not, and should not: `script.clear()` runs BEFORE the state is saved,
+   * so both paths come up empty. What the five steps actually buy is that
+   * the script is told — `cleanup()` runs, which is where a script writes
+   * what it was holding — the DAC is muted rather than cut, and the state
+   * on disk describes a machine that was shut down rather than one that
+   * stopped mid-sentence.
    */
   const doRestart = (): void => {
     log("restart: asked from the rail");
@@ -1060,6 +1136,8 @@ async function main(): Promise<void> {
    * was measured against.
    */
   const cpuMeter = startCpuMeter();
+  /** Hysteresis for the two lines below; see `pollStat`. */
+  let cpuBusy = false;
 
   /**
    * Ask the audio server for its load, once there is one.
@@ -1097,6 +1175,27 @@ async function main(): Promise<void> {
     // here there is one main thread, and no browser reports per-core load.
     // Four copies of one number would read as four cores at that load.
     const main = Math.round(cpuMeter.percent);
+    /**
+     * E9-138 — AND IT GOES IN THE LOG, not only on the home overlay.
+     *
+     * The reading has existed since E9-112 and lived in two places a
+     * struggling page cannot show you: `norns.cpu[1]`, drawn on an
+     * overlay four presses into a menu, and a stat callback. A log sent
+     * from a phone that was crawling therefore contained no CPU figure at
+     * all.
+     *
+     * TWO THRESHOLDS, NOT ONE, because a single one chatters: a page
+     * sitting at the line would print every second. It says so once on
+     * the way up and once on the way back down, so the log carries the
+     * span rather than a column of numbers.
+     */
+    if (!cpuBusy && main >= 80) {
+      cpuBusy = true;
+      log(`cpu: ${main}% of the main thread — the page is at its limit`);
+    } else if (cpuBusy && main < 50) {
+      cpuBusy = false;
+      log(`cpu: back to ${main}%`);
+    }
     cb.stat(freeMb, 0, main, main, 0, 0, 0);
     // One round trip a second, beside the disk poll that was already here.
     // The answer lands in `engine.status` and is read by
@@ -2230,6 +2329,8 @@ async function main(): Promise<void> {
           // boot: somebody who raises the limit because a script was
           // refused expects the next attempt to use the new number.
           maxFiles: settings.installMaxFiles,
+          // E9-140 — "installed" has to mean on disk. See install.ts.
+          commit: () => mirror.flush(),
         });
       },
       installUrl: async (url, signal, onProgress) => {
@@ -2239,6 +2340,7 @@ async function main(): Promise<void> {
           signal: withStallTimeout(signal),
           onProgress: (p) => onProgress(p.done, p.total),
           maxFiles: settings.installMaxFiles,
+          commit: () => mirror.flush(),
         });
       },
       onEngines: (names) => {

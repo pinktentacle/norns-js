@@ -557,7 +557,37 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     }
     const here = new Set(opts.installed().map((n) => n.toLowerCase()));
     const found = search(catalog.entries, query.value);
-    for (const entry of found.slice(0, 300)) {
+    /**
+     * E9-133 — EVERY MATCH IS DRAWN. This read `found.slice(0, 300)`.
+     *
+     * Written in E9-07 with no comment, when the catalogue was smaller than
+     * its own limit and so the limit did nothing. The catalogue is other
+     * people's and it grows: at 355 entries the last 55 — everything from
+     * `splicer` to the end of the alphabet — were not in the DOM at all.
+     * Reported from a Pixel as a scroll that stops, which is what it looks
+     * like from the outside: the list ends, nothing says why, and the
+     * scripts are not findable unless you already know a name to search
+     * for.
+     *
+     * WHAT IT WAS WORTH, measured in the page at 412x915 rather than
+     * reasoned about. A full redraw, median of fifteen:
+     *
+     *     116 rows   ("grid")       4.5 ms
+     *     355 rows   (everything)   8.7 ms      2860 elements
+     *
+     * Three times the rows for twice the time, so most of a redraw is not
+     * the rows at all. Cutting 355 to 300 bought on the order of a
+     * millisecond out of nine — and `draw()` does run on every keystroke
+     * in the search box, so it is a real millisecond, on a phone perhaps
+     * several. It was still a sixth of the catalogue.
+     *
+     * If this list ever does need a limit, it belongs where the cost is —
+     * reusing rows instead of rebuilding all of them per keystroke, which
+     * is the part that does not shrink with the row count — and it has to
+     * be visible on screen, which the next line is the other half of.
+     */
+    let shown = 0;
+    for (const entry of found) {
       const row = el("div", "mdn-proj-row");
       const left = el("div", "mdn-proj-left");
       left.append(el("span", "mdn-proj-name", entry.name));
@@ -606,9 +636,10 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
       );
       row.append(add);
       list.append(row);
+      shown++;
       paintRow(entry.name, here.has(key));
     }
-    if (found.length === 0) list.append(el("div", "mdn-proj-empty", "nothing matches"));
+    if (shown === 0) list.append(el("div", "mdn-proj-empty", "nothing matches"));
     else {
       const tags = tagCounts(found)
         .slice(0, 8)
@@ -619,8 +650,13 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
       // overwriting the queue's own line — so typing while three scripts
       // were installing replaced "installing oooooo… 40 of 96 · 2 waiting"
       // with a list of tag counts, and the progress appeared to stop.
+      // E9-133 — `shown`, NOT `found.length`. This line said "355 of 355"
+      // while 300 rows were on screen: it counted the search result, which
+      // is the one number that cannot disagree with itself. Counting what
+      // was actually appended means the summary and the list are the same
+      // statement, so a limit reintroduced here could not go unannounced.
       if (busy) sayQueue();
-      else say(`${found.length} of ${catalog.entries.length}${tags === "" ? "" : ` — ${tags}`}`);
+      else say(`${shown} of ${catalog.entries.length}${tags === "" ? "" : ` — ${tags}`}`);
     }
   };
 

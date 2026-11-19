@@ -153,6 +153,9 @@ describe("the shell", () => {
   vfs.mount("/home/we/dust/code/awake/awake.lua", () => "-- awake");
   vfs.mount("/home/we/dust/code/awake/lib/helper.lua", () => "-- helper");
   vfs.mount("/home/we/dust/code/awake/.git/config", () => "x");
+  // A dot FILE as well as a dot directory: an installed script arrives with
+  // both, and until E9-130 every listing handed them to the caller.
+  vfs.mount("/home/we/dust/code/awake/.gitignore", () => "data/\n");
   vfs.mount("/home/we/dust/code/cranes/cranes.lua", () => "-- cranes");
   vfs.mount("/home/we/dust/data/awake-01.pset", () => "p");
   vfs.mount("/home/we/dust/data/awake-02.pset", () => "p");
@@ -177,7 +180,38 @@ describe("the shell", () => {
 
   it("marks directories with a trailing slash, which util.scandir relies on", () => {
     const r = runShell(vfs, 'ls -pL --group-directories-first "/home/we/dust/code/awake"');
-    expect(r.out.trim().split("\n")).toEqual([".git/", "lib/", "awake.lua"]);
+    expect(r.out.trim().split("\n")).toEqual(["lib/", "awake.lua"]);
+  });
+
+  // E9-130. THIS TEST USED TO EXPECT `.git/` IN THE LINE ABOVE, which is
+  // how long the shim had been handing a script's repository to
+  // `util.scandir` as though it were content. The same gap gave `bakeneko`
+  // the 808 README to play.
+  it("hides a leading dot, the way ls does", () => {
+    const r = runShell(vfs, 'ls -pL --group-directories-first "/home/we/dust/code/awake"');
+    expect(r.out).not.toContain(".git");
+  });
+
+  // Also the test that caught `-apL` missing this branch altogether: `-p`
+  // was matched as a substring, so one extra flag letter sent
+  // `util.scandir`'s own command to the plain listing at the bottom.
+  it("shows them again for -a, because that is what -a is", () => {
+    const r = runShell(vfs, 'ls -apL --group-directories-first "/home/we/dust/code/awake"');
+    expect(r.out.trim().split("\n")).toEqual([".git/", "lib/", ".gitignore", "awake.lua"]);
+  });
+
+  // `--group-directories-first` has an `a` in it and is not `-a`.
+  it("does not read a long option as a flag letter", () => {
+    const r = runShell(vfs, 'ls -pL --group-directories-first "/home/we/dust/code/awake"');
+    expect(r.out).not.toContain(".git");
+  });
+
+  it("keeps a dotfile out of a glob, and lets a dotted pattern have it", () => {
+    const plain = runShell(vfs, 'ls "/home/we/dust/code/awake"/*');
+    expect(plain.out).toContain("awake.lua");
+    expect(plain.out).not.toContain(".gitignore");
+    const asked = runShell(vfs, 'ls "/home/we/dust/code/awake"/.*');
+    expect(asked.out).toContain(".gitignore");
   });
 
   it("refuses what it cannot do, instead of returning an empty success", () => {

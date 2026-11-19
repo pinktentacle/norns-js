@@ -731,6 +731,15 @@ async function installOne(
      * after.
      */
     maxFiles?: number;
+    /**
+     * E9-140 — MAKE IT DURABLE BEFORE SAYING IT IS INSTALLED.
+     *
+     * Awaited after the move into `code/` and before this returns, so
+     * "installed" means on disk rather than in memory. See the move for
+     * what goes wrong without it. Optional: a caller with no mirror —
+     * every test, and the Node harness — simply has nothing to flush.
+     */
+    commit?: () => Promise<void>;
   } = {},
 ): Promise<CommunityInstall> {
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
@@ -940,6 +949,42 @@ async function installOne(
     vfs.write(root + p.slice(staging.length), data);
   }
   sweep();
+
+  /**
+   * E9-140 — AND WHOLE ON DISK, WHICH IS A DIFFERENT CLAIM.
+   *
+   * The loop above is synchronous and has no awaits in it, so the OVERLAY
+   * is never half-moved: in memory `code/<name>` is the old tree or the
+   * new one. The comment above has been true since E6-11 and says all it
+   * knew.
+   *
+   * The disk is the other half and nobody owned it. Every `write` and
+   * `remove` here only queues a path; the OPFS mirror runs on a 150 ms
+   * debounce and then copies the files out one await at a time. A script
+   * with 446 files and 58 MB of samples takes a long while at that, on a
+   * phone longer, and if the page goes away during it — the tab closed,
+   * Android reclaiming it, a reload — the disk keeps whatever had been
+   * written. The next boot restores exactly that, `installed()` lists the
+   * folder, and the script is there and incomplete.
+   *
+   * REPORTED FROM A PIXEL 9 PRO, and the log named it without help:
+   *
+   *     swept 8 interrupted downloads: … kolor, tmi
+   *     ### MISSING INCLUDE: kolor/lib/lattice
+   *     tmi includes `kolor/lib/lattice` and `kolor` IS installed, but
+   *     `kolor/lib/lattice.lua` is not in it — a part-finished install
+   *
+   * `kolor/lib/lattice.lua` is in the upstream repository and the filter
+   * takes it; it never reached that phone's storage. Worse than missing
+   * files is the order: the REMOVALS above queue too, so a tree can also
+   * come back emptier than it was.
+   *
+   * So the install does not finish until the disk agrees. The flush is
+   * the caller's because the mirror is the page's, same division as
+   * E9-135's reload — and this is the second time that division has had
+   * to be made, which is what says it is the right one.
+   */
+  await opts.commit?.();
 
   const needsReload = take.some((f) => /\.(sc|scd)$/i.test(f.path));
   return { name, branch, files: done, bytes, skipped: [...skip, ...lostFiles], needsReload };

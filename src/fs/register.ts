@@ -52,6 +52,12 @@ export interface FsOptions {
    *
    * Injectable because a test must not reload the runner, and because a
    * host that embeds norns in a frame may want to restart only the frame.
+   *
+   * IT ALSO OWNS GETTING THE STATE TO DISK (E9-135). `_norns.restart` has
+   * just cleared the script and saved; whoever replaces the page is the
+   * last one able to make sure that save survives it. The default cannot
+   * — it has no mirror to flush — and is therefore only correct for a
+   * test or for an embedder that persists some other way.
    */
   readonly reload?: () => void;
 }
@@ -137,9 +143,32 @@ export function registerFs(registry: NornsRegistry, vfs: Vfs, opts: FsOptions = 
   //
   // `reset` has an exact meaning here. On hardware it relaunches matron and
   // sclang as one detached command; in a browser the page IS matron, sclang,
-  // crone and the clock, so reloading it restarts all four. The state was
-  // saved by `_norns.restart` immediately before, so the reload comes back
-  // into the same script.
+  // crone and the clock, so reloading it restarts all four.
+  //
+  // E9-135 — AND IT COMES BACK WITH NO SCRIPT, which is what a norns does.
+  // This comment used to claim the opposite — "the reload comes back into
+  // the same script" — and gave the reason as the state having just been
+  // saved. The state HAD just been saved; what it said was misread.
+  // `norns.lua:247` clears the script FIRST:
+  //
+  //     _norns.restart = function()
+  //       norns.script.clear()          -- sets norns.state.script = ''
+  //       norns.state.clean_shutdown = true
+  //       norns.state.save()
+  //
+  // so what reaches `system.state` is an empty script, and `state.resume`
+  // takes its `else` branch on the way back up: `script.clear()` and
+  // "NO SCRIPT". SLEEP is the one that resumes — `norns.shutdown` saves
+  // WITHOUT clearing — and a browser tab has no sleep, which is why
+  // reopening a tab also comes up empty, the same as a norns that lost
+  // power without being put to sleep.
+  //
+  // `reload` IS RESPONSIBLE FOR PERSISTENCE, not just for the reload.
+  // Writing `system.state` only puts it in the overlay; the OPFS mirror
+  // runs on a 150 ms debounce and this reloads at 50, so the clear lost
+  // the race by 100 ms and the file read back on boot was the one from
+  // BEFORE the restart — still naming the script. The caller in `main.ts`
+  // flushes the mirror first.
   //
   // The other two do not have one, and pretending otherwise would be worse
   // than refusing:

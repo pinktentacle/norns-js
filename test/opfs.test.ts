@@ -8,6 +8,8 @@
 // records calls would catch none of them.
 
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { Vfs, seedDust } from "../src/fs/vfs.js";
 import {
   restoreFromOpfs,
@@ -424,5 +426,57 @@ describe("an empty script folder", () => {
     await restoreFromOpfs(b, { root: s.open });
     expect(b.isDir("/home/we/dust/code/keep")).toBe(true);
     expect(b.readText("/home/we/dust/code/keep/lib/thing.lua")).toBe("-- lib");
+  });
+});
+
+// E9-137 — the two numbers that decide whether an install survives.
+//
+// Reported from a Pixel (user, 2026-11-19): `tmi` fails to load there and
+// not here. A fresh-profile install of it was clean on this machine — but
+// `tmi` is fifteen files that pull `kolor` behind them, and `kolor` is 446
+// files and 58.7 MB. The quota is a share of the DEVICE's free space, so
+// what is 12520 MB here can be a fraction of that on a full phone, and
+// the page never said either number.
+//
+// The second number is the quieter one. An origin that has not called
+// `navigator.storage.persist()` is BEST-EFFORT: the browser may evict it
+// under storage pressure, and Android does. That is a script collection
+// gone between two sessions with nothing said.
+//
+// `main.ts` needs a DOM and an AudioWorklet, so this reads it the way
+// `rail-panels.test.ts` reads the rail.
+describe("the storage line", () => {
+  const raw = fs.readFileSync(path.join(__dirname, "..", "src", "main.ts"), "utf8");
+  // Comments out, code in. The first run of the test below failed on the
+  // comment that EXPLAINS why persistence is not requested, which quotes
+  // the call it is explaining. Same trap as `catalogue-complete.test.ts`.
+  const main = raw
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*)/.test(l))
+    .join("\n");
+
+  it("reports what is used, what is allowed, and whether it is kept", () => {
+    expect(main, "storage is not estimated at boot").toMatch(/navigator\.storage\?\.estimate\?\.\(\)/);
+    expect(main, "durability is not reported").toMatch(/navigator\.storage\?\.persisted\?\.\(\)/);
+    const line = /log\(\s*`storage: [\s\S]{0,400}?\);/.exec(main);
+    expect(line, "the storage line has gone").not.toBeNull();
+    expect(line![0]).toContain("used of");
+    expect(line![0]).toContain("best-effort");
+  });
+
+  // A DECISION, NOT AN OMISSION. Firefox prompts for persistent storage,
+  // and a permission dialogue on page load is not this page's to spend.
+  // If that is ever reconsidered it should be on a deliberate act — a
+  // first install — and not here.
+  it("does not ask for persistence on the way in", () => {
+    expect(main, "persist() is being requested at boot").not.toMatch(/storage\??\.?\.persist\s*\(/);
+  });
+
+  it("survives a browser with no Storage API rather than failing the boot", () => {
+    const at = main.indexOf("const est = await navigator.storage?.estimate?.()");
+    expect(at).toBeGreaterThan(-1);
+    expect(main.lastIndexOf("try {", at), "the estimate is not guarded").toBeGreaterThan(-1);
+    expect(main.slice(at, at + 900)).toMatch(/\}\s*catch\s*\{/);
   });
 });

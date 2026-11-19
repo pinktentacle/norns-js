@@ -137,7 +137,7 @@ repository and deploy a build.
 ```bash
 npm install
 npm run dev          # http://localhost:5173/, with the two headers set
-npm test             # 901 tests
+npm test             # 934 tests
 npm run typecheck
 npm run pins:check   # third_party/ still matches PINS.md
 npm run notices:check
@@ -277,7 +277,7 @@ __norns.exercise()
 | `tools/` | the generators and build scripts — `npm run assets`, the notices, the blockers table |
 | `tools/sclang`, `tools/screen`, `tools/pack` | the WebAssembly builds — `sclang`, `scsynth`, the screen, the class library. These are how every `.wasm` here was produced, and each is a `build.sh` you can run |
 | `patches/` | three upstream trees need changes; they are diffs, so what is ours stays separable |
-| `test/` | 901 of them, and six that say so when they are skipped |
+| `test/` | 934 of them, and six that say so when they are skipped |
 | `desktop/`, `electron-builder.yml` | the Electron shell for the Windows app — four files; the page it wraps is the same `src/` |
 
 **This is the source, not the workshop.** The development tree also holds
