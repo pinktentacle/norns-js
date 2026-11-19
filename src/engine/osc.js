@@ -17,44 +17,99 @@ function encString(s) {
   return out;
 }
 
-/** Encode an OSC message. Args are inferred: number->f unless Number.isInteger. */
+/**
+ * Encode an OSC message. Args are inferred: number->f unless Number.isInteger.
+ *
+ * E9-156 — ONE BUFFER AND ONE DataView, measured into existence.
+ *
+ * A `?profile=90` from a Pixel 9 Pro, playing `kolor`:
+ *
+ *     30.1% self   31.1% total   encodeMessage
+ *
+ * The hottest function in the page by a factor of three, and the version
+ * it replaces allocated per ARGUMENT: a four-byte `Uint8Array` and — the
+ * expensive half — a `DataView` over it, for every number. `kolor`'s
+ * engine command is
+ *
+ *     kolorplay iffffffffffffffffffffffffffffffffffffffffffffffff
+ *
+ * one int and forty-seven floats, sent on every trigger of a running
+ * lattice. That is ninety-six objects per message before the tag string,
+ * the `bodies` array, the spread into `parts`, the reduce and the final
+ * copy: something near a hundred and fifty allocations to produce two
+ * hundred and sixty bytes.
+ *
+ * So: measure, allocate once, write in place. The sizes are arithmetic —
+ * a string pads to four, a number is four, a blob is four plus its own
+ * padded length — and knowing them up front removes every intermediate.
+ * The tag string is built into an array and joined, which is one string
+ * instead of forty-eight.
+ *
+ * The wire format is unchanged and `decode` is untouched; the round trip
+ * is what the tests check.
+ */
 export function encodeMessage(address, args = []) {
-  const parts = [encString(address)];
-  let tags = ",";
-  const bodies = [];
-  for (const a of args) {
+  const addr = enc.encode(address);
+  const addrLen = pad4(addr.length + 1);
+
+  // PASS ONE: how big, and what each argument is. Strings are encoded
+  // here rather than twice, because `TextEncoder` is not free either.
+  const tags = new Array(args.length + 1);
+  tags[0] = ",";
+  const strings = [];
+  let bodyLen = 0;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
     if (typeof a === "string") {
-      tags += "s";
-      bodies.push(encString(a));
-    } else if (typeof a === "number" && Number.isInteger(a)) {
-      tags += "i";
-      const b = new Uint8Array(4);
-      new DataView(b.buffer).setInt32(0, a, false); // OSC is big-endian
-      bodies.push(b);
+      const b = enc.encode(a);
+      strings.push(b);
+      tags[i + 1] = "s";
+      bodyLen += pad4(b.length + 1);
     } else if (typeof a === "number") {
-      tags += "f";
-      const b = new Uint8Array(4);
-      new DataView(b.buffer).setFloat32(0, a, false);
-      bodies.push(b);
+      tags[i + 1] = Number.isInteger(a) ? "i" : "f";
+      bodyLen += 4;
     } else if (a instanceof Uint8Array) {
-      // A BLOB: int32 length, the bytes, then padding to four. sclang sends
-      // SynthDefs this way, so an encoder that cannot write one cannot
-      // reproduce the traffic it is meant to speak.
-      tags += "b";
-      const pad = pad4(a.length) - a.length;
-      const b = new Uint8Array(4 + a.length + pad);
-      new DataView(b.buffer).setInt32(0, a.length, false);
-      b.set(a, 4);
-      bodies.push(b);
+      // A BLOB: int32 length, the bytes, then padding to four. sclang
+      // sends SynthDefs this way, so an encoder that cannot write one
+      // cannot reproduce the traffic it is meant to speak.
+      tags[i + 1] = "b";
+      bodyLen += 4 + pad4(a.length);
     } else {
       throw new Error(`unsupported OSC arg: ${typeof a}`);
     }
   }
-  parts.push(encString(tags), ...bodies);
-  const total = parts.reduce((n, p) => n + p.length, 0);
-  const out = new Uint8Array(total);
-  let o = 0;
-  for (const p of parts) { out.set(p, o); o += p.length; }
+  const tagStr = tags.join("");
+  const tagLen = pad4(tagStr.length + 1);
+
+  const out = new Uint8Array(addrLen + tagLen + bodyLen);
+  const view = new DataView(out.buffer);
+  out.set(addr, 0);
+  // `encodeInto` writes straight into the buffer; the NUL terminator and
+  // the padding are already zero because the array was allocated so.
+  enc.encodeInto(tagStr, out.subarray(addrLen, addrLen + tagLen));
+
+  // PASS TWO: the bodies, in order, into the space already counted.
+  let o = addrLen + tagLen;
+  let str = 0;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    const t = tags[i + 1];
+    if (t === "s") {
+      const b = strings[str++];
+      out.set(b, o);
+      o += pad4(b.length + 1);
+    } else if (t === "i") {
+      view.setInt32(o, a, false); // OSC is big-endian
+      o += 4;
+    } else if (t === "f") {
+      view.setFloat32(o, a, false);
+      o += 4;
+    } else {
+      view.setInt32(o, a.length, false);
+      out.set(a, o + 4);
+      o += 4 + pad4(a.length);
+    }
+  }
   return out;
 }
 

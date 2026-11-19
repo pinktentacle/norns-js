@@ -7,7 +7,7 @@
 // whatever is highest up the stack at the top and says nothing.
 
 import { describe, expect, it } from "vitest";
-import { hotFrames, profileRequest } from "../src/ui/profiler.js";
+import { hotFrames, profileRequest, summarise } from "../src/ui/profiler.js";
 
 describe("asking for a profile", () => {
   it("is off unless the URL says so", () => {
@@ -93,5 +93,43 @@ describe("reading a trace", () => {
 
   it("answers nothing for a trace that caught nothing", () => {
     expect(hotFrames({ ...trace, samples: [{ timestamp: 0 }] })).toEqual([]);
+  });
+});
+
+// E9-159 — the percentages need their denominator beside them.
+//
+// Two traces taken on a page that was 96% idle reported 39% and 10% self
+// time for the string path into Lua. Read as "half this page", acted on,
+// and measured afterwards at 0.1 microseconds a call: 39% of ONE SECOND
+// spread across forty-five. The ranking is right and has to stay — a
+// share of wall time would make every function on an idle page look free
+// — but the number it is a share of has to travel with it.
+describe("what the percentages are of", () => {
+  const trace = {
+    resources: ["https://x/main.js"],
+    frames: [{ name: "work", resourceId: 0, line: 1 }],
+    stacks: [{ frameId: 0 }],
+    samples: [
+      { timestamp: 0, stackId: 0 },
+      { timestamp: 10 },
+      { timestamp: 20 },
+      { timestamp: 30 },
+    ],
+  };
+
+  it("counts the busy samples and every sample, separately", () => {
+    const s = summarise(trace);
+    expect(s.busy, "idle samples counted as work").toBe(1);
+    expect(s.total, "idle samples dropped from the total").toBe(4);
+  });
+
+  it("still ranks by share of the busy ones", () => {
+    // One busy sample, all of it in `work`: 100% of the work done, and
+    // 25% of the time, which are different claims.
+    expect(summarise(trace).frames[0]!.selfPct).toBe(100);
+  });
+
+  it("gives hotFrames the same answer it always gave", () => {
+    expect(hotFrames(trace)).toEqual(summarise(trace).frames);
   });
 });

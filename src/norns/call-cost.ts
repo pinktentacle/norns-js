@@ -83,12 +83,34 @@ export function watchCallCost(opts: {
  * so the two call sites cannot drift apart or forget the second clock read
  * on an early return.
  */
+/**
+ * E9-160 — SELF TIME, because these nest now.
+ *
+ * `osc:to-server` is called from inside a `metro` callback, and
+ * `draw:grid` from inside a refresh that a callback asked for. Counting
+ * the whole elapsed time against each would report the same
+ * microseconds two and three times over, and the totals would add up to
+ * more than the span they are meant to explain — which is worse than no
+ * total at all, because it reads like one.
+ *
+ * So each entry keeps the time spent INSIDE it and not inside something
+ * else it called. The sum of those is the instrumented work, and
+ * subtracting it from a busy span is what says how much nothing has a
+ * clock on.
+ */
+let childTime = 0;
+
 export function timed<T>(path: string, run: () => T): T {
   const t0 = clock();
+  const outerChild = childTime;
+  childTime = 0;
   try {
     return run();
   } finally {
-    record(path, clock() - t0);
+    const elapsed = clock() - t0;
+    record(path, elapsed - childTime);
+    // What this call cost its own caller, which is all of it.
+    childTime = outerChild + elapsed;
   }
 }
 
@@ -119,10 +141,19 @@ export function callCosts(): ReadonlyArray<{ path: string; calls: number; ms: nu
 /** Forget everything. A new script is a new measurement. */
 export function resetCallCosts(): void {
   totals.clear();
+  childTime = 0;
+}
+
+/** Every instrumented millisecond since the last reset, self time only. */
+export function accountedMs(): number {
+  let ms = 0;
+  for (const t of totals.values()) ms += t.ms;
+  return ms;
 }
 
 /** Tests only: put the module back as it was found. */
 export function stopWatchingCallCost(): void {
+  childTime = 0;
   onSlow = null;
   thresholdMs = 120;
   quietMs = 5000;

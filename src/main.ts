@@ -22,7 +22,7 @@ import { detect, effectiveKind, readSignals, type MachineKind } from "./ui/machi
 import { startCpuMeter } from "./ui/cpu-meter.js";
 import { createLog } from "./ui/log.js";
 import { profileRequest, startProfile } from "./ui/profiler.js";
-import { callCosts, resetCallCosts, timed, watchCallCost } from "./norns/call-cost.js";
+import { accountedMs, callCosts, resetCallCosts, timed, watchCallCost } from "./norns/call-cost.js";
 import { registerScreenImages } from "./screen/images.js";
 import { registerHardware, type Hardware } from "./norns/hardware.js";
 import { registerOsc } from "./osc/register.js";
@@ -1254,15 +1254,31 @@ async function main(): Promise<void> {
        * out every callback at once and sends the next look at drawing,
        * decoding, garbage collection or the browser's own work.
        */
-      const secs = ((performance.now() - cpuBusyAt) / 1000).toFixed(1);
+      const spanMs = performance.now() - cpuBusyAt;
       const top = callCosts()
         .filter((c) => c.ms >= 1)
-        .slice(0, 3)
+        .slice(0, 4)
         .map((c) => `${c.path} ${c.ms.toFixed(0)} ms over ${c.calls}`)
         .join(" · ");
+      /**
+       * E9-160 — HOW MUCH OF IT IS EXPLAINED, before what explains it.
+       *
+       * The first span that reported itself named three things adding up
+       * to 4.3 seconds of 53.8, and nothing said that. A list of the
+       * heaviest instrumented work reads as an answer whether it covers
+       * ninety per cent of the span or eight, and the difference is the
+       * whole of what the reader needs to know — eight means the answer
+       * is somewhere nobody has put a clock, and that is a finding too.
+       *
+       * The entries are SELF time now (`call-cost.ts`), so they can be
+       * summed without counting a callback and the OSC send inside it
+       * twice.
+       */
+      const share = (accountedMs() / Math.max(1, spanMs)) * 100;
       log(
-        `cpu: back to ${main}% after ${secs} s — ` +
-          (top === "" ? "nothing instrumented accounts for it" : top),
+        `cpu: back to ${main}% after ${(spanMs / 1000).toFixed(1)} s — ` +
+          `${share.toFixed(0)}% of it accounted for` +
+          (top === "" ? ", none of it instrumented" : `: ${top}`),
       );
     }
     cb.stat(freeMb, 0, main, main, 0, 0, 0);

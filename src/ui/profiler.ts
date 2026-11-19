@@ -65,6 +65,14 @@ export function profileRequest(search: string): ProfileRequest | null {
 }
 
 /** One line of the summary: a function, and how long it was on top of the stack. */
+export interface Summary {
+  /** Samples where something was running. */
+  readonly busy: number;
+  /** Every sample the profiler took, idle included. */
+  readonly total: number;
+  readonly frames: HotFrame[];
+}
+
 export interface HotFrame {
   readonly name: string;
   /** Samples with this frame at the LEAF, as a share of all samples. */
@@ -86,6 +94,26 @@ export interface HotFrame {
  * twelve times is not a summary.
  */
 export function hotFrames(trace: ProfilerTrace, top = 12): HotFrame[] {
+  return summarise(trace, top).frames;
+}
+
+/**
+ * The same, with the denominator attached.
+ *
+ * E9-159 — AND THE DENOMINATOR IS THE POINT. Percentages here are of the
+ * samples where something was RUNNING, which is the only honest way to
+ * rank functions: a page that is idle 96% of the time would otherwise
+ * report every number as tiny and hide what it does when it works.
+ *
+ * But the same choice makes "39% self" readable as "a third of this
+ * page" when it is a third of one second spread across forty-five. The
+ * author of this file read two of his own traces that way and spent an
+ * afternoon optimising a path that turned out to be worth 0.1
+ * microseconds a call. The share of samples that were busy at all goes
+ * in the line now, first, so the percentages beneath it have something
+ * to be a percentage OF.
+ */
+export function summarise(trace: ProfilerTrace, top = 12): Summary {
   const nameOf = (frameId: number): string => {
     const f = trace.frames[frameId];
     if (!f) return "(unknown)";
@@ -120,15 +148,18 @@ export function hotFrames(trace: ProfilerTrace, top = 12): HotFrame[] {
     }
   }
 
-  if (counted === 0) return [];
-  return [...self]
-    .map(([name, n]) => ({
-      name,
-      selfPct: (n / counted) * 100,
-      totalPct: ((total.get(name) ?? 0) / counted) * 100,
-    }))
-    .sort((a, b) => b.selfPct - a.selfPct)
-    .slice(0, top);
+  const frames =
+    counted === 0
+      ? []
+      : [...self]
+          .map(([name, n]) => ({
+            name,
+            selfPct: (n / counted) * 100,
+            totalPct: ((total.get(name) ?? 0) / counted) * 100,
+          }))
+          .sort((a, b) => b.selfPct - a.selfPct)
+          .slice(0, top);
+  return { busy: counted, total: trace.samples.length, frames };
 }
 
 export interface ProfileRun {
@@ -180,12 +211,16 @@ export function startProfile(
       void profiler
         .stop()
         .then((trace) => {
-          const hot = hotFrames(trace);
+          const { busy, total, frames: hot } = summarise(trace);
           if (hot.length === 0) {
             log("profile: no samples — the page was idle, or the buffer ran out.");
             return;
           }
-          log(`profile: ${trace.samples.length} samples over ${req.seconds} s, hottest first:`);
+          const share = (busy / Math.max(1, total)) * 100;
+          log(
+            `profile: ${total} samples over ${req.seconds} s, busy in ${busy} of them ` +
+              `(${share.toFixed(1)}% — the percentages below are of THOSE):`,
+          );
           for (const f of hot) {
             log(
               `  ${f.selfPct.toFixed(1).padStart(5)}% self  ${f.totalPct

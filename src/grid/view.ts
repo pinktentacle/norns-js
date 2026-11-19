@@ -118,7 +118,67 @@ export class GridView implements GridTransport {
     this.cell = Math.floor(Math.min(canvas.width / w, canvas.height / h));
     this.originX = Math.floor((canvas.width - this.cell * w) / 2);
     this.originY = Math.floor((canvas.height - this.cell * h) / 2);
+    this.makeBlank();
     this.draw();
+  }
+
+  /** Canvas pixel → cell index, or -1 outside the surface. */
+  /**
+   * E9-157 — ONE UNLIT KEY, DRAWN ONCE, BLITTED 64 TIMES.
+   *
+   * A `?profile=90` from a Pixel 9 Pro playing `kolor`, after
+   * `encodeMessage` was dealt with:
+   *
+   *     10.2% self   fill
+   *      3.4% self   arcTo
+   *      3.4% self   addColorStop
+   *      1.8% self   save
+   *      1.5% self   stroke
+   *      1.2% self   createLinearGradient
+   *      4.4% self   31.2% total   key
+   *
+   * A fifth of the page, and all of it in `key`. Every cell built its own
+   * linear gradient with three stops, traced eight `arcTo` corners across
+   * three paths, and filled and stroked them — sixty-four times a
+   * refresh, on a grid where most keys are dark and IDENTICAL. The only
+   * things that differ between two unlit keys are their coordinates.
+   *
+   * So the unlit key is rendered once into its own canvas whenever the
+   * layout changes, and the loop blits it. A lit or held key still goes
+   * the long way, because those genuinely differ.
+   *
+   * THE MARGIN IS THE SHADOW. The cushion casts one past its own edge —
+   * `shadowBlur` of `pad * 0.12` and an offset below it — so the sprite
+   * is bigger than the key and is drawn at a negative offset. Without
+   * that the shadow is clipped and the keys look pressed into the plate
+   * rather than sitting on it.
+   */
+  private blank: HTMLCanvasElement | null = null;
+  private blankPad = 0;
+
+  private makeBlank(): void {
+    this.blank = null;
+    const c = this.cell;
+    if (c <= 0) return;
+    const gap = Math.max(1, Math.round(c * GAP_RATIO));
+    const pad = c - gap;
+    if (pad <= 0) return;
+    const r = pad * 0.22;
+    const m = Math.ceil(pad * 0.2) + 2;
+    const doc = this.opts.canvas.ownerDocument;
+    if (!doc) return;
+    const off = doc.createElement("canvas");
+    off.width = pad + m * 2;
+    off.height = pad + m * 2;
+    const octx = off.getContext("2d");
+    if (!octx) return;
+    // The same routine, into the sprite's own origin — `key` takes its
+    // context now rather than reaching for the view's. Alpha 0 and not
+    // held is exactly the branch the loop replaces, so what is drawn here
+    // and what it stands in for cannot drift apart.
+    this.key(octx, m, m, pad, r, 0, false);
+    this.blank = off;
+    this.blankPad = m;
   }
 
   /** Canvas pixel → cell index, or -1 outside the surface. */
@@ -162,14 +222,34 @@ export class GridView implements GridTransport {
     const r = pad * 0.22;
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    /**
+     * E9-160 — THE HELD SET IS BUILT ONCE, not once per cell.
+     *
+     * This loop asked `[...this.held.values()].includes(i)` for every
+     * cell: a fresh array from a Map, and a linear scan of it, 64 or 128
+     * times per refresh — on a grid where `held` is empty unless a finger
+     * is down, and never has more than a few entries when it is not.
+     *
+     * Allocating inside the inner loop of the thing you redraw sixty
+     * times a second is the kind of line that reads fine and costs for
+     * years. Found by looking at the loop the sprite work had just made
+     * the fastest part of this file.
+     */
+    const heldNow = this.held.size === 0 ? null : new Set(this.held.values());
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         const i = y * w + x;
         const level = quantise(this.levels[i] ?? 0, this.descriptor.varibright);
         const px = this.originX + x * c;
         const py = this.originY + y * c;
-        const down = this.latched.has(i) || [...this.held.values()].includes(i);
-        this.key(px, py, pad, r, alphaFor(level, this.intensity), down);
+        const down = this.latched.has(i) || (heldNow !== null && heldNow.has(i));
+        const alpha = alphaFor(level, this.intensity);
+        // E9-157 — THE DARK ONES ARE ALL THE SAME KEY. See `blankKey`.
+        if (alpha <= 0 && !down && this.blank !== null) {
+          ctx.drawImage(this.blank, px - this.blankPad, py - this.blankPad);
+          continue;
+        }
+        this.key(ctx, px, py, pad, r, alpha, down);
       }
     }
   }
@@ -183,8 +263,15 @@ export class GridView implements GridTransport {
    * is the relief of 128 little cushions. The canvas is transparent so the
    * slab under it (index.html) is the plate.
    */
-  private key(px: number, py: number, pad: number, r: number, alpha: number, down: boolean): void {
-    const ctx = this.ctx;
+  private key(
+    ctx: CanvasRenderingContext2D,
+    px: number,
+    py: number,
+    pad: number,
+    r: number,
+    alpha: number,
+    down: boolean,
+  ): void {
     const round = (x: number, y: number, s: number, rad: number): void => {
       ctx.beginPath();
       // `roundRect` is not in every engine this might run in, and the path is

@@ -43,7 +43,8 @@ for (const s of t.samples) {
     if (!seen.has(nm)) { seen.add(nm); total.set(nm, (total.get(nm) || 0) + 1); }
     at = node.parentId; }
 }
-console.log(`\nnon-idle samples: ${n}  (${(n * 10 / 1000).toFixed(1)} s of CPU at 10 ms/sample)\n`);
+console.log(`\nnon-idle samples: ${n} of ${t.samples.length}  (${((n * 10) / 1000).toFixed(1)} s of CPU across ${span.toFixed(0)} s of wall)`);
+console.log(`the percentages below are of those ${n}, NOT of the ${span.toFixed(0)} seconds.\n`);
 console.log("SELF%  TOTAL%  frame");
 [...self].sort((a, b) => b[1] - a[1]).slice(0, 18).forEach(([k, v]) =>
   console.log(`${(100*v/n).toFixed(1).padStart(5)}  ${(100*(total.get(k)||0)/n).toFixed(1).padStart(6)}  ${k}`));

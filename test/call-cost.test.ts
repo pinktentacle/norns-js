@@ -9,6 +9,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  accountedMs,
   callCosts,
   record,
   resetCallCosts,
@@ -116,5 +117,62 @@ describe("the running account", () => {
     // reporting on later does not start from zero.
     record("metro", 7);
     expect(callCosts()).toEqual([{ path: "metro", calls: 1, ms: 7, worstMs: 7 }]);
+  });
+});
+
+// E9-160 — these nest now, so the account is SELF time.
+//
+// `osc:to-server` is called from inside a `metro` callback and
+// `draw:grid` from inside a refresh a callback asked for. Counting the
+// whole elapsed time against each reports the same microseconds twice,
+// and the totals then add to more than the span they explain — which is
+// worse than no total, because it reads like one.
+describe("time that nests", () => {
+  it("charges a caller only for what it did itself", () => {
+    const h = harness({ thresholdMs: 1e9 });
+    timed("outer", () => {
+      h.tick(10);
+      timed("inner", () => h.tick(60));
+      h.tick(30);
+    });
+    const by = Object.fromEntries(callCosts().map((c) => [c.path, c.ms]));
+    expect(by["inner"]).toBe(60);
+    expect(by["outer"], "the inner call was charged to the outer one too").toBe(40);
+  });
+
+  it("adds up to the time actually spent, not more", () => {
+    const h = harness({ thresholdMs: 1e9 });
+    timed("a", () => {
+      h.tick(5);
+      timed("b", () => {
+        h.tick(5);
+        timed("c", () => h.tick(20));
+      });
+    });
+    expect(accountedMs(), "three levels counted three times").toBe(30);
+  });
+
+  it("survives a throw without leaving the nesting broken", () => {
+    const h = harness({ thresholdMs: 1e9 });
+    expect(() =>
+      timed("outer", () => {
+        timed("inner", () => {
+          h.tick(10);
+          throw new Error("boom");
+        });
+      }),
+    ).toThrow("boom");
+    // The next call must not be charged for the one that threw.
+    timed("after", () => h.tick(7));
+    const by = Object.fromEntries(callCosts().map((c) => [c.path, c.ms]));
+    expect(by["after"]).toBe(7);
+  });
+
+  it("forgets the nesting when it forgets the totals", () => {
+    const h = harness({ thresholdMs: 1e9 });
+    timed("x", () => h.tick(9));
+    resetCallCosts();
+    timed("y", () => h.tick(3));
+    expect(accountedMs()).toBe(3);
   });
 });

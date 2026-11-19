@@ -4,6 +4,7 @@
 // They are ADR-04c, ADR-04d and the `numInputBusChannels` trap.
 
 import { installCapture, captured, uncapturedAudioContext } from "./capture.js";
+import { timed } from "../norns/call-cost.js";
 import { decode, encodeMessage } from "./osc.js";
 import { loadClassLibrary } from "./classlib-loader.js";
 
@@ -608,7 +609,32 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     return (m.bundle ?? []).filter((x) => x.address === "/d_recv").length;
   };
 
-  sclang.onOsc = (bytes: Uint8Array) => {
+  /**
+   * E9-160 — THE OSC PATHS ARE TIMED, in the same account as everything
+   * else.
+   *
+   * The first busy span that reported where it went came to 7.9% of
+   * itself: `draw:grid`, `metro` and `grid.key` adding up to 4.3 seconds
+   * of a 53.8-second span at eighty per cent. Whatever the other forty
+   * seconds were, nothing had a clock on it.
+   *
+   * OSC is the obvious candidate and the earlier profile agreed —
+   * `sendToServer` carried 26.8% of the samples beneath it. Every engine
+   * command, every poll reply and every bit of sclang's own chatter
+   * passes through these four points, so they get the same treatment the
+   * callbacks and the frame already have:
+   *
+   *     osc:to-server    encode and hand to scsynth
+   *     osc:to-lang      the same, to sclang
+   *     osc:from-lang    decode and dispatch what sclang says
+   *     osc:from-server  the same, from scsynth
+   *
+   * Named apart because they are four different costs: a `kolorplay`
+   * going out is not a `/status.reply` coming back.
+   */
+  sclang.onOsc = (bytes: Uint8Array) => timed("osc:from-lang", () => onLangOsc(bytes));
+
+  const onLangOsc = (bytes: Uint8Array): void => {
     let msg: Decoded | null = null;
     try {
       msg = decode(bytes) as unknown as Decoded;
@@ -633,7 +659,9 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     forward({ bytes, addr, defs });
   };
 
-  scsynth.onOscReply = (bytes: Uint8Array) => {
+  scsynth.onOscReply = (bytes: Uint8Array) => timed("osc:from-server", () => onServerOsc(bytes));
+
+  const onServerOsc = (bytes: Uint8Array): void => {
     // Read BEFORE the `/d_recv` bookkeeping below and outside its guard:
     // that branch only runs while a SynthDef is outstanding, and the
     // status poll has nothing to do with sending defs.
@@ -1245,8 +1273,10 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     status,
     /** Ask the server what its load is. The answer lands in `status`. */
     pollStatus: (): void => scsynth.sendOsc(encodeMessage("/status", [])),
-    sendToServer: (address, args = []) => scsynth.sendOsc(encodeMessage(address, args)),
-    sendToLang: (address, args = []) => sclang.sendOsc(encodeMessage(address, args)),
+    sendToServer: (address, args = []) =>
+      timed("osc:to-server", () => scsynth.sendOsc(encodeMessage(address, args))),
+    sendToLang: (address, args = []) =>
+      timed("osc:to-lang", () => sclang.sendOsc(encodeMessage(address, args))),
     runCode: (code: string) => sclang.runCode(code),
     get context() {
       return captured.ctxs[0] ?? null;
