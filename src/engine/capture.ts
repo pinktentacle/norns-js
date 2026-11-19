@@ -25,6 +25,27 @@ export const captured: Captured = { ctxs: [], nodes: [], toDestination: [] };
 
 let installed = false;
 
+/**
+ * The real constructor, before the patch above replaced it.
+ *
+ * E9-152 — ANYTHING THAT WANTS A CONTEXT OF ITS OWN HAS TO USE THIS.
+ * `installCapture` swaps `globalThis.AudioContext` for a subclass that
+ * records every context constructed, because the only one worth having
+ * is the one scsynth makes and emscripten will not hand it over. A
+ * caller that builds a context for its own reasons through the patched
+ * global therefore becomes `captured.ctxs[0]` -- and the boot then wires
+ * crone, the destination and every worklet to THAT.
+ *
+ * Found by the package self-check: a throwaway context used to ask
+ * whether this page is allowed audio took first place in that list, was
+ * closed as soon as it had answered, and the probe reported `the audio
+ * graph never arrived` with five of seven checks failing.
+ */
+let real: typeof AudioContext | undefined;
+export function uncapturedAudioContext(): typeof AudioContext | undefined {
+  return real;
+}
+
 /** Idempotent: a second call does nothing rather than double-wrapping. */
 export function installCapture(): void {
   if (installed) return;
@@ -32,6 +53,7 @@ export function installCapture(): void {
 
   const g = globalThis as unknown as Record<string, unknown>;
   const RealCtx = (g["AudioContext"] ?? g["webkitAudioContext"]) as typeof AudioContext | undefined;
+  real = RealCtx;
   const RealNode = g["AudioWorkletNode"] as typeof AudioWorkletNode | undefined;
 
   if (RealCtx) {

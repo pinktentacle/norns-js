@@ -3,7 +3,7 @@
 // Three decisions here are architectural and each cost a day of E0 to find.
 // They are ADR-04c, ADR-04d and the `numInputBusChannels` trap.
 
-import { installCapture, captured } from "./capture.js";
+import { installCapture, captured, uncapturedAudioContext } from "./capture.js";
 import { decode, encodeMessage } from "./osc.js";
 import { loadClassLibrary } from "./classlib-loader.js";
 
@@ -1149,6 +1149,60 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
 
   async function bootServerFromSclang(): Promise<{ ready: boolean; ctx: AudioContext | null }> {
     scLog.length = 0;
+
+    /**
+     * E9-152 — THE GESTURE IS ASKED FOR BEFORE THE BOOT, NOT DURING IT.
+     *
+     * The order below already fixed one version of this: resume the
+     * context, THEN wait for the handshake. It left the boot itself on
+     * the wrong side of the wait. `waitForBoot` was sent first, so
+     * sclang was trying to bring a server up inside a suspended context
+     * — and when its `/notify` went unanswered it retried, once a
+     * second, for as long as the page waited for a finger.
+     *
+     * Then the finger arrived, scsynth started, and received all of them
+     * at once. From a Pixel 9 Pro:
+     *
+     *     13.336 audio: the browser is holding the engine until you touch
+     *     19.032 | Requested notification messages from server 'localhost'   x6
+     *     19.113 scsynth died: map::at:  key not found
+     *     25.150 engine: the server has stopped completing /d_recv …
+     *     27.509 s| *** ERROR: SynthDef adc not found
+     *
+     * Ninety seconds of a session with no audio engine at all, and every
+     * `SynthDef … not found` after it is that one line's consequence.
+     *
+     * A THROWAWAY CONTEXT IS THE PROBE. The real one does not exist until
+     * scsynth makes it, which is the chicken and egg that put the boot
+     * first in the first place; a context of our own answers the only
+     * question that matters — will this page let audio start — and the
+     * gesture that unlocks it unlocks the page, not that object. On a
+     * page that is already allowed this costs one construction and one
+     * close, and `state` is "running" immediately.
+     */
+    try {
+      // THE UNCAPTURED ONE. `installCapture` replaces the global with a
+      // subclass that records every context built, and the boot takes
+      // `captured.ctxs[0]` as the one to wire everything to. A probe
+      // built through the global takes that place, and the graph is then
+      // assembled on a context this function has already closed.
+      const Ctor = uncapturedAudioContext();
+      if (Ctor !== undefined) {
+        const probe = new Ctor();
+        if (probe.state !== "running") await ensureRunning(probe);
+        // NOT AWAITED, and the probe found that out: `close()` on a
+        // context that is already running did not settle under Electron,
+        // so the boot below never ran and the package self-check came
+        // back with `the audio graph never arrived` and five failures.
+        // Nothing here needs the close to finish -- the probe has already
+        // answered, and letting it go is tidying, not a step.
+        void probe.close().catch(() => {});
+      }
+    } catch {
+      // A browser that will not make one is a browser that will not run
+      // the server either; the boot below reports that in its own words.
+    }
+
     sclang.runCode(`Server.local.waitForBoot { "NORNSJS-SERVER-READY".postln; };`);
 
     // THE CONTEXT IS RESUMED BEFORE THE HANDSHAKE IS WAITED FOR, and the

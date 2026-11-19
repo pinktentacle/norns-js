@@ -141,7 +141,26 @@ export default defineConfig({
   // E0-38a measured the class library at 2 MB; chunking so a browser can cache
   // it across deploys of the app code belongs with E4-02, when it is actually
   // loaded. Nothing is gained by guessing the split before then.
-  build: { target: "es2022" },
+  build: {
+    target: "es2022",
+    /**
+     * E9-153 — KEEP THE FUNCTION NAMES, so a profile can be read.
+     *
+     * `?profile` works and names what it finds; what it found on a Pixel
+     * was `xa` at 25% and `key` at 22%, which are minified names and
+     * answer nothing. Mapping them back needs the exact bundle the phone
+     * ran, and the build id is baked into it — so the hash differs, the
+     * line numbers shift, and the map is for a file nobody has.
+     *
+     * `keepNames` makes that whole problem not exist: the profile comes
+     * back with the names the source uses, from any build, on anybody's
+     * machine. It costs bytes in the bundle and nothing at runtime, and a
+     * page whose own instruments cannot be read is a page that gets
+     * guessed about.
+     */
+    minify: "oxc",
+    rollupOptions: { output: { minify: { compress: true, mangle: { keepNames: true } } } },
+  },
   test: {
     include: ["test/**/*.test.ts"],
     environment: "node",
