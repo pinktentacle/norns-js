@@ -17,7 +17,7 @@
 import { alphaFor, quantise } from "./ramp.js";
 import { drawingRatio } from "../ui/dpr.js";
 import type { GridDescriptor, GridTransport } from "./device.js";
-import { recordCount, timed } from "../norns/call-cost.js";
+import { timed } from "../norns/call-cost.js";
 
 export interface GridViewOptions {
   readonly canvas: HTMLCanvasElement;
@@ -181,20 +181,8 @@ export class GridView implements GridTransport {
    */
   private sprites: Array<{ img: HTMLCanvasElement; m: number } | null> = [];
 
-  /**
-   * What was last drawn into each cell, as the one number `spriteFor`
-   * reduces a key to. -1 is "nothing yet". E9-163.
-   */
-  private drawn = new Int16Array(0);
-  /** Set when the canvas cannot be trusted and the whole of it is repainted. */
-  private everything = true;
-
   private clearSprites(): void {
     this.sprites = [];
-    // Every cell now holds a picture that is no longer what its number
-    // means, so the record of what was drawn is worthless too.
-    this.drawn.fill(-1);
-    this.everything = true;
   }
 
   /** The 32 appearances, built the first time each is actually asked for. */
@@ -342,101 +330,45 @@ export class GridView implements GridTransport {
     const heldNow = this.held.size === 0 ? null : new Set(this.held.values());
 
     /**
-     * E9-163 — AND ONLY THE KEYS THAT CHANGED.
+     * E9-168 — AND EVERY CELL, EVERY FRAME. The partial repaint is gone.
      *
-     * One draw per frame still redrew all 128 keys. A sequencer changes
-     * a handful between frames — a playhead moves one column, a pad
-     * lights — and the other hundred and twenty are blitted identically
-     * on top of themselves, sixty times a second.
+     * E9-163 repainted only the cells whose appearance had changed,
+     * clipped to the region it cleared. It was measured at 128 blits
+     * down to 49.7 for a moving playhead, verified against a
+     * from-scratch paint, and SHIPPED BROKEN: the verification walked a
+     * view to a surface one whole column at a time, so the bounding box
+     * covered most of the grid at every step and the small-region path
+     * was barely taken. It reported 0 differing pixels of 180,000 and
+     * was right about nothing.
      *
-     * WHAT A KEY LOOKS LIKE IS ALREADY ONE NUMBER, because `spriteFor`
-     * reduced it to thirty-two appearances. So the last one drawn into
-     * each cell is remembered, and a cell whose number has not moved is
-     * not touched.
+     * `spike/grid-steps.html` compares after EVERY step, with steps of
+     * one and two cells, which is where a bounding box and a clip have
+     * to be correct. Thirteen of its sixteen steps differed, by 20,254
+     * pixels for a single-cell change, at up to 253 of 255 — visible as
+     * squares drawn in the wrong place and reported from a packaged
+     * build before anybody had looked at the right picture.
      *
-     * THE CLIP IS LOAD-BEARING, not an optimisation. A lit key's glow
-     * spills past its own cell and over its neighbours, so repainting a
-     * cell means repainting everything that draws into the region —
-     * and a neighbour redrawn without clearing first would composite
-     * its half-transparent glow over the copy already there and come
-     * out brighter. Clipping to the cleared region makes that exact:
-     * everything inside it is rebuilt from every contributor, and
-     * nothing outside is touched at all.
+     * The fault is structural rather than a slip: cells OUTSIDE the
+     * repainted ring still spill their glow INTO the cleared region,
+     * and nothing redraws them. Widening the ring moves the boundary
+     * without removing it, because each wider ring has a new row of
+     * neighbours spilling across its own new edge.
      *
-     * The spill is under one cell wide — the widest margin is
-     * `ceil(pad * 0.72) + 2` against a cell of `pad / 0.88` — so the
-     * contributors to a region are the changed cells and the ring
-     * around them. The ring is taken at two cells for margin, and the
-     * clip makes a ring that is too generous cost a few blits rather
-     * than a wrong picture.
+     * IT IS NOT WORTH FIXING. The sprite cache took a draw from 0.459 ms
+     * to 0.069 and the per-frame coalescing took two draws a refresh to
+     * one — together about thirteen times less work, and both are safe
+     * BY CONSTRUCTION: clear the whole canvas, paint every cell, once a
+     * frame. The region added at most 2x on one shape of script and
+     * nothing on the others, on a path a profile put at six per cent of
+     * a busy window. That is not a trade worth a class of bug the
+     * person using it can see.
      */
-    const key = (i: number): number => {
-      const level = quantise(this.levels[i] ?? 0, this.descriptor.varibright);
-      const down = this.latched.has(i) || (heldNow !== null && heldNow.has(i));
-      return level * 2 + (down ? 1 : 0);
-    };
-
-    const n = w * h;
-    if (this.drawn.length !== n) {
-      this.drawn = new Int16Array(n).fill(-1);
-      this.everything = true;
-    }
-
-    let x0 = w;
-    let y0 = h;
-    let x1 = -1;
-    let y1 = -1;
-    if (this.everything) {
-      x0 = 0;
-      y0 = 0;
-      x1 = w - 1;
-      y1 = h - 1;
-    } else {
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const i = y * w + x;
-          if (this.drawn[i] === key(i)) continue;
-          if (x < x0) x0 = x;
-          if (x > x1) x1 = x;
-          if (y < y0) y0 = y;
-          if (y > y1) y1 = y;
-        }
-      }
-      if (x1 < 0) return; // nothing moved; the canvas is already right
-      // The ring that can draw into the region the changed cells occupy.
-      x0 = Math.max(0, x0 - 2);
-      y0 = Math.max(0, y0 - 2);
-      x1 = Math.min(w - 1, x1 + 2);
-      y1 = Math.min(h - 1, y1 + 2);
-    }
-
-    // The region that is about to be rebuilt, in canvas pixels, taken
-    // past the cells themselves by the widest glow any of them can cast.
-    const spill = Math.ceil(pad * 0.72) + 2;
-    const rx = this.originX + x0 * c - spill;
-    const ry = this.originY + y0 * c - spill;
-    const rw = (x1 - x0 + 1) * c + spill * 2;
-    const rh = (y1 - y0 + 1) * c + spill * 2;
-
-    const whole = this.everything;
-    this.everything = false;
-    if (whole) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-    } else {
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(rx, ry, rw, rh);
-      ctx.clip();
-      ctx.clearRect(rx, ry, rw, rh);
-    }
-
-    for (let y = y0; y <= y1; y++) {
-      for (let x = x0; x <= x1; x++) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
         const i = y * w + x;
-        const k = key(i);
-        this.drawn[i] = k;
-        const level = k >> 1;
-        const down = (k & 1) === 1;
+        const level = quantise(this.levels[i] ?? 0, this.descriptor.varibright);
+        const down = this.latched.has(i) || (heldNow !== null && heldNow.has(i));
         const px = this.originX + x * c;
         const py = this.originY + y * c;
         // E9-162 — THERE ARE ONLY 32 KEYS. See `spriteFor`.
@@ -448,22 +380,6 @@ export class GridView implements GridTransport {
         this.key(ctx, px, py, pad, r, alphaFor(level, this.intensity), down);
       }
     }
-    if (!whole) ctx.restore();
-    /**
-     * E9-166 — HOW MANY CELLS, which decides whether E9-163 helped.
-     *
-     * The dirty region is a BOUNDING BOX, so it pays when the changes
-     * are clustered — a playhead moving down a column — and nothing at
-     * all when they are scattered, because the box then spans the
-     * surface. Measured on the bench: 128 cells to 49.7 for a playhead,
-     * 128 to 123.6 for a scatter.
-     *
-     * Which of those a real script looks like is not something a bench
-     * can answer. This counts it on the device, so a log from the Pixel
-     * says whether the optimisation is doing anything for `kolor`
-     * instead of leaving it to be argued about.
-     */
-    recordCount("draw:grid cells", (x1 - x0 + 1) * (y1 - y0 + 1));
   }
 
   /**

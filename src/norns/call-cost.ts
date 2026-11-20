@@ -47,13 +47,6 @@ interface Totals {
   ms: number;
   worst: number;
   reportedAt: number;
-  /**
-   * What `ms` is counting. E9-166 — because one entry in this table is
-   * not milliseconds, and a line that says `draw:grid cells 256 ms` is
-   * an instrument reporting the wrong unit, which is worse than not
-   * reporting at all.
-   */
-  unit: "ms" | "cells";
 }
 
 const totals = new Map<string, Totals>();
@@ -125,7 +118,7 @@ export function timed<T>(path: string, run: () => T): T {
 export function record(path: string, ms: number): void {
   let t = totals.get(path);
   if (t === undefined) {
-    t = { calls: 0, ms: 0, worst: 0, reportedAt: -Infinity, unit: "ms" };
+    t = { calls: 0, ms: 0, worst: 0, reportedAt: -Infinity };
     totals.set(path, t);
   }
   t.calls++;
@@ -139,21 +132,15 @@ export function record(path: string, ms: number): void {
 }
 
 /** Everything seen since the last reset, dearest first. */
-export function callCosts(): ReadonlyArray<{
-  path: string;
-  calls: number;
-  ms: number;
-  worstMs: number;
-  unit: "ms" | "cells";
-}> {
+export function callCosts(): ReadonlyArray<{ path: string; calls: number; ms: number; worstMs: number }> {
   return [...totals]
-    .map(([path, t]) => ({ path, calls: t.calls, ms: t.ms, worstMs: t.worst, unit: t.unit }))
+    .map(([path, t]) => ({ path, calls: t.calls, ms: t.ms, worstMs: t.worst }))
     .sort((a, b) => b.ms - a.ms);
 }
 
-/** `162 ms` or `162 cells`, so a reader is never told the wrong unit. */
-export function sayCost(c: { ms: number; unit: "ms" | "cells" }): string {
-  return `${c.ms.toFixed(0)} ${c.unit}`;
+/** `162 ms`. Every entry in this table is a duration again. */
+export function sayCost(c: { ms: number }): string {
+  return `${c.ms.toFixed(0)} ms`;
 }
 
 /** Forget everything. A new script is a new measurement. */
@@ -177,29 +164,4 @@ export function stopWatchingCallCost(): void {
   quietMs = 5000;
   clock = () => performance.now();
   totals.clear();
-}
-
-/**
- * Account for a COUNT rather than a duration. E9-166.
- *
- * `callCosts` reports milliseconds, and the grid's dirty region is
- * measured in cells — how many were repainted, which is what decides
- * whether the bounding box is buying anything on a real script. Kept in
- * the same table on purpose: it is read in the same line of the same
- * log, and a second table with its own reset would be a second thing to
- * remember to clear.
- *
- * `worst` is the worst single batch and `ms` is the running total, so a
- * reader divides by `calls` to get the average. The unit is NOT
- * milliseconds for these entries, which is why the path has to say so.
- */
-export function recordCount(path: string, n: number): void {
-  let t = totals.get(path);
-  if (t === undefined) {
-    t = { calls: 0, ms: 0, worst: 0, reportedAt: -Infinity, unit: "cells" };
-    totals.set(path, t);
-  }
-  t.calls++;
-  t.ms += n;
-  if (n > t.worst) t.worst = n;
 }

@@ -12,7 +12,6 @@ import {
   accountedMs,
   callCosts,
   record,
-  recordCount,
   sayCost,
   resetCallCosts,
   stopWatchingCallCost,
@@ -61,7 +60,7 @@ describe("timing a call into Lua", () => {
     const h = harness({ thresholdMs: 120 });
     timed("metro", () => h.tick(3));
     expect(h.seen).toEqual([]);
-    expect(callCosts()).toEqual([{ path: "metro", calls: 1, ms: 3, worstMs: 3, unit: "ms" }]);
+    expect(callCosts()).toEqual([{ path: "metro", calls: 1, ms: 3, worstMs: 3 }]);
   });
 });
 
@@ -103,7 +102,7 @@ describe("the running account", () => {
     record("redraw", 500);
     for (let i = 0; i < 100; i++) record("metro", 30);
     expect(callCosts().map((c) => c.path)).toEqual(["metro", "redraw"]);
-    expect(callCosts()[0]).toEqual({ path: "metro", calls: 100, ms: 3000, worstMs: 30, unit: "ms" });
+    expect(callCosts()[0]).toEqual({ path: "metro", calls: 100, ms: 3000, worstMs: 30 });
   });
 
   it("forgets on request, because a new script is a new measurement", () => {
@@ -118,7 +117,7 @@ describe("the running account", () => {
     // No `watchCallCost`: the totals still accrue, so turning the
     // reporting on later does not start from zero.
     record("metro", 7);
-    expect(callCosts()).toEqual([{ path: "metro", calls: 1, ms: 7, worstMs: 7, unit: "ms" }]);
+    expect(callCosts()).toEqual([{ path: "metro", calls: 1, ms: 7, worstMs: 7 }]);
   });
 });
 
@@ -176,46 +175,5 @@ describe("time that nests", () => {
     resetCallCosts();
     timed("y", () => h.tick(3));
     expect(accountedMs()).toBe(3);
-  });
-});
-
-// E9-166 — counts, not milliseconds.
-//
-// The grid's dirty region is measured in CELLS repainted, which is what
-// decides whether the bounding box buys anything on a real script. It
-// goes in the same table as the timings on purpose: it is read in the
-// same line of the same log, and a second table with its own reset
-// would be a second thing to remember to clear.
-describe("accounting for a count", () => {
-  it("adds up, and keeps the worst batch", () => {
-    harness({ thresholdMs: 1e9 });
-    recordCount("draw:grid cells", 25);
-    recordCount("draw:grid cells", 128);
-    recordCount("draw:grid cells", 9);
-    expect(callCosts()[0]).toEqual({
-      path: "draw:grid cells",
-      calls: 3,
-      ms: 162,
-      worstMs: 128,
-      unit: "cells",
-    });
-    // And it must SAY cells, because "162 ms" of cells is an instrument
-    // reporting the wrong unit, which is worse than reporting nothing.
-    expect(sayCost(callCosts()[0]!)).toBe("162 cells");
-  });
-
-  // A count is not a duration, so it must not be able to trip a
-  // threshold that is expressed in milliseconds.
-  it("never reports itself as a slow call", () => {
-    const h = harness({ thresholdMs: 10, quietMs: 0 });
-    recordCount("draw:grid cells", 5000);
-    expect(h.seen).toEqual([]);
-  });
-
-  it("is forgotten with everything else", () => {
-    harness({ thresholdMs: 1e9 });
-    recordCount("draw:grid cells", 40);
-    resetCallCosts();
-    expect(callCosts()).toEqual([]);
   });
 });

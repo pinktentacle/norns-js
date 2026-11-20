@@ -357,18 +357,20 @@ describe("what a refresh costs", () => {
   });
 });
 
-// E9-163 — and only the keys that changed.
+// E9-168 — every cell, every draw.
 //
-// One draw per frame still blitted all 128 keys. A sequencer moves a
-// playhead and lights a pad; the other 120 were drawn identically on top
-// of themselves. What a key looks like is already one number — the
-// thirty-two appearances `spriteFor` reduced it to — so a cell whose
-// number has not moved can be left alone.
-describe("redrawing only what moved", () => {
+// E9-163 repainted only the cells whose appearance had changed and was
+// verified against a from-scratch paint that never exercised a small
+// region: thirteen of sixteen single-cell steps differed, by 20,254
+// pixels at up to 253 of 255. `spike/grid-steps.html` is the harness
+// that found it and reads 0 on all sixteen now. What is left is safe by
+// construction — clear the whole canvas, paint every cell, once a frame
+// — and that is what these assert.
+describe("what one draw covers", () => {
   function counting() {
     let blits = 0;
     let clears = 0;
-    let clipped = 0;
+    let made = 0;
     const gradient = { addColorStop: () => {} };
     const ctx = (): unknown => ({
       fillStyle: "" as unknown,
@@ -386,7 +388,7 @@ describe("redrawing only what moved", () => {
       arc: () => {},
       arcTo: () => {},
       rect: () => {},
-      clip: () => void clipped++,
+      clip: () => {},
       fill: () => {},
       stroke: () => {},
       clearRect: () => void clears++,
@@ -398,7 +400,10 @@ describe("redrawing only what moved", () => {
     });
     const canvas = new FakeCanvas() as unknown as { ownerDocument: unknown } & FakeCanvas;
     canvas.ownerDocument = {
-      createElement: () => ({ width: 0, height: 0, getContext: () => ctx() }),
+      createElement: () => {
+        made++;
+        return { width: 0, height: 0, getContext: () => ctx() };
+      },
     };
     canvas.getContext = (k: string) => (k === "2d" ? ctx() : null);
     const v = new GridView({
@@ -411,15 +416,11 @@ describe("redrawing only what moved", () => {
     });
     return {
       view: v,
+      canvas,
       blits: () => blits,
       clears: () => clears,
-      clipped: () => clipped,
-      reset: () => void ((blits = 0), (clears = 0), (clipped = 0)),
-      press: (id: number, x: number, y: number) =>
-        canvas.dispatchEvent(pointer("pointerdown", id, x, y)),
-      lift: (id: number, x: number, y: number) =>
-        canvas.dispatchEvent(pointer("pointerup", id, x, y)),
-      /** Present a whole surface, then make sure it has been drawn. */
+      sprites: () => made,
+      reset: () => void ((blits = 0), (clears = 0)),
       present(levels: (i: number) => number) {
         for (const q of [0, 8]) {
           const u = new Uint8Array(64);
@@ -435,71 +436,42 @@ describe("redrawing only what moved", () => {
     };
   }
 
-  it("paints every key the first time, because nothing is known yet", () => {
-    // The constructor lays out and paints, so the surface is already
-    // complete before a script presents anything.
+  it("clears the canvas once and paints all 128 keys", () => {
     const c = counting();
-    expect(c.blits(), "128 cells, none of them drawn before").toBe(128);
     c.reset();
-    c.present(() => 0);
-    expect(c.blits(), "and presenting the same dark surface changes nothing").toBe(0);
+    c.present(() => 4);
+    expect(c.clears(), "one clear, of the whole surface").toBe(1);
+    expect(c.blits()).toBe(128);
   });
 
-  it("blits nothing at all when a refresh changes nothing", () => {
+  // The cheap test that passing it proves nothing: a surface that has
+  // not changed is still repainted, because there is no record of what
+  // was there and deliberately so.
+  it("paints them again for a refresh that changed nothing", () => {
     const c = counting();
     c.present(() => 4);
     c.reset();
-    c.present(() => 4); // the same surface again, as `g:refresh()` sends it
-    expect(c.blits()).toBe(0);
-    expect(c.clears(), "and the canvas is not touched either").toBe(0);
+    c.present(() => 4);
+    expect(c.blits()).toBe(128);
   });
 
-  it("paints one changed key and its neighbours, not the whole surface", () => {
+  it("still only builds one sprite per appearance", () => {
+    const c = counting();
+    const before = c.sprites();
+    c.present((i) => (i < 64 ? 5 : 12));
+    expect(c.sprites() - before, "two levels, two sprites").toBe(2);
+    c.present((i) => (i < 64 ? 5 : 12));
+    expect(c.sprites() - before, "and the cache is a cache").toBe(2);
+  });
+
+  it("shows a held key without being told anything changed", () => {
     const c = counting();
     c.present(() => 0);
     c.reset();
-    // One cell, in the middle, where its ring is not clipped by an edge.
-    c.present((i) => (i === 5 * 16 + 8 ? 15 : 0));
-    // A 5x5 ring around one cell: the changed key, plus the two cells
-    // around it that a glow can reach.
-    expect(c.blits()).toBe(25);
-    expect(c.blits()).toBeLessThan(128);
-  });
-
-  it("clips to the region it clears, or a glow would be composited twice", () => {
-    const c = counting();
-    c.present(() => 0);
-    c.reset();
-    c.present((i) => (i === 5 * 16 + 8 ? 15 : 0));
-    expect(c.clipped(), "a partial repaint must be clipped").toBe(1);
-    expect(c.clears(), "one region, cleared once").toBe(1);
-  });
-
-  it("paints the whole surface when the intensity changes all of them", () => {
-    const c = counting();
-    c.present(() => 7);
-    c.reset();
-    c.view.ledIntensity(5);
+    c.canvas.dispatchEvent(pointer("pointerdown", 1, 10, 10));
     c.view.flush();
-    expect(c.blits(), "every key is a different key now").toBe(128);
-  });
-
-  // A held key is drawn differently at the SAME level, so the record of
-  // what was drawn has to carry the press as well as the brightness.
-  // Carrying only the level would leave the ring on screen after the
-  // finger lifted, which is the bug this test exists for.
-  it("notices a key that is held, not only one that is lit", () => {
-    const c = counting();
-    c.present(() => 0);
-    c.reset();
-    c.press(1, 10, 10);
-    c.view.flush();
-    const afterDown = c.blits();
-    expect(afterDown, "the pressed cell and its ring").toBeGreaterThan(0);
-    expect(afterDown, "and not the whole surface").toBeLessThan(128);
-    c.reset();
-    c.lift(1, 10, 10);
-    c.view.flush();
-    expect(c.blits(), "the ring has to be taken off again").toBeGreaterThan(0);
+    expect(c.blits(), "a press repaints the surface").toBe(128);
+    // 17 appearances: level 0 unheld, and level 0 held.
+    expect(c.sprites()).toBeGreaterThan(1);
   });
 });
