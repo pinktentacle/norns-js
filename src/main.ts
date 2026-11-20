@@ -14,6 +14,7 @@ import { loadNornsLuaWeb, loadConfigWeb } from "./lua/host-web.js";
 import menuHereLua from "./lua/norns-js/menu-here.lua?raw";
 import screenDirectLua from "./lua/norns-js/screen-direct.lua?raw";
 import benchLua from "./lua/norns-js/bench.lua?raw";
+import cpuLua from "./lua/norns-js/cpu.lua?raw";
 import { createScreen, type Screen } from "./screen/screen.js";
 import { loadScreenModuleWeb } from "./screen/screen-web.js";
 import { createScreenCanvas } from "./ui/canvas.js";
@@ -405,12 +406,33 @@ async function main(): Promise<void> {
    */
   const BENCH_DIR = "/home/we/dust/code/_bench";
   const BENCH_LUA = `${BENCH_DIR}/_bench.lua`;
+  /**
+   * E9-191 — AND THE ONE THAT ASKS WHY THE PHONE IS SLOW.
+   *
+   * `_bench` reported a Lua callback at 18.8 us on this desktop and 462 us
+   * on a Pixel 9 Pro — twenty-four times, for arithmetic on a handful of
+   * locals, where drawing is three. Geekbench 6 single-core puts the two
+   * processors about 1.5x apart and this code is single-threaded, so
+   * sixteen of those twenty-four are something else.
+   *
+   * `_cpu` sweeps the duty cycle with the work unit held identical. Flat
+   * cost per iteration means the processor; falling means the scheduler
+   * was never giving the page a fast core to begin with.
+   */
+  const CPU_DIR = "/home/we/dust/code/_cpu";
+  const CPU_LUA = `${CPU_DIR}/_cpu.lua`;
   if (profile !== null) {
-    if (vfs.read(BENCH_LUA) === null) log("bench: _bench is in SELECT — a script that measures this page");
+    if (vfs.read(BENCH_LUA) === null) {
+      log("bench: _bench and _cpu are in SELECT — two scripts that measure this page");
+    }
     vfs.write(BENCH_LUA, new TextEncoder().encode(benchLua));
-  } else if (vfs.read(BENCH_LUA) !== null) {
-    for (const p of vfs.walk(BENCH_DIR)) vfs.remove(p);
-    vfs.remove(BENCH_DIR);
+    vfs.write(CPU_LUA, new TextEncoder().encode(cpuLua));
+  } else {
+    for (const dir of [BENCH_DIR, CPU_DIR]) {
+      if (vfs.walk(dir).length === 0) continue;
+      for (const p of vfs.walk(dir)) vfs.remove(p);
+      vfs.remove(dir);
+    }
   }
 
   const mirror = mirrorToOpfs(vfs, { log: (l) => log(l) });

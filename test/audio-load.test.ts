@@ -125,9 +125,15 @@ describe("what a phase says it cost the audio thread", () => {
     expect(said).toContain("0.62 ms mean");
     expect(said).toContain("worst block not measurable");
     expect(said).not.toContain("0.00 ms worst");
-    // And a dropout count a coarse clock can only under-report is named
-    // as the lower bound it is.
-    expect(said).toContain("at least 1 over budget");
+    // And the dropout count is named as the signal it is. It was called
+    // a LOWER BOUND here and that was wrong: a measured delta is
+    // floor(t1) - floor(t0), so a true 2.1 ms block measures 3 about a
+    // tenth of the time — under the 2.67 ms budget and counted as over —
+    // while a true 2.8 ms block measures 2 about a fifth of it. The
+    // count invents some and misses others.
+    expect(said).toContain("1 over budget by a 1 ms clock");
+    expect(said).toContain("misses some and invents others");
+    expect(said).not.toContain("at least");
   });
 
   it("one coarse report taints the whole window's worst", () => {

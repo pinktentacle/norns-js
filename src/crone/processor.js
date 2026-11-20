@@ -62,9 +62,18 @@ class CroneProcessor extends AudioWorkletProcessor {
     // matters most — a single 4 ms block is a click you can hear and a
     // 1 ms clock cannot resolve it. So `maxMs` is NOT sent when the clock
     // is coarse, rather than sent as a figure that looks like the fine
-    // one. `over` survives as a LOWER BOUND: a block measured at 3 ms
-    // against a 2.67 ms budget really was over, a block measured at 2 ms
-    // might have been, and only the certain ones are counted.
+    // one.
+    //
+    // `over` SURVIVES AS A SIGNAL AND NOT AS A BOUND, and the first
+    // version of this comment claimed otherwise. The arithmetic: a
+    // measured delta is floor(t1) - floor(t0), which for a true
+    // duration d is either floor(d) or floor(d)+1, the second with
+    // probability frac(d). So a block measured at 3 ms may truly have
+    // taken 2.1 — under the 2.67 ms budget — and a block that truly
+    // took 2.8 may measure 2. The count misses some and invents
+    // others; what it cannot do is be large without a real tail
+    // reaching the budget. It is read as "there are long blocks here",
+    // never as "there were exactly this many dropouts".
     const fine = typeof performance === "object" && typeof performance.now === "function";
     this.coarse = !fine;
     this.clock = fine ? () => performance.now() : () => Date.now();

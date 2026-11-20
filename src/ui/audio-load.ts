@@ -131,7 +131,14 @@ export function describeAudioLoad(w: AudioLoadWindow): string {
     // A coarse window has no worst block to report and says so, rather
     // than printing a zero that reads like a measurement.
     const worst = w.coarse ? "worst block not measurable" : `${w.maxMs.toFixed(2)} ms worst`;
-    const over = w.coarse ? `at least ${w.over} over budget` : `${w.over} over budget`;
+    // NOT "at least", which is what this said and which is false. A 1 ms
+    // clock turns a true 2.1 ms block into a measured 3 about a tenth of
+    // the time, and a true 2.8 into a measured 2 about a fifth of it, so
+    // the count both invents and misses. It is a signal that there are
+    // long blocks, never a count of dropouts.
+    const over = w.coarse
+      ? `${w.over} over budget by a 1 ms clock, which misses some and invents others`
+      : `${w.over} over budget`;
     parts.push(
       `crone ${mean.toFixed(2)} ms mean, ${worst} ` +
         `of ${w.budgetMs.toFixed(2)} ms a block${share}, ` +

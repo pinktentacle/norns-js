@@ -26,7 +26,41 @@ CRONE="$ROOT/third_party/norns/crone"
 SOFTCUT="$ROOT/third_party/softcut-lib/softcut-lib"
 THIRD="$ROOT/third_party/norns/third-party"
 SHIM="$ROOT/src/crone/shim"
-OUT="$ROOT/src/crone/build"
+# E9-189 — OVERRIDABLE, so a build can be compared against another one.
+#
+# The Pixel reads crone at 41% of its deadline with six softcut voices and
+# 18% with none, against 1% on a desktop, and the only honest way to choose
+# a compiler flag is to build it both ways and measure. `CRONE_OUT` puts a
+# build somewhere else and `CRONE_FLAGS` adds to the command line; with
+# neither set this is exactly what it was.
+#
+#   CRONE_OUT=/tmp/crone-simd CRONE_FLAGS=-msimd128 src/crone/build.sh
+OUT="${CRONE_OUT:-$ROOT/src/crone/build}"
+EXTRA="${CRONE_FLAGS:-}"
+
+# E9-189 — WASM SIMD, MEASURED AND NOT ASSUMED.
+#
+# Measured on this desktop with spike/crone-bench.mjs, which runs the same
+# wasm under node where a block is resolvable to nanoseconds:
+#
+#     mixer alone, reverb on   0.0086 ms -> 0.0078 ms a block   -10%
+#     each softcut voice       0.0042 ms -> 0.0043 ms            none
+#
+# The mixer sums buses and vectorises. softcut does not and was never going
+# to: its inner loop is two recursive state-variable filters and a read head
+# whose buffer index depends on the sample before it. Nothing there is four
+# independent lanes.
+#
+# spike/crone-same.mjs renders four hundred blocks through both builds in
+# each of softcut's four play/record states and compares every sample: they
+# are BIT-IDENTICAL. Without -ffast-math, which is deliberately absent,
+# SIMD float add and multiply are the same IEEE operations in a different
+# order of issue, not a different arithmetic.
+#
+# WHAT IT COSTS: a browser without wasm SIMD cannot load crone at all.
+# Chrome 91, Firefox 89 and Safari 16.4, all 2021 or earlier, and this page
+# already requires cross-origin isolation and SharedArrayBuffer.
+SIMD="-msimd128"
 
 # --- tools: PATH first, else the pinned emsdk ------------------------------
 EMCC=""
@@ -143,7 +177,7 @@ mkdir -p "$OUT"
 # allocates a new ArrayBuffer and DETACHES every view (ADR-04e). softcut's
 # buffer alone is 2 x 2^24 frames, so the heap is sized up front.
 echo "--- compiling crone ---"
-"$EMCC" -O3 -std=c++17 \
+"$EMCC" -O3 -std=c++17 $SIMD $EXTRA \
   $SRC $INC \
   -DNDEBUG \
   -sALLOW_MEMORY_GROWTH=0 \
@@ -178,8 +212,42 @@ ls -la "$OUT"/crone.wasm | awk '{printf "  crone.wasm %8.0f KB\n", $5/1024}'
 # `typeof document !== "undefined"` guards, and with wasmBinary supplied none
 # of it runs.
 echo "--- compiling crone (classic, for the worklet) ---"
-"$EMCC" -O3 -std=c++17   $SRC $INC   -DNDEBUG   -sALLOW_MEMORY_GROWTH=0   -sINITIAL_MEMORY=320MB   -sMODULARIZE=1   -sEXPORT_ES6=0   -sEXPORT_NAME=createCroneModule   -sENVIRONMENT=web   -sEXPORTED_RUNTIME_METHODS=HEAPF32,HEAPU8,ccall,cwrap,stringToUTF8,lengthBytesUTF8   -sEXPORTED_FUNCTIONS=_malloc,_free   -o "$OUT/crone-classic.js" || { echo "BUILD FAILED (classic)"; exit 1; }
+"$EMCC" -O3 -std=c++17 $SIMD $EXTRA   $SRC $INC   -DNDEBUG   -sALLOW_MEMORY_GROWTH=0   -sINITIAL_MEMORY=320MB   -sMODULARIZE=1   -sEXPORT_ES6=0   -sEXPORT_NAME=createCroneModule   -sENVIRONMENT=web   -sEXPORTED_RUNTIME_METHODS=HEAPF32,HEAPU8,ccall,cwrap,stringToUTF8,lengthBytesUTF8   -sEXPORTED_FUNCTIONS=_malloc,_free   -o "$OUT/crone-classic.js" || { echo "BUILD FAILED (classic)"; exit 1; }
 
 ls -la "$OUT"/crone-classic.js | awk '{printf "  crone-classic.js %5.0f KB\n", $5/1024}'
+
+
+
+# --- what this build was made from ---------------------------------------
+#
+# E9-189 — A CARRIED crone IS NOT NECESSARILY THIS crone.
+#
+# `release-kit/2-build.ps1` carries `src/crone/build` from machine to
+# machine rather than rebuilding it, and it only fills in what is MISSING:
+# a stale one that is already there stays. That was harmless while this
+# directory only ever changed with the upstream pins. It is not harmless
+# now that a compiler flag and a patch to softcut change what comes out of
+# it, and the symptom would be a published build measuring the code it was
+# supposed to replace.
+#
+# So the build writes down what it was made from, over the inputs that
+# exist in the PUBLISHED tree — third_party/ does not travel, but the pins
+# that name it do. 2-build recomputes this and refuses a mismatch.
+STAMP_FILE="$OUT/BUILT-WITH.txt"
+stamp_inputs() {
+  cat "$ROOT/src/crone/build.sh" "$ROOT/src/crone/worklet.cpp" "$ROOT/PINS.md" 2>/dev/null
+  cat "$ROOT"/src/crone/shim/*.cpp 2>/dev/null
+  cat "$ROOT/patches/softcut-lib.patch" 2>/dev/null
+}
+# CARRIAGE RETURNS ARE STRIPPED, on both sides. These are text files that
+# git may check out with CRLF on one machine and LF on another, and a stamp
+# that disagreed about line endings would refuse a crone that is correct.
+if command -v sha256sum > /dev/null 2>&1; then
+  STAMP_HASH="$(stamp_inputs | tr -d '\r' | sha256sum | cut -d' ' -f1)"
+else
+  STAMP_HASH="$(stamp_inputs | tr -d '\r' | shasum -a 256 | cut -d' ' -f1)"
+fi
+printf '%s\n' "$STAMP_HASH" > "$STAMP_FILE"
+echo "  BUILT-WITH   ${STAMP_HASH:0:16}"
 
 echo "BUILD OK"

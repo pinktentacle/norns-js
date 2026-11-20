@@ -24,7 +24,7 @@ ways that read as bugs in this project rather than as a version skew.
 | `mi-UGens` | https://github.com/v7b1/mi-UGens.git | `10f6824f68ad63475f67dfe3fe5016e2d2634f84` (`v0.0.9`) **+ patches** |
 | `norns` | https://github.com/monome/norns.git | `227aa0442181e3eab3fc189ee6b5342648ce7300` |
 | `sc3-plugins` | https://github.com/supercollider/sc3-plugins.git | `774f3f05ef40f516bca2446caef716bac2903c3e` **+ patches** |
-| `softcut-lib` | https://github.com/monome/softcut-lib.git | `14241f2a94a7cd2e6c91b9bdc4e500d68abef907` |
+| `softcut-lib` | https://github.com/monome/softcut-lib.git | `14241f2a94a7cd2e6c91b9bdc4e500d68abef907` **+ patches** |
 | `supercollider` | https://github.com/supercollider/supercollider.git | `0c5a96d701be992627b40367f9540b67624120f0` **+ patches** |
 
 ## Releases, unpacked rather than cloned
@@ -167,6 +167,17 @@ Base `774f3f05ef40`, 5 file(s) changed:
 
 ```
 git -C third_party/sc3-plugins apply ../../patches/sc3-plugins.patch
+```
+
+### `softcut-lib`
+
+Base `14241f2a94a7`, 2 file(s) changed:
+
+- `softcut-lib/src/ReadWriteHead.cpp`
+- `softcut-lib/src/Voice.cpp`
+
+```
+git -C third_party/softcut-lib apply ../../patches/softcut-lib.patch
 ```
 
 ### `supercollider`

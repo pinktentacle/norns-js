@@ -65,8 +65,11 @@ export interface CroneLoad {
   /**
    * Blocks that took longer than one quantum. Each one is a dropout.
    *
-   * A LOWER BOUND when `coarse` is set: only the blocks the 1 ms clock
-   * could prove were over are counted.
+   * NEITHER A FLOOR NOR A CEILING when `coarse` is set. A 1 ms clock
+   * reports a true 2.1 ms block as 3 about a tenth of the time and a
+   * true 2.8 ms block as 2 about a fifth of it, so the count invents
+   * some and misses others. Read it as "there are long blocks here",
+   * never as a count of dropouts.
    */
   readonly over: number;
   /** One quantum of real time: the deadline every block has. */

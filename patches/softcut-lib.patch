@@ -1,0 +1,85 @@
+diff --git a/softcut-lib/src/ReadWriteHead.cpp b/softcut-lib/src/ReadWriteHead.cpp
+index fe6900f3969a189c49c8bbb3aac02a609db59349..d5d2ab46b42591f45d545fd244d11559bde322b7 100644
+--- a/softcut-lib/src/ReadWriteHead.cpp
++++ b/softcut-lib/src/ReadWriteHead.cpp
+@@ -212,8 +212,24 @@ void ReadWriteHead::setSampleRate(float sr_) {
+     head[1].setSampleRate(sr);
+ }
+ 
++// norns-js: the same equal-power law, with the two ends taken out of the
++// transcendental. `fade_` is a linear ramp that SubHead clamps at 0 and 1,
++// so outside an actual crossfade both arguments are exactly one of those —
++// and a crossfade is `fade_time` long, about 480 samples against a loop of
++// tens of thousands.
++//
++// EXACT, not approximate: sinf(0.f) is 0.f, and sinf of the float nearest
++// pi/2 is 1.f, so the two short-circuits return what the call returned.
++// Anything strictly between still goes through sinf. Checked by rendering
++// four hundred blocks through both builds and comparing every sample.
++static inline float softcutFadeSin(float a) {
++        if (a <= 0.f) return 0.f;
++        if (a >= 1.f) return 1.f;
++        return sinf(a * (float)M_PI_2);
++}
++
+ sample_t ReadWriteHead::mixFade(sample_t x, sample_t y, float a, float b) {
+-        return x * sinf(a * (float)M_PI_2) + y * sinf(b * (float) M_PI_2);
++        return x * softcutFadeSin(a) + y * softcutFadeSin(b);
+ }
+ 
+ void ReadWriteHead::setRec(float x) {
+diff --git a/softcut-lib/src/Voice.cpp b/softcut-lib/src/Voice.cpp
+index 1942f71637acf51954c80114ac63b86ed019c67f..718d44db986adf47fdb1214d09d850696044f247 100644
+--- a/softcut-lib/src/Voice.cpp
++++ b/softcut-lib/src/Voice.cpp
+@@ -57,30 +57,12 @@ void Voice::reset() {
+ }
+ 
+ void Voice:: processBlockMono(const float *in, float *out, int numFrames) {
+-    std::function<void(sample_t, sample_t*)> sampleFunc;
+-    if(playFlag) {
+-        if(recFlag) {
+-            sampleFunc = [this](float in, float* out) {
+-                this->sch.processSample(in, out);
+-            };
+-        } else {
+-            sampleFunc = [this](float in, float* out) {
+-                this->sch.processSampleNoWrite(in, out);
+-            };
+-        }
+-    } else {
+-        if(recFlag) {
+-            sampleFunc = [this](float in, float* out) {
+-                this->sch.processSampleNoRead(in, out);
+-            };
+-        } else {
+-            sampleFunc = [](float in, float* out) {
+-                (void)in;
+-                // makes sure the output bus is zeroed
+-                *out = 0.f;
+-            };
+-        }
+-    }
++    // norns-js: the same four cases, chosen once per block as before, but
++    // as a value rather than a std::function. The indirect call stopped
++    // ReadWriteHead::processSample* from being inlined into the loop below
++    // and it was 42% of crone's profile. Nothing about WHICH function runs
++    // for a given (playFlag, recFlag) changes.
++    const int which = (playFlag ? 2 : 0) | (recFlag ? 1 : 0);
+ 
+     float x, y;
+     for(int i=0; i<numFrames; ++i) {
+@@ -88,7 +70,12 @@ void Voice:: processBlockMono(const float *in, float *out, int numFrames) {
+         sch.setRate(rateRamp.update());
+         sch.setPre(preRamp.update());
+         sch.setRec(recRamp.update());
+-        sampleFunc(x, &y);
++        switch (which) {
++            case 3: sch.processSample(x, &y); break;
++            case 2: sch.processSampleNoWrite(x, &y); break;
++            case 1: sch.processSampleNoRead(x, &y); break;
++            default: y = 0.f; break;   // the output bus is still zeroed
++        }
+ 	    out[i] = svfPost.getNextSample(y) + y*svfPostDryLevel;
+         updateQuantPhase();
+     }
