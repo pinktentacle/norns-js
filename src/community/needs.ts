@@ -154,10 +154,27 @@ export function needsOf(
    * did before — this cannot make the function report LESS than it knows.
    */
   have: readonly string[] = [],
+  /**
+   * E9-184 — PROJECTS TO ANSWER AS IF THEY WERE NOT THERE.
+   *
+   * This function answers "what is still MISSING", which is the question
+   * an install has, and it skips anything already in `code/`. Removing
+   * several projects at once asks a different question in the same words:
+   * what would be missing AFTERWARDS. Rather than a second scanner that
+   * would recognise a dependency this one does not — and then disagree
+   * with it about what counts as needing something — the removal passes
+   * the names it is about to delete and gets the same answer it would
+   * get by deleting them and asking again.
+   *
+   * Lower-cased by the caller or not; it is compared lower-cased here,
+   * like everything else that names a project.
+   */
+  absent: readonly string[] = [],
 ): Need[] {
   const code = `${root}/code`;
   const mine = `${code}/${name}`;
   if (!vfs.isDir(mine)) return [];
+  const gone = new Set(absent.map((n) => n.toLowerCase()));
 
   const byName = new Map<string, CatalogEntry>();
   for (const e of entries) byName.set(e.name.toLowerCase(), e);
@@ -170,6 +187,7 @@ export function needsOf(
   for (const p of vfs.walk(code)) {
     const rel = p.slice(code.length + 1);
     const head = rel.split("/")[0];
+    if (head !== undefined && gone.has(head.toLowerCase())) continue;
     if (head !== undefined) present.add(head.toLowerCase());
     if (!p.endsWith(".sc")) continue;
     const src = vfs.read(p);

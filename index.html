@@ -895,11 +895,54 @@
   .mdn-proj-tabs, .mdn-proj-bar, .mdn-proj-jobs, .mdn-proj-note, .mdn-proj-ask {
     flex: 0 0 auto;
   }
+  /*
+    E9-184 — WHICH ROW IS THE POINTER ON.
+
+    Reported on a desk rather than a phone: moving down a catalogue of
+    355 rows, each a line of text with its buttons at the far right of a
+    wide panel, there is nothing joining the name you are reading to the
+    `install` you are about to press. The eye has to travel the width of
+    the panel across a gap with no mark in it, and `remove` sits in that
+    position too.
+
+    The band is wider than the text — `margin: 0 -8px` against the
+    scroller's own 12px gutter — so it reads as a row rather than as a
+    highlighted word, and the text does not move by a pixel.
+
+    `@media (hover: hover)` because a touch screen has no pointer to
+    follow: there, `:hover` is applied on tap and STAYS on the last thing
+    tapped, which would leave a row looking chosen when nothing is.
+  */
   .mdn-proj-row {
     display: flex; align-items: center; gap: 8px;
-    padding: 6px 0; border-bottom: 1px solid #25282c;
+    padding: 6px 8px; margin: 0 -8px; border-bottom: 1px solid #25282c;
+    border-radius: 3px;
   }
+  @media (hover: hover) {
+    .mdn-proj-row:hover { background: #22262b; }
+  }
+  /*
+    A ticked row, which has to be legible WITHOUT the pointer on it and
+    must not be mistaken for the hover band. A left edge rather than a
+    stronger fill: it survives the hover being drawn over it, and it
+    lines the ticked rows up as a column down the side of the list.
+  */
+  .mdn-proj-row[data-picked="1"] {
+    background: #26303a;
+    box-shadow: inset 2px 0 0 0 #81A2BE;
+  }
+  @media (hover: hover) {
+    .mdn-proj-row[data-picked="1"]:hover { background: #2b3642; }
+  }
+  .mdn-proj-pick {
+    flex: 0 0 auto; margin: 0; width: 13px; height: 13px;
+    accent-color: #81A2BE; cursor: pointer;
+  }
+  .mdn-proj-pick:disabled { opacity: .4; cursor: default; }
   .mdn-proj-left { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; }
+  /* Only where there is a tickbox to go with it: the available tab's rows
+     are not selectable and must not offer a finger. */
+  .mdn-proj-pick ~ .mdn-proj-left { cursor: pointer; }
   .mdn-proj-name { color: #C5C8C6; }
   .mdn-proj-by { color: #969896; font-size: 11px; }
   .mdn-proj-desc {
@@ -970,6 +1013,12 @@
       the end of the description and `code` alone underneath it.
     */
     .mdn-proj-left { flex: 0 0 100%; flex-wrap: wrap; }
+    /*
+      With a tickbox in front of it, a basis of the WHOLE line pushes the
+      name onto the second row and leaves the first holding a 13px box and
+      nothing else. 21px is the box and the gap. E9-184.
+    */
+    .mdn-proj-pick ~ .mdn-proj-left { flex: 0 0 calc(100% - 21px); }
     .mdn-proj-desc { flex: 0 0 100%; white-space: normal; }
     .mdn-proj-row > .mdn-proj-link, .mdn-proj-row > .mdn-proj-act { margin-left: 0; }
     .mdn-proj-row > .mdn-proj-act { margin-left: auto; }

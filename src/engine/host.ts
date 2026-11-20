@@ -96,6 +96,39 @@ export interface EngineHost {
   bootServerFromSclang(): Promise<{ ready: boolean; ctx: AudioContext | null }>;
   sendToServer(address: string, args?: readonly OscArg[]): void;
   /**
+   * Wait until the server has processed everything sent before this.
+   *
+   * E9-171 — BECAUSE NOTHING ELSE DOES. `sendToServer` queues a packet
+   * and returns; it says the message was SENT, never that it was acted
+   * on. For most commands that is fine — the queue is FIFO and the next
+   * command lands behind this one. It is not fine when something
+   * OUTSIDE that queue is told the work is finished, which is exactly
+   * what pushing a buffer does: fifty-two `/b_setn` messages go out and
+   * sclang is then told the buffer is ready, over a different channel
+   * that does not wait behind them.
+   *
+   * `/sync` is SuperCollider's answer to this and the server already
+   * exempts it from the `/d_recv` barrier (see below) precisely so it
+   * can answer from behind the queue. Resolves false on timeout rather
+   * than hanging: a buffer that loaded slowly is better than a script
+   * that never starts.
+   */
+  syncServer(timeoutMs?: number): Promise<boolean>;
+  /**
+   * Read samples back OUT of a server buffer.
+   *
+   * E9-171 — THE ONLY WAY TO KNOW THE SAMPLES ARRIVED. Everything else
+   * in this file reports what was SENT. `/b_alloc` and fifty-two
+   * `/b_setn` are queued and the loader logs a line saying how many
+   * frames went; nothing anywhere confirms that any of them landed, and
+   * a buffer that is allocated but empty plays as silence with no error
+   * after the first block.
+   *
+   * `/b_getn` answers with `/b_setn`, which is the server's own copy of
+   * what it holds. Null on timeout or on a server that does not answer.
+   */
+  peekBuffer(bufnum: number, index: number, count: number, timeoutMs?: number): Promise<number[] | null>;
+  /**
    * Send OSC INTO sclang, as if it had arrived on a socket.
    *
    * The same channel scsynth's replies come back on. It is how a
@@ -661,6 +694,18 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
 
   scsynth.onOscReply = (bytes: Uint8Array) => timed("osc:from-server", () => onServerOsc(bytes));
 
+  /**
+   * E9-171 — `/sync` IDs OUTSTANDING, and who is waiting for each.
+   *
+   * The id matters: two loaders can be in flight at once — a script
+   * that reads four samples in its `init` does exactly that — and a
+   * flag would let the first `/synced` release all of them.
+   */
+  const syncWaiting = new Map<number, (ok: boolean) => void>();
+  let nextSyncId = 1;
+  /** `/b_getn` answers in flight, keyed by `bufnum:index`. E9-171. */
+  const peekWaiting = new Map<string, (v: number[] | null) => void>();
+
   const onServerOsc = (bytes: Uint8Array): void => {
     // Read BEFORE the `/d_recv` bookkeeping below and outside its guard:
     // that branch only runs while a SynthDef is outstanding, and the
@@ -675,6 +720,25 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
         status.avgCpu = Number(a[5] ?? 0);
         status.peakCpu = Number(a[6] ?? 0);
         status.at = performance.now();
+      }
+      // E9-171 — the server's own copy of what it holds.
+      if (r.address === "/b_setn") {
+        const a = (r.args ?? []) as number[];
+        const key = `${Number(a[0] ?? -1)}:${Number(a[1] ?? -1)}`;
+        const waiter = peekWaiting.get(key);
+        if (waiter !== undefined) {
+          peekWaiting.delete(key);
+          waiter(a.slice(3).map(Number));
+        }
+      }
+      // E9-171 — the answer from behind the server's queue.
+      if (r.address === "/synced") {
+        const id = Number((r.args ?? [])[0] ?? -1);
+        const waiter = syncWaiting.get(id);
+        if (waiter !== undefined) {
+          syncWaiting.delete(id);
+          waiter(true);
+        }
       }
     } catch {
       /* a reply we cannot read is not a status */
@@ -1275,6 +1339,38 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     pollStatus: (): void => scsynth.sendOsc(encodeMessage("/status", [])),
     sendToServer: (address, args = []) =>
       timed("osc:to-server", () => scsynth.sendOsc(encodeMessage(address, args))),
+    syncServer: (timeoutMs = 4000): Promise<boolean> =>
+      new Promise<boolean>((resolve) => {
+        const id = nextSyncId++;
+        let settled = false;
+        const done = (ok: boolean): void => {
+          if (settled) return;
+          settled = true;
+          syncWaiting.delete(id);
+          resolve(ok);
+        };
+        syncWaiting.set(id, done);
+        // A deadline, because a server that has stopped answering must
+        // not take the page with it. Four seconds is far past the
+        // hundreds of milliseconds a megabyte of samples takes and far
+        // short of anything a person would wait through on purpose.
+        setTimeout(() => done(false), timeoutMs);
+        scsynth.sendOsc(encodeMessage("/sync", [id]));
+      }),
+    peekBuffer: (bufnum, index, count, timeoutMs = 2000): Promise<number[] | null> =>
+      new Promise<number[] | null>((resolve) => {
+        const key = `${bufnum}:${index}`;
+        let settled = false;
+        const done = (v: number[] | null): void => {
+          if (settled) return;
+          settled = true;
+          peekWaiting.delete(key);
+          resolve(v);
+        };
+        peekWaiting.set(key, done);
+        setTimeout(() => done(null), timeoutMs);
+        scsynth.sendOsc(encodeMessage("/b_getn", [bufnum, index, count]));
+      }),
     sendToLang: (address, args = []) =>
       timed("osc:to-lang", () => sclang.sendOsc(encodeMessage(address, args))),
     runCode: (code: string) => sclang.runCode(code),

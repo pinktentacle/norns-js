@@ -303,3 +303,70 @@ describe("the events going the other way", () => {
     expect(calls.at(-1)!.name).toBe("vu");
   });
 });
+
+// E9-173 — a looper with nothing to loop says nothing on its own.
+//
+// `mlr` and `oooooo` have no engine worth the name and play only what
+// they first record from the audio input. On a norns there is always an
+// input; in a browser tab it is off until somebody grants a microphone,
+// so both load, draw, answer every key and stay silent for ever. Each
+// was reported as "no sound, but maybe I don't know how to use it" —
+// and the person asking was right, which is the worst way to find out
+// something is missing.
+describe("a script asking for the audio input", () => {
+  function listening() {
+    const wants: number[] = [];
+    const commands: unknown[][] = [];
+    const crone = {
+      command: (...a: unknown[]) => void commands.push(a),
+      param: () => {},
+      poll: () => {},
+      node: {},
+    } as unknown as Crone;
+    const registry = new NornsRegistry();
+    registerCrone(registry, crone, { onWantsInput: () => void wants.push(1) });
+    return {
+      wants,
+      commands,
+      set: (ch: number, voice: number, amp: number) =>
+        registry.implementationFor("level_input_cut")!(ch as never, voice as never, amp as never),
+    };
+  }
+
+  it("tells the caller when the level is above zero", () => {
+    const h = listening();
+    h.set(1, 1, 1.0);
+    expect(h.wants).toHaveLength(1);
+  });
+
+  // Closing the input is not asking for one. `oooooo` sets one channel to
+  // 1 and the other to 0 on every voice, so a hook that fired on both
+  // would double every count and, worse, fire for a script that is
+  // turning the input OFF.
+  it("says nothing when the level is zero", () => {
+    const h = listening();
+    h.set(1, 1, 0);
+    h.set(2, 1, 0);
+    expect(h.wants).toEqual([]);
+  });
+
+  it("still sends the command, whatever the hook does", () => {
+    const h = listening();
+    h.set(2, 3, 0.5);
+    expect(h.commands).toHaveLength(1);
+  });
+
+  it("is optional — nothing breaks without a listener", () => {
+    const crone = {
+      command: () => {},
+      param: () => {},
+      poll: () => {},
+      node: {},
+    } as unknown as Crone;
+    const registry = new NornsRegistry();
+    registerCrone(registry, crone, {});
+    expect(() =>
+      registry.implementationFor("level_input_cut")!(1 as never, 1 as never, 1 as never),
+    ).not.toThrow();
+  });
+});

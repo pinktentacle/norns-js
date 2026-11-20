@@ -26,6 +26,15 @@ export interface ClockEvents {
   onClock(coroId: number, beat: number): void;
   /** Wall time that passed with no audio behind it — a suspension (E3-07). */
   onStall?(seconds: number, frames: number): void;
+  /**
+   * Metro ticks thrown away because the main thread was asleep (E9-182).
+   *
+   * The opposite stall from `onStall`: there, audio time stopped while
+   * wall time ran; here, the audio thread kept perfect time and nobody
+   * was listening. Reported rather than silent, because a script that
+   * skipped forty steps should say so.
+   */
+  onBacklog?(dropped: number, gapMs: number): void;
 }
 
 export interface Clock {
@@ -82,19 +91,109 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
     processorOptions: { sab, records },
   });
 
-  const state = { beat: 0, tempo: 120 };
+  const state = { tempo: 120 };
   const ring = sab ? ringViews(sab, records) : null;
+
+  /**
+   * E9-181 — THE BEAT IS COMPUTED ON READ, NOT ADVANCED IN A FRAME.
+   *
+   * `clock_get_time_beats` is synchronous in Lua, so this mirror exists
+   * instead of asking the worklet and waiting. It used to be a stored
+   * number recomputed inside the animation-frame pump, which made every
+   * beat in every script depend on the page being painted. Measured
+   * with the tab behind another in the same pane:
+   *
+   *     ctx.currentTime   +5.011 s over 5.003 s of wall time
+   *     clock.beat        +0.000
+   *     rAF               0 frames in 8 s
+   *
+   * The audio thread kept perfect time and the mirror was frozen at
+   * whatever instant the tab lost focus — so `clock.sync` in a running
+   * script was computing against a stopped clock, silently, for as long
+   * as the tab stayed behind. `document.hidden` was FALSE throughout,
+   * which is the same lie `startAudio` was caught by in E9-16x.
+   *
+   * `ctx.currentTime` is the clock the worklet counts and it never
+   * stops, so there is nothing to keep in step and nothing to pump.
+   */
+  let startedAt = ctx.currentTime;
+  let beatAtStart = 0;
+  const beatNow = (): number =>
+    beatAtStart + ((ctx.currentTime - startedAt) * state.tempo) / 60;
 
   const dispatch = (type: number, a: number, b: number): void => {
     if (type === EV_METRO) opts.onMetro(a, b);
-    else if (type === EV_CLOCK) {
-      state.beat = b;
-      opts.onClock(a, b);
-    } else if (type === EV_STALL) opts.onStall?.(a, b);
+    // The beat carried by EV_CLOCK is the beat the event was SCHEDULED
+    // for, which is behind `ctx.currentTime` by however long delivery
+    // took. Re-anchoring to it would step the mirror backwards, so the
+    // reading stays derived and this is passed through unused.
+    else if (type === EV_CLOCK) opts.onClock(a, b);
+    else if (type === EV_STALL) opts.onStall?.(a, b);
   };
 
+  /**
+   * E9-182 — A BACKLOG IS NOT REPLAYED, IT IS CAUGHT UP WITH.
+   *
+   * When the main thread stops taking events out, the audio thread does
+   * not stop putting them in: it keeps perfect time whether or not
+   * anybody is listening. Everything that accumulated used to be
+   * delivered in one go the moment the page came back, so a 20 Hz metro
+   * asleep for ten seconds fired two hundred callbacks inside a single
+   * millisecond — reported from a real session as a pile of sound
+   * being unstacked at speed on return, which is exactly what it is.
+   *
+   * Replaying is the wrong answer musically AND semantically. A
+   * sequencer should be where it would have been, not play the last ten
+   * seconds in one burst. So for each metro only the LAST tick in the
+   * batch is delivered: `stage` is carried by the event, so the script
+   * lands on the step it would have reached rather than on the step it
+   * left.
+   *
+   * ONLY AFTER A REAL GAP. A drain every 16 ms legitimately carries two
+   * ticks of a 100 Hz metro, and coalescing those would halve a rate the
+   * script asked for. `STALL_MS` is far longer than any interval this is
+   * called at, so an ordinary batch is delivered whole.
+   *
+   * CLOCK RESUMES ARE NEVER DROPPED. A coroutine waiting on
+   * `clock.sleep` has exactly one resume scheduled at a time — it cannot
+   * pile up — and discarding one would hang that coroutine for the rest
+   * of the session.
+   */
+  const STALL_MS = 500;
+  const now = (): number =>
+    typeof performance !== "undefined" ? performance.now() : Date.now();
+  let lastDrainAt = now();
+  const batch: Array<[number, number, number]> = [];
+
   const drain = (): void => {
-    if (ring) ringDrain(ring, (t, a, b) => dispatch(t, a, b));
+    if (!ring) return;
+    const at = now();
+    const gap = at - lastDrainAt;
+    lastDrainAt = at;
+    if (gap <= STALL_MS) {
+      ringDrain(ring, (t, a, b) => dispatch(t, a, b));
+      return;
+    }
+    batch.length = 0;
+    ringDrain(ring, (t, a, b) => void batch.push([t, a, b]));
+    // Where each metro index last appears, so everything before it is
+    // known to be superseded before anything is delivered.
+    const lastOf = new Map<number, number>();
+    for (let i = 0; i < batch.length; i++) {
+      const ev = batch[i]!;
+      if (ev[0] === EV_METRO) lastOf.set(ev[1], i);
+    }
+    let dropped = 0;
+    for (let i = 0; i < batch.length; i++) {
+      const ev = batch[i]!;
+      if (ev[0] === EV_METRO && lastOf.get(ev[1]) !== i) {
+        dropped++;
+        continue;
+      }
+      dispatch(ev[0], ev[1], ev[2]);
+    }
+    batch.length = 0;
+    if (dropped > 0) opts.onBacklog?.(dropped, gap);
   };
 
   node.port.onmessage = (e: MessageEvent) => {
@@ -104,25 +203,54 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
     if (m.t === "wake") drain();
     else if (m.t === "event") dispatch(m.type!, m.a!, m.b!);
     else if (m.t === "state") {
-      state.beat = m.beat ?? state.beat;
+      // The worklet's own answer to a tempo or transport message this
+      // side just sent, so it RE-ANCHORS the mirror rather than being
+      // stored beside it: `beatNow` derives everything from the anchor,
+      // and a number written anywhere else would be overwritten by the
+      // next read. One message hop of lateness, which is 0.01 beats at
+      // 120 BPM, against a mirror that would otherwise never be
+      // corrected by the thread that actually counts.
+      if (m.beat !== undefined) {
+        beatAtStart = m.beat;
+        startedAt = ctx.currentTime;
+      }
       state.tempo = m.tempo ?? state.tempo;
     }
   };
 
-  // Drained per animation frame rather than on a timer: a frame is when the
-  // screen is going to be redrawn anyway, so an event delivered now is seen
-  // at the first opportunity and nothing is gained by waking more often.
+  // Drained per animation frame because a frame is when the screen is going
+  // to be redrawn anyway, so an event delivered now is seen at the first
+  // opportunity.
   let raf = 0;
-  let startedAt = ctx.currentTime;
-  let beatAtStart = 0;
   const pump = (): void => {
     drain();
-    // Advance the mirror between events, so `clock_get_time_beats` is
-    // continuous rather than stepping only when something fires.
-    state.beat = beatAtStart + ((ctx.currentTime - startedAt) * state.tempo) / 60;
     raf = requestAnimationFrame(pump);
   };
   raf = requestAnimationFrame(pump);
+
+  /**
+   * E9-181 — AND A TIMER BEHIND BOTH OF THEM.
+   *
+   * There were two ways for a pushed event to reach Lua: the frame pump
+   * above, and the `wake` message the processor posts on the first push
+   * of a burst. Both were measured failing together in a background
+   * tab — zero frames in eight seconds, and zero metro callbacks at
+   * 20 Hz, while `ctx.currentTime` advanced 5.011 s over 5.003 s of
+   * wall time and the ring filled behind them.
+   *
+   * A timer is throttled in a hidden page — Chrome gives it about one
+   * wake-up a second — so this does NOT make a background tab punctual
+   * and nothing on the main thread can, because that is where Lua runs.
+   * What it does is turn "never" into "about once a second", which is
+   * the difference between a script that resumes when you come back and
+   * one that has to be restarted.
+   *
+   * 16 ms matches the `refresh` interval in `main.ts` and matron's own
+   * screen thread. `drain` on an empty ring is two `Atomics.load`, so
+   * the redundant case costs nothing worth measuring.
+   */
+  const DRAIN_MS = 16;
+  const drainTimer: ReturnType<typeof setInterval> = setInterval(drain, DRAIN_MS);
 
   const send = (m: unknown): void => node.port.postMessage(m);
 
@@ -132,7 +260,9 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
     metroStop: (idx) => send({ t: "metro_stop", idx }),
     metroSetTime: (idx, seconds) => send({ t: "metro_set_time", idx, seconds }),
     setTempo: (bpm) => {
-      beatAtStart = state.beat;
+      // Read at the OLD tempo before changing it: re-anchoring is what
+      // stops every past second being recounted at the new rate.
+      beatAtStart = beatNow();
       startedAt = ctx.currentTime;
       state.tempo = bpm;
       send({ t: "tempo", bpm });
@@ -143,14 +273,12 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
       // the old position for the quantum it takes the message to arrive.
       beatAtStart = beat;
       startedAt = ctx.currentTime;
-      state.beat = beat;
       state.tempo = 60 / beatDuration;
       send({ t: "source_ref", beat, beatDuration });
     },
     transportStart: () => {
       beatAtStart = 0;
       startedAt = ctx.currentTime;
-      state.beat = 0;
       send({ t: "transport_start" });
     },
     transportStop: () => send({ t: "transport_stop" }),
@@ -158,13 +286,14 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
     scheduleSleep: (id, seconds) => send({ t: "sleep", id, seconds }),
     cancel: (id) => send({ t: "cancel", id }),
     get beat() {
-      return state.beat;
+      return beatNow();
     },
     get tempo() {
       return state.tempo;
     },
     destroy() {
       cancelAnimationFrame(raf);
+      clearInterval(drainTimer);
       node.port.onmessage = null;
       node.disconnect();
     },

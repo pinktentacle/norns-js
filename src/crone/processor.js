@@ -41,9 +41,33 @@ class CroneProcessor extends AudioWorkletProcessor {
     // `performance.now()` is not guaranteed in an AudioWorkletGlobalScope,
     // so whether it is there is reported rather than assumed: a measurement
     // that did not happen must not look like a zero.
-    this.clock = typeof performance === "object" && typeof performance.now === "function"
-      ? () => performance.now()
-      : null;
+    //
+    // E9-183 — AND IT IS NOT THERE, IN CHROME, WHICH MEANT NO MEASUREMENT
+    // AT ALL. Chrome's AudioWorkletGlobalScope exposes `currentFrame`,
+    // `currentTime` and `sampleRate` and no clock finer than a quantum,
+    // so this has been null since E4-14 and crone has never once reported
+    // what it costs. The page said so at boot and nothing else ever
+    // mentioned it again, which is how "crone dsp: nothing reported yet"
+    // came to read like "not yet" for five releases.
+    //
+    // `Date` IS in every realm. It has 1 ms resolution against a 2.67 ms
+    // budget, which is far too coarse for one block — but it is not
+    // biased. `Date.now()` truncates, so a block that really takes 0.4 ms
+    // measures 0 or 1 depending on where the millisecond boundary falls,
+    // and the block period (2.667 ms) walks around that boundary rather
+    // than sitting on it. Summed over a second of blocks the error
+    // averages out: 375 samples puts the mean within about 0.03 ms.
+    //
+    // WHAT IT CANNOT DO is the worst block, which is the number that
+    // matters most — a single 4 ms block is a click you can hear and a
+    // 1 ms clock cannot resolve it. So `maxMs` is NOT sent when the clock
+    // is coarse, rather than sent as a figure that looks like the fine
+    // one. `over` survives as a LOWER BOUND: a block measured at 3 ms
+    // against a 2.67 ms budget really was over, a block measured at 2 ms
+    // might have been, and only the certain ones are counted.
+    const fine = typeof performance === "object" && typeof performance.now === "function";
+    this.coarse = !fine;
+    this.clock = fine ? () => performance.now() : () => Date.now();
     this.load = { blocks: 0, total: 0, max: 0, over: 0, since: 0 };
     this.port.onmessage = (e) => this.onMessage(e.data);
 
@@ -103,9 +127,11 @@ class CroneProcessor extends AudioWorkletProcessor {
       type: "ready",
       sampleRate: M._crone_sample_rate(),
       voices: M._crone_num_voices(),
-      // Whether the audio thread can time itself at all. Said out loud so
-      // an absent measurement is never mistaken for a cheap one.
+      // Whether the audio thread can time itself at all, and how well.
+      // Said out loud so an absent or coarse measurement is never mistaken
+      // for a cheap one.
       timed: this.clock !== null,
+      coarse: this.coarse,
       // The wasm heap, exactly, rather than the INITIAL_MEMORY the build
       // asked for. E4-14 wants what the page is actually holding.
       heapBytes: M.HEAPU8.byteLength,
@@ -331,9 +357,12 @@ class CroneProcessor extends AudioWorkletProcessor {
           type: "load",
           blocks: L.blocks,
           meanMs: L.total / L.blocks,
-          maxMs: L.max,
+          // Withheld rather than guessed at when the clock cannot resolve
+          // one block. See the constructor.
+          maxMs: this.coarse ? 0 : L.max,
           over: L.over,
           budgetMs: budget,
+          coarse: this.coarse,
         });
         L.blocks = 0;
         L.total = 0;

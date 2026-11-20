@@ -12,7 +12,9 @@
 // maintains — applied to the one table this port maintains itself.
 
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { croneEvents } from "../src/crone/register.js";
+import type { Callbacks } from "../src/norns/callbacks.js";
 import {
   decodeBatch,
   decodeRecord,
@@ -125,5 +127,73 @@ describe("decoding", () => {
     batch.set(record(EV_SOFTCUT_POSITION, 2, 0.5), 0);
     batch[SLOTS] = EV_VU; // the start of a record that was never finished
     expect(decodeBatch(batch)).toHaveLength(1);
+  });
+});
+
+// E9-174 — twenty a second, for a tape that is not running.
+//
+// `MixerClient.cpp:62` polls the tape every 50 ms whether or not
+// anything is playing, and every one of those crossed into Lua. On a
+// Pixel 9 Pro running `molly_the_poly` — which has no tape in it at all
+// — that came to 105 ms over 1559 calls, the same cost as rendering the
+// whole grid, spent reporting six numbers that never changed.
+describe("the tape poll that never stops", () => {
+  function listening() {
+    const seen: number[][] = [];
+    const cb = {
+      tapeStatus: (...a: number[]) => void seen.push(a),
+    } as unknown as Callbacks;
+    return { seen, events: croneEvents(cb) };
+  }
+
+  const still = { playState: 0, playPos: 0, playLen: 0, recState: 0, recPos: 0, loop: 0 };
+
+  it("passes the first reading through", () => {
+    const h = listening();
+    h.events.tapeStatus?.(still);
+    expect(h.seen).toHaveLength(1);
+  });
+
+  it("drops a reading identical to the last one", () => {
+    const h = listening();
+    for (let i = 0; i < 40; i++) h.events.tapeStatus?.(still);
+    expect(h.seen, "two seconds of a stopped tape is one call").toHaveLength(1);
+  });
+
+  it("passes anything that actually moved", () => {
+    const h = listening();
+    h.events.tapeStatus?.(still);
+    h.events.tapeStatus?.({ ...still, playPos: 1 });
+    h.events.tapeStatus?.({ ...still, playPos: 2 });
+    expect(h.seen.map((a) => a[1])).toEqual([0, 1, 2]);
+  });
+
+  // Each field on its own, because a dedupe that misses one reports a
+  // tape as stopped while it is recording.
+  it("notices every field", () => {
+    for (const k of ["playState", "playPos", "playLen", "recState", "recPos", "loop"] as const) {
+      const h = listening();
+      h.events.tapeStatus?.(still);
+      h.events.tapeStatus?.({ ...still, [k]: 1 });
+      expect(h.seen, `${k} was dropped`).toHaveLength(2);
+    }
+  });
+
+  // A consumer that has reset its own state is waiting to be told where
+  // the tape is, and this file cannot know whether there is one.
+  it("says it again anyway, every two seconds", () => {
+    vi.useFakeTimers();
+    try {
+      const h = listening();
+      h.events.tapeStatus?.(still);
+      vi.advanceTimersByTime(1900);
+      h.events.tapeStatus?.(still);
+      expect(h.seen, "not yet").toHaveLength(1);
+      vi.advanceTimersByTime(200);
+      h.events.tapeStatus?.(still);
+      expect(h.seen, "the heartbeat").toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -62,10 +62,22 @@ export interface CroneLoad {
   readonly blocks: number;
   readonly meanMs: number;
   readonly maxMs: number;
-  /** Blocks that took longer than one quantum. Each one is a dropout. */
+  /**
+   * Blocks that took longer than one quantum. Each one is a dropout.
+   *
+   * A LOWER BOUND when `coarse` is set: only the blocks the 1 ms clock
+   * could prove were over are counted.
+   */
   readonly over: number;
   /** One quantum of real time: the deadline every block has. */
   readonly budgetMs: number;
+  /**
+   * The audio thread had no `performance.now()` and fell back to `Date`
+   * (E9-183). `meanMs` is still sound — the truncation is unbiased over a
+   * second of blocks — and `maxMs` is 0, because a 1 ms clock cannot
+   * resolve one 2.67 ms block.
+   */
+  readonly coarse?: boolean;
 }
 
 export interface CroneOptions {
@@ -183,7 +195,14 @@ export async function startCrone(opts: CroneOptions): Promise<Crone> {
       const m = e.data as Record<string, unknown>;
       if (m["type"] === "ready") {
         if (m["timed"] !== true) {
-          log("crone: the audio thread has no performance.now(); its cost cannot be measured here");
+          log("crone: the audio thread has no clock at all; its cost cannot be measured here");
+        } else if (m["coarse"] === true) {
+          // E9-183. Said once, because it qualifies every reading that
+          // follows: the mean is sound and the worst block is absent.
+          log(
+            "crone: the audio thread has no performance.now(), so its cost is timed with Date " +
+              "— the mean is good to about 0.03 ms, the worst block cannot be seen at all",
+          );
         }
         resolve({
           sampleRate: m["sampleRate"] as number,

@@ -66,11 +66,30 @@ export interface InstallResult {
  *   3. otherwise record a loud stub and push the stub's values —
  *      which for 149 of the 178 is nothing at all.
  */
+/**
+ * E9-176 — THE ONE FUNCTION THIS PORT HAS THAT A NORNS DOES NOT.
+ *
+ * `surface.json` is derived from norns' C and must stay derived: it is
+ * what makes "178 functions" a count rather than an opinion, and
+ * hand-editing it would quietly turn the coverage test into a tautology.
+ *
+ * So anything this port adds is listed HERE instead, where it is
+ * obviously an addition. There is one, and it exists because a page can
+ * be asked what it has been spending and a norns cannot:
+ * `src/lua/norns-js/bench.lua` calls it between its phases so each one
+ * gets its own reading instead of all seven sharing a total. A script
+ * that calls it on hardware finds nothing there and carries on, which
+ * `bench.lua` checks for.
+ */
+export const EXTRAS: SurfaceEntry[] = [
+  { name: "profile_mark", symbol: "(norns-js)", line: 0, via: "norns-js", returns: [0] },
+];
+
 export function installNorns(L: LuaState, registry = new NornsRegistry()): InstallResult {
-  lua.lua_createtable(L, 0, SURFACE.length + CALLBACK_FIELDS.length);
+  lua.lua_createtable(L, 0, SURFACE.length + EXTRAS.length + CALLBACK_FIELDS.length);
 
   const installed: string[] = [];
-  for (const entry of SURFACE) {
+  for (const entry of [...SURFACE, ...EXTRAS]) {
     const { name } = entry;
     const spec = stubFor(name);
 

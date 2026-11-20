@@ -46,7 +46,7 @@ spike/probe/runs/*.txt    -text
 # cannot build the desktop application at all, and a source that cannot
 # build the binary it accompanies is not corresponding source.
 #
-# `test/` STAYS, which is a judgement and not an obligation. 1050 tests are
+# `test/` STAYS, which is a judgement and not an obligation. 1064 tests are
 # the only evidence for every number in the README, and a clone where
 # `npm test` does nothing is a clone that cannot check a word of it.
 # Delete the line to change that.

@@ -49,6 +49,63 @@ describe("a script that needs another script's Lua", () => {
     expect(needsOf(vfs, "amen", CATALOGUE)).toEqual([]);
   });
 
+  // E9-184 — the same question asked about a deletion that has not
+  // happened. maiden can remove several projects at once now, and 28 of
+  // the catalogue's entries are libraries for other entries: a tick on
+  // one of those is a mistake you can make without ever reading the name.
+  //
+  // Rather than a second scanner — which would recognise a dependency
+  // this one does not and then disagree with it — the removal says which
+  // projects it is about to delete and gets the answer it would get by
+  // deleting them and asking again.
+  describe("asked as if some projects were already gone", () => {
+    const tree = (): Vfs => {
+      const vfs = new Vfs();
+      write(vfs, "/home/we/dust/code/amen/amen.lua", 'include("midigrid/lib/mg_128")\n');
+      write(vfs, "/home/we/dust/code/midigrid/lib/mg_128.lua", "return {}\n");
+      return vfs;
+    };
+
+    it("reports the library again when it is the one being deleted", () => {
+      const vfs = tree();
+      expect(needsOf(vfs, "amen", CATALOGUE)).toEqual([]);
+      const after = needsOf(vfs, "amen", CATALOGUE, "/home/we/dust", [], ["midigrid"]);
+      expect(after.map((n) => [n.kind, n.want])).toEqual([["script", "midigrid"]]);
+    });
+
+    it("matches the name however it is cased", () => {
+      const vfs = tree();
+      expect(
+        needsOf(vfs, "amen", CATALOGUE, "/home/we/dust", [], ["MidiGrid"]).map((n) => n.want),
+      ).toEqual(["midigrid"]);
+    });
+
+    it("says nothing about a project that is not going", () => {
+      const vfs = tree();
+      expect(needsOf(vfs, "amen", CATALOGUE, "/home/we/dust", [], ["mx.synths"])).toEqual([]);
+    });
+
+    it("an empty list is the question it always answered", () => {
+      const vfs = tree();
+      expect(needsOf(vfs, "amen", CATALOGUE, "/home/we/dust", [], [])).toEqual([]);
+    });
+
+    it("a project going does not supply its own engine class either", () => {
+      // `enginesHere` is built from the same walk. A script whose engine
+      // comes from a project being deleted has to be reported short of
+      // it, or removing the pair would be silently fine.
+      const vfs = new Vfs();
+      write(vfs, "/home/we/dust/code/awake-ashsynth/awake.lua", 'engine.name = "Ash"\n');
+      // `Engine_<name> :` is the declaration `needs.ts` looks for, which
+      // is how norns names a CroneEngine subclass.
+      write(vfs, "/home/we/dust/code/ashsynth/lib/Engine_Ash.sc", "Engine_Ash : CroneEngine {\n}\n");
+      expect(needsOf(vfs, "awake-ashsynth", CATALOGUE)).toEqual([]);
+      const after = needsOf(vfs, "awake-ashsynth", CATALOGUE, "/home/we/dust", [], ["ashsynth"]);
+      expect(after.map((n) => n.kind)).toEqual(["engine"]);
+      expect(after[0]!.want).toBe("Ash");
+    });
+  });
+
   it("leaves norns' own modules and the script's own folders alone", () => {
     // The false alarm this guards against: `core/` and `lib/` are not
     // missing libraries, they are norns and the script itself.

@@ -13,6 +13,7 @@ import { createHost, boot, type Host } from "./lua/host.js";
 import { loadNornsLuaWeb, loadConfigWeb } from "./lua/host-web.js";
 import menuHereLua from "./lua/norns-js/menu-here.lua?raw";
 import screenDirectLua from "./lua/norns-js/screen-direct.lua?raw";
+import benchLua from "./lua/norns-js/bench.lua?raw";
 import { createScreen, type Screen } from "./screen/screen.js";
 import { loadScreenModuleWeb } from "./screen/screen-web.js";
 import { createScreenCanvas } from "./ui/canvas.js";
@@ -26,7 +27,14 @@ import { describeFrames, watchLongFrames } from "./ui/frames.js";
 import { describeDeviceLatency, describeGraphLatency } from "./ui/audio-latency.js";
 import { afterPaint } from "./ui/first-paint.js";
 import { describeVu, emptyVu, foldVu, judgeVu } from "./ui/output-watch.js";
+import {
+  describeAudioLoad,
+  emptyAudioLoad,
+  foldCrone,
+  foldScsynth,
+} from "./ui/audio-load.js";
 import { drawingRatio } from "./ui/dpr.js";
+import { createWakeupWatch } from "./ui/wakeups.js";
 import { accountedMs, callCosts, resetCallCosts, sayCost, timed, watchCallCost } from "./norns/call-cost.js";
 import { registerScreenImages } from "./screen/images.js";
 import { registerHardware, type Hardware } from "./norns/hardware.js";
@@ -150,9 +158,16 @@ const rawLog = createLog(logEl);
  * appearing rather than a wrong one.
  */
 let scriptIsLoaded = false;
+/** Whether this script has already been told its input is off. E9-173. */
+let saidInputIsOff = false;
 const log = (line: string): void => {
   if (line.startsWith("# script run")) scriptIsLoaded = true;
-  else if (line.startsWith("# script clear")) scriptIsLoaded = false;
+  else if (line.startsWith("# script clear")) {
+    scriptIsLoaded = false;
+    // A new script gets its own warning: the last one having been told
+    // says nothing about this one.
+    saidInputIsOff = false;
+  }
   rawLog(line);
 };
 
@@ -373,6 +388,31 @@ async function main(): Promise<void> {
     vfs.remove("/home/we/dust/.installing");
     log(`swept ${stale.length} interrupted download${stale.length === 1 ? "" : "s"}: ${stale.join(", ")}`);
   }
+  /**
+   * E9-176 — THE BENCH IS THERE WHEN YOU ARE PROFILING, AND NOT OTHERWISE.
+   *
+   * `src/lua/norns-js/bench.lua` is a script with no musical value whose
+   * only job is to do the same work every time, so that two profiles can
+   * be compared. It ships inside the application rather than in the dust
+   * tree, because the published build is `--no-scripts` and anything
+   * under `community patches/` is stripped out of it.
+   *
+   * PUT THERE BY `?profile` AND TAKEN AWAY WITHOUT IT. A diagnostic that
+   * stays in SELECT for ever after one profiling session is clutter
+   * somebody has to work out how to remove; one that appears exactly
+   * when it is useful needs no explaining. Both directions run on every
+   * boot, so the state always matches the URL.
+   */
+  const BENCH_DIR = "/home/we/dust/code/_bench";
+  const BENCH_LUA = `${BENCH_DIR}/_bench.lua`;
+  if (profile !== null) {
+    if (vfs.read(BENCH_LUA) === null) log("bench: _bench is in SELECT — a script that measures this page");
+    vfs.write(BENCH_LUA, new TextEncoder().encode(benchLua));
+  } else if (vfs.read(BENCH_LUA) !== null) {
+    for (const p of vfs.walk(BENCH_DIR)) vfs.remove(p);
+    vfs.remove(BENCH_DIR);
+  }
+
   const mirror = mirrorToOpfs(vfs, { log: (l) => log(l) });
   // A tab being closed is the common case for losing the last write, and
   // `visibilitychange` is the event that actually fires on mobile. The flush
@@ -651,6 +691,8 @@ async function main(): Promise<void> {
   // arithmetic on. `croneLoad` is read through a closure because the audio
   // thread comes up long after this.
   let audioLoad: { meanMs: number; budgetMs: number } | null = null;
+  /** When `profile_mark` last reported, so a phase knows its own length. E9-176. */
+  let markAt = performance.now();
   const hardware: Hardware = registerHardware(host.registry, {
     load: () => audioLoad,
     log: (l) => log(l),
@@ -861,6 +903,34 @@ async function main(): Promise<void> {
    * bytes, `canvas.draw` is a putImageData the browser may or may not
    * accelerate, and `padFrame` runs on EVERY frame whether anything is
    * dirty or not.
+   *
+   * E9-179 — ONE SIGNAL MARKS THE FRAME, AND IT IS `screen.update()`.
+   *
+   * This loop was correct and the flag was a lie. Measured on the plain
+   * page, at the menu, with no script loaded and nothing touched:
+   *
+   *     rAF                          31.9 frames/s
+   *     draw:canvas                  320 calls in 10.02 s -> every frame
+   *     _norns.screen_update (Lua)   10 calls in 5 s      -> 2/s
+   *
+   * Sixteen blits for every change. `dirty` was being posted by every
+   * metro tick, every clock resume, every message from sclang or
+   * scsynth and every MIDI event — none of which draw. They call into
+   * Lua, and Lua that draws ALWAYS ends in `screen.update()`, which
+   * posts the flag through `onUpdate` above. Every one of those marks
+   * was redundant with the only one that means anything.
+   *
+   * What stays, because each is a change the screen module never sees:
+   * a cairo trap and rebuild, a canvas resize (which CLEARS it), a PNG
+   * that decoded after the frame that asked for it, and the places
+   * where norns answers a file selection without redrawing.
+   *
+   * 0.069 ms a blit here; 0.156 ms on a Pixel 9 Pro, where
+   * `draw:canvas` was 636 ms over 4071 calls in `kolor`'s profile — the
+   * largest instrumented cost on the machine that matters. A script
+   * that genuinely redraws at 30 fps gains nothing. The menu, and every
+   * script that redraws only when something changed, stop paying for
+   * frames nobody asked for.
    */
   const present = (now: number): void => {
     timed("draw:pad", () => padFrame(now));
@@ -1015,6 +1085,75 @@ async function main(): Promise<void> {
   // So the panel gets functions, and the functions find out whether there
   // is anything to talk to yet.
   let audioContext: AudioContext | null = null;
+
+  /**
+   * E9-182 — WHEN THE PAGE CANNOT KEEP TIME, STOP RATHER THAN PLAY WRONG.
+   *
+   * A page that is not being painted is not necessarily a page that has
+   * stopped, and the difference is worth measuring before acting on it.
+   * In this app's own browser pane, with the tab behind another:
+   *
+   *     requestAnimationFrame    0 per second
+   *     setInterval(16 ms)       62.5 per second — not throttled at all
+   *     metro at 20 Hz           160 callbacks in 8.02 s, exact
+   *     document.hidden          false
+   *
+   * Everything carries on, so nothing should be stopped. A page the
+   * browser has genuinely HIDDEN is the other case: timers there are
+   * throttled to roughly one wake-up a second, and twenty metro ticks a
+   * second cannot be delivered by a thread that wakes once. The audio
+   * thread meanwhile keeps perfect time, so the result is a sequencer
+   * running at a twentieth of its tempo with the backlog piling up
+   * behind it — unstacked at speed on the way back before E9-182 made
+   * the clock skip instead of replay.
+   *
+   * So this does not act on `document.hidden`. It acts on the rate the
+   * page is actually being woken at, which is the thing that matters and
+   * the only one of the two that is a measurement. If the wake-ups are
+   * still coming, nothing happens at all.
+   *
+   * Suspending is what stops it: the audio thread stops counting, so no
+   * backlog forms, no metro is due on the way back, and the clock
+   * resumes where it left off instead of somewhere it never was. It also
+   * reports a stall on resume, which is true — audio time did stop.
+   */
+  const wakeups = createWakeupWatch();
+  let hiddenWatch: ReturnType<typeof setInterval> | null = null;
+  const stopWatchingWakeups = (): void => {
+    if (hiddenWatch === null) return;
+    clearInterval(hiddenWatch);
+    hiddenWatch = null;
+  };
+  const onPageHidden = (): void => {
+    stopWatchingWakeups();
+    wakeups.away(performance.now());
+    hiddenWatch = setInterval(() => {
+      const gap = wakeups.tick(performance.now());
+      // Still being serviced. Leave the instrument playing.
+      if (gap === null) return;
+      stopWatchingWakeups();
+      const ctx = audioContext;
+      if (ctx === null || ctx.state !== "running") return;
+      log(
+        `audio: this page is only being woken every ${(gap / 1000).toFixed(1)} s while it is ` +
+          `hidden, which is too seldom to keep time — stopping the sound until it comes back ` +
+          `rather than playing it out of tempo`,
+      );
+      void Promise.resolve(ctx.suspend()).catch(() => {});
+    }, 200);
+  };
+  const onPageVisible = (): void => {
+    stopWatchingWakeups();
+    if (!wakeups.back()) return;
+    const ctx = audioContext;
+    if (ctx === null) return;
+    log("audio: the page is back — starting the sound again");
+    void Promise.resolve(ctx.resume()).catch(() => {});
+  };
+  globalThis.document?.addEventListener("visibilitychange", () => {
+    if (globalThis.document?.hidden === true) onPageHidden();
+    else onPageVisible();
+  });
 
   /**
    * E9-163 — HOW LATE THE SOUND IS, WHICH NOTHING HERE HAS EVER ASKED.
@@ -1327,24 +1466,77 @@ async function main(): Promise<void> {
    */
   let vuWindow = emptyVu();
   let vuLast = emptyVu();
-  let vuWindowAt = 0;
+  /**
+   * E9-180 — A PHASE'S LEVEL IS THE PEAK OVER THAT PHASE.
+   *
+   * Separate from the three-second judging window because it answers a
+   * different question. `profile_mark` reported `describeVu(vuLast)`,
+   * and `vuLast` is the previous COMPLETED window: it ends somewhere
+   * between nought and three seconds before the mark, and the bench
+   * marks at a phase boundary immediately after `stop_all()` has
+   * silenced the phase. So the line could report a stretch of time the
+   * phase did not cover, and did: the engine phase was written up as
+   * "a stock engine that loads and makes no sound" on the strength of
+   * it. Driven by hand and from a metro at the bench's own 20/s,
+   * `PolyPerc` reaches peak 0.159 and takes the server from 8 synths
+   * to 19. It sounds. The instrument was reading the wrong window.
+   *
+   * Folded by the same `foldVu`, so this is the same maxima over a
+   * different span, and reset by the mark rather than by the clock.
+   */
+  let vuPhase = emptyVu();
+  /**
+   * E9-183 — what the AUDIO thread cost over a phase.
+   *
+   * The companion to `vuPhase`: that one says how loud the span was,
+   * this one says what rendering it cost the thread that is not being
+   * measured by anything else. Both are reset by the mark.
+   */
+  let dspPhase = emptyAudioLoad();
+  /** `/status.reply` timestamps already folded, so a poll counts once. */
+  let scStatusAt = 0;
   let vuQuietSince = 0;
   let vuSaid = "";
   let vuSaidAt = -Infinity;
+  /** Set by the first poll crone ever sends, and never cleared. */
+  let vuHeardEver = false;
 
+  /**
+   * E9-169 — THE JUDGE RUNS ON A CLOCK, NOT ON THE SIGNAL IT JUDGES.
+   *
+   * The first version did all of this inside the VU handler, which made
+   * it deaf to exactly one thing: the VU polls stopping. No polls meant
+   * the handler never ran, so nothing was ever judged, so the branch
+   * that exists to report "crone has stopped reporting its levels"
+   * could not be reached. The instrument was blind in the one direction
+   * it was built to look.
+   *
+   * Found in a log from a silent `amen` where every other new line
+   * worked — master at 0 dB, context running, one scsynth output routed
+   * through the mixer — and the watcher said nothing at all. A watcher
+   * that is silent when its subject is absent is indistinguishable from
+   * one that is silent because all is well, which is the worst thing an
+   * instrument can be.
+   *
+   * NOT BEFORE CRONE HAS EVER SPOKEN. Until the first poll arrives
+   * there is no audio thread yet and its silence is the boot, not a
+   * fault. After that, silence is news.
+   */
   const watchVu = (levels: readonly number[]): void => {
+    if (foldVu(vuWindow, levels)) vuHeardEver = true;
+    // Same reading, second span. A reading that is not twelve numbers is
+    // refused by both, so the two cannot disagree about what arrived.
+    foldVu(vuPhase, levels);
+  };
+
+  const judgeWindow = (): void => {
+    if (!vuHeardEver) return;
     const now = performance.now();
-    if (vuWindowAt === 0) {
-      vuWindowAt = now;
-      vuQuietSince = now;
-    }
-    if (!foldVu(vuWindow, levels)) return;
-    if (now - vuWindowAt < 3000) return;
+    if (vuQuietSince === 0) vuQuietSince = now;
     if (vuWindow.outMax > 0) vuQuietSince = now;
     const verdict = judgeVu(vuWindow, scriptIsLoaded, now - vuQuietSince);
     vuLast = vuWindow;
     vuWindow = emptyVu();
-    vuWindowAt = now;
     if (verdict === null) {
       // Coming back is worth one line, because a log that only ever
       // reports trouble cannot be used to tell when it stopped.
@@ -1352,49 +1544,81 @@ async function main(): Promise<void> {
       vuSaid = "";
       return;
     }
-    if (verdict === vuSaid && now - vuSaidAt < 30000) return;
-    vuSaid = verdict;
+    // E9-172 — ON THE KIND, NOT THE SENTENCE. The sentence carries an
+    // elapsed time, so it is never equal to the last one and this quiet
+    // period never once applied: a log from a silent `amen` carried
+    // fifty copies of one finding, three seconds apart.
+    if (verdict.kind === vuSaid && now - vuSaidAt < 30000) return;
+    vuSaid = verdict.kind;
     vuSaidAt = now;
-    log(verdict);
+    log(verdict.line);
   };
+  setInterval(judgeWindow, 3000);
 
   /**
    * E9-166 — EVERYTHING AT ONCE, because a phone has no console.
    *
-   * Three rounds of this were spent asking for one number at a time and
-   * waiting for a reply. On a desktop that is a console paste; on the
-   * Pixel the console is not reachable at all, and the log IS the
-   * channel — it is already what gets copied and sent.
+   * Three rounds of a silent script were spent asking for one number at
+   * a time and waiting for a reply. On a desktop that is a console
+   * paste; on the Pixel the console is not reachable at all, and the
+   * log IS the channel — it is already what gets copied and sent.
    *
    * So `?diagnose` prints the whole state as a block, and
-   * `__norns.diagnose()` does the same from a console that has one. It
-   * answers, in order: is the output flowing, where does it stop, is
-   * anything reaching the mixer, what did the page measure of itself,
-   * and which build is this anyway.
+   * `__norns.diagnose()` does the same from a console that has one.
    */
-  const diagnose = (): void => {
-    log("— diagnosis ——————————————————————————————");
-    log(`build ${__BUILD_ID__}`);
+  const diagnose = (): string => {
+    /**
+     * E9-170 — IT GOES WHEREVER THE READER IS LOOKING.
+     *
+     * The first version only wrote to the page's log. Somebody typed
+     * `__norns.diagnose()` in the devtools console, saw `undefined`
+     * printed back, and reported that it did not work — while the
+     * block sat at the bottom of the log pane behind the console. Both
+     * halves of that are my doing: a command typed in a console that
+     * answers somewhere else has not worked, whatever it did.
+     *
+     * So the lines go to the page log (which is what gets copied off a
+     * phone), to `console.log` (which is where somebody who typed this
+     * is looking), and back as the return value (so a console that
+     * prints return values shows it too).
+     */
+    const lines: string[] = [];
+    const say = (l: string): void => {
+      lines.push(l);
+      log(l);
+    };
+    say("— diagnosis ——————————————————————————————");
+    say(`build ${__BUILD_ID__}`);
     const st = audioStatus();
-    log(
+    say(
       `audio: master ${settings.muted ? "MUTED" : `${settings.volumeDb} dB`}` +
         `, context ${audioContext?.state ?? "none"}` +
         `, ${audioContext ? Math.round(audioContext.sampleRate) : 0} Hz`,
     );
-    log(`crone vu (last 3 s): ${describeVu(vuLast)}`);
-    log(
+    /**
+     * E9-169 — WITH THE NUMBER OF READINGS BEHIND IT.
+     *
+     * "all zero" and "nobody said anything" print identically without
+     * it, and they mean opposite things: one is a mixer passing
+     * silence, the other is an audio thread that has stopped talking.
+     */
+    say(
+      `crone vu (last 3 s, ${vuLast.polls} reading(s)): ${describeVu(vuLast)}` +
+        (vuHeardEver ? "" : " — crone has never reported a level"),
+    );
+    say(
       `scsynth: ${st === null ? "no /status reply yet" : `${st.avgCpu.toFixed(0)}% avg, ${st.peakCpu.toFixed(0)}% peak, ${st.synths} synths, ${st.ugens} ugens`}`,
     );
     const l = audioLoad;
-    log(
+    say(
       `crone dsp: ${l === null ? "nothing reported yet" : `${l.meanMs.toFixed(2)} ms of ${l.budgetMs.toFixed(2)} ms a block`}`,
     );
-    log(`script loaded: ${scriptIsLoaded ? "yes" : "no"}`);
-    log(`cpu: ${Math.round(cpuMeter.percent)}% of the main thread, ${cpuMeter.windows} window(s) measured`);
+    say(`script loaded: ${scriptIsLoaded ? "yes" : "no"}`);
+    say(`cpu: ${Math.round(cpuMeter.percent)}% of the main thread, ${cpuMeter.windows} window(s) measured`);
     const frames = describeFrames(frameLoad.load());
-    log(frames ?? "frames: none over 50 ms");
+    say(frames ?? "frames: none over 50 ms");
     const costs = callCosts().filter((c) => c.ms >= 1);
-    log(
+    say(
       costs.length === 0
         ? "instrumented: nothing has cost a millisecond"
         : `instrumented: ${costs
@@ -1402,9 +1626,13 @@ async function main(): Promise<void> {
             .map((c) => `${c.path} ${sayCost(c)} over ${c.calls}`)
             .join(" · ")}`,
     );
-    log(`storage: ${vfs.walk("/home/we/dust").length} file(s) under ~/dust`);
-    log(`drawing at ${drawingRatio()}x (device ${globalThis.devicePixelRatio ?? 1}x)`);
-    log("————————————————————————————————————————");
+    say(`storage: ${vfs.walk("/home/we/dust").length} file(s) under ~/dust`);
+    say(`drawing at ${drawingRatio()}x (device ${globalThis.devicePixelRatio ?? 1}x)`);
+    say("————————————————————————————————————————");
+    const block = lines.join("\n");
+    // eslint-disable-next-line no-console
+    console.log(block);
+    return block;
   };
 
   const reportFrames = (): void => {
@@ -1576,6 +1804,14 @@ async function main(): Promise<void> {
       cpuSaidAt = performance.now();
     }
     cb.stat(freeMb, 0, main, main, 0, 0, 0);
+    // E9-183 — scsynth's own reading of itself, into the phase window.
+    // Keyed on the reply's timestamp so a second that brought no answer
+    // does not count the previous one again.
+    const sc = audioStatus();
+    if (sc !== null && sc.at !== scStatusAt) {
+      scStatusAt = sc.at;
+      foldScsynth(dspPhase, sc.avgCpu, sc.peakCpu);
+    }
     // One round trip a second, beside the disk poll that was already here.
     // The answer lands in `engine.status` and is read by
     // `audio_get_cpu_load`.
@@ -1587,6 +1823,78 @@ async function main(): Promise<void> {
   // `audio_get_xrun_count`, which norns' home overlay turns into `!!!`.
   let xruns = 0;
   host.registry.implement("audio_get_xrun_count", () => [xruns]);
+
+  /**
+   * E9-182 — what a sleeping page cost, summed and said once it stops.
+   *
+   * `backlogRuns` counts the drains that found a backlog, not the ticks:
+   * a throttled page produces one per wake-up, and sixty log lines
+   * saying the same thing is how an instrument buries its own finding.
+   */
+  let backlogDropped = 0;
+  let backlogRuns = 0;
+  let backlogAt = 0;
+  setInterval(() => {
+    if (backlogRuns === 0 || performance.now() - backlogAt < 2000) return;
+    log(
+      `clock: caught up — ${backlogDropped} metro tick(s) skipped over ` +
+        `${backlogRuns} gap(s). Nothing was replayed.`,
+    );
+    backlogDropped = 0;
+    backlogRuns = 0;
+  }, 1000);
+
+  /**
+   * E9-176 — ONE PHASE'S WORTH OF ACCOUNT, ON REQUEST FROM LUA.
+   *
+   * `src/lua/norns-js/bench.lua` runs one kind of work at a time —
+   * screen, grid, engine, softcut, plain callbacks — and the
+   * instruments all report ONE running total. Without a way to clear
+   * that total between phases, a sixty-second run produces one blended
+   * number and the whole point of the script is lost.
+   *
+   * So the script says where it is, and this answers with what has been
+   * spent since it last said anything: the instrumented account, the
+   * levels crone measured, and any long frames. Then it clears all
+   * three, so the next phase starts from zero.
+   *
+   * IT IS NOT FOR SCRIPTS IN GENERAL. Nothing in norns has this; a
+   * community script calling it gets a line in the log and no harm.
+   * It exists because the alternative is reading a sixty-second total
+   * and guessing which phase it came from, which is the mistake this
+   * whole file has been correcting for five releases.
+   */
+  host.registry.implement("profile_mark", (label) => {
+    const what = String(label ?? "");
+    const spentMs = performance.now() - markAt;
+    markAt = performance.now();
+    log(`mark: ${what} — ${(spentMs / 1000).toFixed(1)} s`);
+    const costs = callCosts().filter((c) => c.ms >= 1);
+    log(
+      costs.length === 0
+        ? "  instrumented: nothing reached a millisecond"
+        : `  instrumented: ${costs
+            .slice(0, 6)
+            .map((c) => `${c.path} ${sayCost(c)} over ${c.calls}`)
+            .join(" · ")}`,
+    );
+    // E9-180 — the peak over THIS phase, and how many polls it is made
+    // of. A zero out of 160 readings is a phase that was silent; a zero
+    // out of none is a phase whose levels never arrived, and the two
+    // were indistinguishable in every reading taken before now.
+    log(`  levels: ${describeVu(vuPhase)} — ${vuPhase.polls} reading(s)`);
+    vuPhase = emptyVu();
+    // E9-183 — the thread that was doing the work the whole time. Six
+    // softcut voices used to report `metro 1 ms over 80`, which is the
+    // phase timer and nothing else.
+    log(`  audio thread: ${describeAudioLoad(dspPhase)}`);
+    dspPhase = emptyAudioLoad();
+    const frames = describeFrames(frameLoad.load());
+    log(`  ${frames ?? "frames: none over 50 ms"}`);
+    resetCallCosts();
+    frameLoad.reset();
+    return [];
+  });
 
   // --- the battery, when the machine has one -----------------------------
   //
@@ -2900,8 +3208,8 @@ async function main(): Promise<void> {
       // shipped. Without that list every script that asks for a built-in
       // engine was reported as short of it, in the same sentence as a
       // dependency that really was missing.
-      needs: (name, entries) =>
-        needsOf(vfs, name, entries, "/home/we/dust", liveEngines()),
+      needs: (name, entries, absent) =>
+        needsOf(vfs, name, entries, "/home/we/dust", liveEngines(), absent ?? []),
       remove: (name) => {
         const dir = `/home/we/dust/code/${name}`;
         for (const p of vfs.walk(dir)) vfs.remove(p);
@@ -3014,10 +3322,12 @@ async function main(): Promise<void> {
       dirty = true;
     },
     midiRemove: (id) => void cb.midiRemove(id),
+    // E9-179 — no `dirty`: a controller sending a stream of CCs was
+    // repainting the screen per message. What the script draws in
+    // response reaches the canvas through `screen.update()`.
     midiEvent: (id, bytes) => {
       const e = cb.midiEvent(id, bytes);
       if (e) log(`midi.event: ${e.message}`);
-      dirty = true;
     },
     // Every device with clock reception enabled feeds the same source, which
     // is matron's arrangement too: `clock_midi_handle_message` is global and
@@ -3208,10 +3518,9 @@ async function main(): Promise<void> {
     let engine = (scEngine = await createEngineHost({
       log: (l) => log(l),
       soundFiles,
-      onMatron: (m) => {
-        engineState?.onMatron(m.address, m.args);
-        dirty = true;
-      },
+      // E9-179 — no `dirty`: a poll reply is not a drawing. `engineState`
+      // is read by Lua, and Lua redrawing ends in `screen.update()`.
+      onMatron: (m) => void engineState?.onMatron(m.address, m.args),
       // The browser is holding the engine until somebody touches the page.
       // The log already says so, but a console nobody has opened is not an
       // answer to a page that looks stalled.
@@ -3262,10 +3571,7 @@ async function main(): Promise<void> {
         engine = scEngine = await createEngineHost({
           log: (l) => log(l),
           soundFiles,
-          onMatron: (m) => {
-            engineState?.onMatron(m.address, m.args);
-            dirty = true;
-          },
+          onMatron: (m) => void engineState?.onMatron(m.address, m.args),
           onNeedsGesture: (waiting) => void (needsGesture = waiting, showGate()),
           extraClasses,
         });
@@ -3404,6 +3710,9 @@ async function main(): Promise<void> {
         // else. `__norns.load` is where to read it.
         onLoad: (l) => {
           croneLoad = l;
+          // E9-183 — and into the phase window, which is the only place
+          // softcut's cost has ever been visible from.
+          foldCrone(dspPhase, l);
           // What `_norns.audio_get_cpu_load` and `_norns.audio_get_xrun_count`
           // answer with (E5-24). The xruns accumulate and are cleared by a
           // read, because that is what jack's counter does.
@@ -3414,6 +3723,30 @@ async function main(): Promise<void> {
       });
       registerCrone(host.registry, crone, {
         log: (l) => log(l),
+        /**
+         * E9-173 — SAID ONCE, WHEN A SCRIPT ASKS FOR AN INPUT THAT IS OFF.
+         *
+         * `mlr` and `oooooo` are live loopers: they record whatever is
+         * coming in and play that back, and they ship no sound of their
+         * own. On a norns there is always an input. Here it is off until
+         * somebody turns it on, so both load perfectly, draw their
+         * interface, answer every key, and are silent for ever — which
+         * was reported twice as "no sound, but maybe I don't know how to
+         * use it". Both times the answer was that the instrument was
+         * right and nothing told them.
+         *
+         * Once per script, because these call it per voice and per
+         * channel — `oooooo` does it twelve times in one pass.
+         */
+        onWantsInput: () => {
+          if (settings.audioInOn || saidInputIsOff) return;
+          saidInputIsOff = true;
+          log(
+            "audio: this script records from the audio INPUT, and the input is off — " +
+              "it will stay silent until you turn it on in the gear (the browser will " +
+              "ask for a microphone). A looper ships no sound of its own.",
+          );
+        },
         files: {
           vfs,
           paths: tapePaths,
@@ -3504,6 +3837,9 @@ async function main(): Promise<void> {
         context: ctx,
         sendToServer: (a, g) => engine.sendToServer(a, g as never),
         sendToLang: (a, g) => engine.sendToLang(a, g as never),
+        // E9-171 — so "the buffer is ready" means the server has it.
+        syncServer: (ms) => engine.syncServer(ms),
+        peekBuffer: (b, i, n, ms) => engine.peekBuffer(b, i, n, ms),
         log: (l) => log(l),
       }),
       onReady: () => {
@@ -3514,14 +3850,12 @@ async function main(): Promise<void> {
     // The clock, on the engine's context.
     const clock = await createWorkletClock({
       context: ctx,
-      onMetro: (idx, stage) => {
-        cb.metro(idx, stage);
-        dirty = true;
-      },
-      onClock: (id, beat) => {
-        cb.clockResume(id, beat);
-        dirty = true;
-      },
+      // E9-179 — NO `dirty` HERE, and this pair is why the rule exists.
+      // A metro fires up to a hundred times a second and draws nothing;
+      // the Lua it calls draws, and Lua that draws ends in
+      // `screen.update()`. See `present` for the measurement.
+      onMetro: (idx, stage) => void cb.metro(idx, stage),
+      onClock: (id, beat) => void cb.clockResume(id, beat),
       onStall: (seconds) => {
         // E9-112 — A STALL IS WHAT AN XRUN IS HERE.
         //
@@ -3532,6 +3866,26 @@ async function main(): Promise<void> {
         // same event seen from the other side.
         xruns++;
         log(`clock: ${seconds.toFixed(2)} s of wall time with no audio behind it`);
+      },
+      /**
+       * E9-182 — SAID ONCE A RUN OF THEM, not once a drain.
+       *
+       * A page that is being throttled produces one of these every time
+       * it is allowed to wake, so the honest report is the total over
+       * the run rather than a line a second. The first is immediate,
+       * because the first is the one that explains a script that has
+       * just jumped; the rest are summed and said when it settles.
+       */
+      onBacklog: (dropped, gapMs) => {
+        backlogDropped += dropped;
+        backlogRuns++;
+        if (backlogRuns === 1) {
+          log(
+            `clock: ${(gapMs / 1000).toFixed(1)} s with nothing reading the clock — ` +
+              `${dropped} metro tick(s) skipped rather than fired in a burst`,
+          );
+        }
+        backlogAt = performance.now();
       },
     });
     liveClock = clock;

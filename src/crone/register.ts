@@ -123,6 +123,13 @@ export interface CroneRegisterOptions {
   readonly onStub?: (name: string, why: string) => void;
   readonly log?: (line: string) => void;
   /**
+   * Called when a script opens the audio input into a softcut voice.
+   *
+   * E9-173 — the caller knows whether there IS an input; this file only
+   * knows that something just asked for one.
+   */
+  readonly onWantsInput?: () => void;
+  /**
    * What the sixteen file-touching functions need.
    *
    * `decode` is separate from an AudioContext on purpose: in a browser it is
@@ -168,6 +175,22 @@ export function registerCrone(
       );
     }
     registry.implement(entry.name, (...args) => {
+      /**
+       * E9-173 — A LOOPER WITH NOTHING TO LOOP SAYS NOTHING ON ITS OWN.
+       *
+       * `level_input_cut(channel, voice, amp)` is how a script opens the
+       * audio INPUT into a softcut voice, and it is the whole basis of
+       * `mlr` and `oooooo`: neither has an engine worth the name, and
+       * everything they play they first record from what is coming in.
+       *
+       * On a norns there is always an input. In a browser tab it is OFF
+       * until somebody turns it on and grants a microphone, so these
+       * load, draw, answer every key, and stay silent for ever. Both
+       * were reported as "no sound, but maybe I don't know how to use
+       * it" — and the person asking was right, which is the worst way
+       * to find out something is missing.
+       */
+      if (entry.name === "level_input_cut" && Number(args[2]) > 0) opts.onWantsInput?.();
       crone.command(post.id as never, ...args.map(Number));
     });
   }
@@ -589,6 +612,16 @@ export function croneTapeWriter(
  * both places gives a voice that exists and is the wrong one.
  */
 export function croneEvents(cb: Callbacks, log: (line: string) => void = () => {}): CroneEvents {
+  /** The last tape reading handed to Lua, and when. E9-174. */
+  let lastTape: {
+    playState: number;
+    playPos: number;
+    playLen: number;
+    recState: number;
+    recPos: number;
+    loop: number;
+  } | null = null;
+  let lastTapeAt = 0;
   return {
     vu: (levels) => {
       const err = cb.vu(levels);
@@ -608,7 +641,41 @@ export function croneEvents(cb: Callbacks, log: (line: string) => void = () => {
       // which looks like a rendering bug rather than an argument order.
       cb.softcutRender(r.channel, r.start, r.secPerSample, Array.from(r.samples));
     },
+    /**
+     * E9-174 — TWENTY A SECOND, FOR A TAPE THAT IS NOT RUNNING.
+     *
+     * `MixerClient.cpp:62` sets the tape poll to 50 ms and crone sends
+     * it whether or not anything is playing or recording. Every one of
+     * them crossed into Lua, which is a `lua_pcall` and six pushes.
+     *
+     * Measured on a Pixel 9 Pro running `molly_the_poly`, which has no
+     * tape in it at all:
+     *
+     *     105 ms over 1559 calls   tape_status
+     *     110 ms over  595 calls   draw:grid
+     *
+     * — the same cost as rendering the whole grid, spent reporting six
+     * numbers that never changed.
+     *
+     * So an identical reading is dropped. A HEARTBEAT KEEPS IT HONEST:
+     * at least one call every two seconds whatever happens, because a
+     * consumer that has reset its own state and is waiting to be told
+     * where the tape is would otherwise wait for ever — and this file
+     * cannot know whether there is one.
+     */
     tapeStatus: (s) => {
+      const now = Date.now();
+      const same =
+        lastTape !== null &&
+        lastTape.playState === s.playState &&
+        lastTape.playPos === s.playPos &&
+        lastTape.playLen === s.playLen &&
+        lastTape.recState === s.recState &&
+        lastTape.recPos === s.recPos &&
+        lastTape.loop === s.loop;
+      if (same && now - lastTapeAt < 2000) return;
+      lastTape = { ...s };
+      lastTapeAt = now;
       cb.tapeStatus(s.playState, s.playPos, s.playLen, s.recState, s.recPos, s.loop);
     },
     tapeFile: (kind) => {

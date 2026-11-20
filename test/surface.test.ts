@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 import surface from "../src/api/surface.json" with { type: "json" };
 import { STUBS, stubFor, stubReturns } from "../src/api/stubs.js";
-import { checkStubArity, SURFACE } from "../src/norns/install.js";
+import { checkStubArity, EXTRAS, SURFACE } from "../src/norns/install.js";
 
 describe("the _norns surface", () => {
   it("is 178 functions, which is 174 direct registrations plus 4 from a table literal", () => {
@@ -91,5 +91,34 @@ describe("stub return contracts", () => {
     for (const [name, spec] of Object.entries(STUBS)) {
       expect(spec.why.length, `${name} needs a reason`).toBeGreaterThan(20);
     }
+  });
+});
+
+// E9-176 — the one function this port has that a norns does not.
+//
+// `surface.json` stays DERIVED from norns' C, which is what makes "178
+// functions" a count rather than an opinion. Anything this port adds is
+// listed separately so it is obviously an addition, and the invariant
+// worth guarding is that the two never mix: an extra that crept into
+// the derived list would quietly turn the coverage test above into a
+// tautology.
+//
+// That it actually reaches Lua was verified in a running page —
+// `type(_norns.profile_mark)` answers "function" — which a test without
+// a Lua state cannot say.
+describe("what this port adds to _norns", () => {
+  it("names at least the one the bench needs", () => {
+    expect(EXTRAS.map((e) => e.name)).toContain("profile_mark");
+  });
+
+  it("keeps them out of the derived surface", () => {
+    const derived = new Set(SURFACE.map((e) => e.name));
+    for (const e of EXTRAS) {
+      expect(derived.has(e.name), `${e.name} is in surface.json and should not be`).toBe(false);
+    }
+  });
+
+  it("does not change what the derived count is", () => {
+    expect(SURFACE).toHaveLength(178);
   });
 });

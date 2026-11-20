@@ -86,9 +86,28 @@ export function describeVu(w: VuWindow): string {
  * faults whether or not a script is running — a mixer that eats its own
  * input is broken at idle too.
  */
-export function judgeVu(w: VuWindow, scriptLoaded: boolean, quietForMs: number): string | null {
+export interface Verdict {
+  /**
+   * What KIND of trouble this is, for rate limiting.
+   *
+   * E9-172 — SEPARATE FROM THE SENTENCE, because the sentence carries
+   * an elapsed time and so is never equal to the last one. The caller
+   * compared whole strings and its thirty-second quiet period
+   * therefore never once applied: a log from a silent `amen` carries
+   * fifty copies of the same finding, three seconds apart, and one
+   * from `mlr` — which is a live looper and legitimately silent until
+   * something is fed to it — carries a dozen.
+   */
+  readonly kind: "stopped" | "mixer-eats-it" | "nothing-arrives";
+  readonly line: string;
+}
+
+export function judgeVu(w: VuWindow, scriptLoaded: boolean, quietForMs: number): Verdict | null {
   if (w.polls === 0) {
-    return "audio: crone has stopped reporting its levels — the audio thread may be gone";
+    return {
+      kind: "stopped",
+      line: "audio: crone has stopped reporting its levels — the audio thread may be gone",
+    };
   }
   // A stage producing into an output that is flat. There is no reading of
   // this that is not a fault.
@@ -98,17 +117,21 @@ export function judgeVu(w: VuWindow, scriptLoaded: boolean, quietForMs: number):
     if (w.cutMax > 0) sources.push(`softcut ${w.cutMax}`);
     if (w.tapeMax > 0) sources.push(`tape ${w.tapeMax}`);
     if (sources.length > 0) {
-      return (
-        `audio: ${sources.join(", ")} of 64 reaching the mixer and NOTHING leaving it — ` +
-        `the mixer is not passing it through (level_ext, level_dac, or the output stage)`
-      );
+      return {
+        kind: "mixer-eats-it",
+        line:
+          `audio: ${sources.join(", ")} of 64 reaching the mixer and NOTHING leaving it — ` +
+          `the mixer is not passing it through (level_ext, level_dac, or the output stage)`,
+      };
     }
     if (scriptLoaded && quietForMs >= 15000) {
-      return (
-        `audio: nothing has reached the mixer for ${(quietForMs / 1000).toFixed(0)} s ` +
-        `with a script loaded — engine, softcut and tape are all flat, so whatever ` +
-        `is playing is not arriving at crone`
-      );
+      return {
+        kind: "nothing-arrives",
+        line:
+          `audio: nothing has reached the mixer for ${(quietForMs / 1000).toFixed(0)} s ` +
+          `with a script loaded — engine, softcut and tape are all flat. A script that ` +
+          `plays nothing until you feed it, like a live looper, looks exactly like this.`,
+      };
     }
   }
   return null;

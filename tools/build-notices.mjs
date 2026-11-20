@@ -337,6 +337,29 @@ function build() {
   return out.join("\n") + "\n";
 }
 
+// E9-186 — WHAT THIS NEEDS TO READ, BEFORE IT READS IT.
+//
+// `--needs` prints one path per line and reads nothing. It exists for
+// `release-kit/2-build.ps1`, which checks that a publishing machine has
+// the parts of `third_party/` the steps below it will want — a check
+// written after the fourth time a step died in the middle of a build on
+// a file that was not there.
+//
+// It named ONE of the eighteen licence files this reads. The fifth time
+// was `third_party/portedplugins/LICENSE`, and the symptom was a raw
+// node stack trace after the wasm had already been carried and the lua
+// rebuilt. A hand-kept list in the other file could only ever go stale
+// again, so the list is derived from the same COMPONENTS table that
+// does the reading.
+if (process.argv.includes("--needs")) {
+  const seen = new Set();
+  for (const c of COMPONENTS) {
+    seen.add(c.licence === null ? c.from : "third_party/" + c.licence);
+  }
+  process.stdout.write([...seen].join("\n") + "\n");
+  process.exit(0);
+}
+
 const body = build();
 if (process.argv.includes("--check")) {
   let have = "";

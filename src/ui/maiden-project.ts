@@ -59,7 +59,12 @@ export interface MaidenProjectOptions {
    * means reading the dust tree and this module has no filesystem — the
    * same division that keeps `install` and `remove` outside.
    */
-  readonly needs?: (name: string, entries: readonly CatalogEntry[]) => Need[];
+  readonly needs?: (
+    name: string,
+    entries: readonly CatalogEntry[],
+    /** Answer as if these projects were not installed. E9-184. */
+    absent?: readonly string[],
+  ) => Need[];
   readonly log?: (line: string) => void;
 }
 
@@ -122,6 +127,27 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
   const updateAll = el("button", "mdn-proj-go", "update all");
   updateAll.type = "button";
   /**
+   * E9-184 — SEVERAL AT ONCE, on the installed tab.
+   *
+   * maiden has `update all` and nothing between that and one row at a
+   * time. Removing nine of eleven scripts is nine confirmations, and
+   * updating a chosen handful is not possible at all: the choice is one
+   * or the whole shelf.
+   *
+   * `update selected` goes through the SAME queue as everything else —
+   * three workers, one strip of progress rows, one cancel — so picking
+   * six is six parallel installs and not a new installer. `remove
+   * selected` is one dialogue over a list instead of a list of
+   * dialogues; the deletion itself is synchronous work in the VFS, so
+   * there is nothing to run in parallel there and nothing is pretended.
+   */
+  const updateSel = el("button", "mdn-proj-go", "update selected");
+  updateSel.type = "button";
+  const removeSel = el("button", "mdn-proj-go mdn-proj-del", "remove selected");
+  removeSel.type = "button";
+  const removeAll = el("button", "mdn-proj-go mdn-proj-del", "remove all");
+  removeAll.type = "button";
+  /**
    * Give up.
    *
    * ONLY ON SCREEN WHILE SOMETHING IS RUNNING, because a cancel button
@@ -133,7 +159,7 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
   const cancelButton = el("button", "mdn-proj-go mdn-proj-cancel", "cancel");
   cancelButton.type = "button";
   cancelButton.hidden = true;
-  toolbar.append(query, urlInput, urlGo, updateAll, cancelButton);
+  toolbar.append(query, urlInput, urlGo, updateAll, removeAll, updateSel, removeSel, cancelButton);
 
   const list = el("div", "mdn-proj-list");
   const note = el("div", "mdn-proj-note");
@@ -270,6 +296,16 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
   let loading = false;
   let tab: "installed" | "available" = "installed";
   let busy = false;
+  /**
+   * Which installed projects are ticked. E9-184.
+   *
+   * By the name `installed()` reports, which is the directory under
+   * `code/` and the only name both the catalogue and the filesystem
+   * agree on. Pruned on every draw of the installed tab rather than
+   * cleaned up by whatever removed something: a name that is no longer
+   * on disk must not be able to sit in here and be removed again.
+   */
+  const selected = new Set<string>();
   /** Waiting their turn, in the order they were asked for. */
   let queue: CatalogEntry[] = [];
   /**
@@ -427,6 +463,83 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     offCatalogueEntry(name);
 
   /**
+   * E9-184 — WHO ELSE IS USING THE THING YOU ARE ABOUT TO DELETE.
+   *
+   * Twenty-eight of the catalogue's entries are LIBRARIES for other
+   * entries, installed as projects of their own and indistinguishable in
+   * the list from the scripts that use them. Removing one at a time, that
+   * is a mistake you make once and notice when a script stops loading.
+   * Removing nine at a time with one tick each, it is a mistake you make
+   * without ever seeing the name go by.
+   *
+   * So the question is asked the other way round — not "what does this
+   * need" but "what still here needs this" — against the projects that
+   * would REMAIN. `needsOf` is the same reader the installer uses, so a
+   * dependency it cannot see here is one it could not see there either,
+   * and the two cannot disagree about what counts as needing something.
+   *
+   * Returns what would be stranded, by the project that would strand it.
+   * Empty when nothing would be, which is the common case and prints as
+   * the plain confirmation it was before.
+   */
+  const strandedBy = (going: readonly string[]): Array<[string, string[]]> => {
+    const needs = opts.needs;
+    if (needs === undefined || catalog === null) return [];
+    const gone = new Set(going.map((n) => n.toLowerCase()));
+    const out: Array<[string, string[]]> = [];
+    for (const name of opts.installed()) {
+      if (gone.has(name.toLowerCase())) continue;
+      const lost = new Set<string>();
+      // `going` passed as absent: the answer is what this project would
+      // be short of AFTER the deletion, which is the only form of the
+      // question that can be asked before it happens.
+      for (const need of needs(name, catalog.entries, going)) {
+        // `entry` is the catalogue name, `want` the raw one — a need the
+        // catalogue cannot name is still a need, and an off-catalogue
+        // library is installed under the name it asked for.
+        const by = need.entry?.name ?? need.want;
+        if (gone.has(by.toLowerCase())) lost.add(by);
+      }
+      if (lost.size > 0) out.push([name, [...lost]]);
+    }
+    return out;
+  };
+
+  /**
+   * The sentence that asks, with the warning folded in when there is one.
+   *
+   * ONE DIALOGUE, not two. A second "are you sure" after the first is a
+   * thing people learn to click through, and then the warning is worth
+   * less than nothing.
+   */
+  const askToRemove = (names: readonly string[], then: () => void): void => {
+    const what =
+      names.length === 1
+        ? `delete ${names[0]}?`
+        : `delete these ${names.length}? ${names.join(", ")}.`;
+    const stranded = strandedBy(names);
+    const warn =
+      stranded.length === 0
+        ? ""
+        : (stranded.length === 1
+            ? " one project that stays would lose something it uses — "
+            : ` ${stranded.length} projects that stay would lose something they use — `) +
+          `${stranded.map(([who, lost]) => `${who} needs ${lost.join(" and ")}`).join("; ")}.`;
+    confirm(`${what}${warn} this cannot be undone.`, "delete", then);
+  };
+
+  /** Delete a list and say so once, rather than once each. */
+  const removeNames = (names: readonly string[]): void => {
+    for (const name of names) {
+      opts.remove(name);
+      selected.delete(name);
+    }
+    log(`maiden: removed ${names.join(", ")}`);
+    say(names.length === 1 ? `removed ${names[0]}` : `removed ${names.length} projects`);
+    draw();
+  };
+
+  /**
    * What one row's button says, and what pressing it would do.
    *
    * `installed` is read from the tree when the list is drawn and passed in,
@@ -490,16 +603,59 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     urlInput.hidden = tab !== "available";
     urlGo.hidden = tab !== "available";
     updateAll.hidden = tab !== "installed" || busy;
+    // Hidden by default and shown again by the installed branch, so the
+    // available tab cannot be left holding a selection's buttons.
+    removeAll.hidden = true;
+    updateSel.hidden = true;
+    removeSel.hidden = true;
     cancelButton.hidden = !busy;
     cancelButton.textContent =
       queue.length + running.size > 1 ? `cancel all (${queue.length + running.size})` : "cancel";
 
     if (tab === "installed") {
       const names = opts.installed().sort();
+      // A tick on a project that is no longer on disk would be a delete
+      // of nothing, or worse an update of it.
+      for (const picked of [...selected]) {
+        if (!names.includes(picked)) selected.delete(picked);
+      }
+      const picks = names.filter((n) => selected.has(n));
+      const pickedUpdatable = picks.filter((n) => entryFor(n) !== null);
       updateAll.disabled = busy || names.every((n) => entryFor(n) === null);
+      removeAll.hidden = busy || names.length === 0;
+      removeAll.disabled = busy;
+      removeAll.textContent = `remove all (${names.length})`;
+      updateSel.hidden = busy || picks.length === 0;
+      updateSel.disabled = busy || pickedUpdatable.length === 0;
+      updateSel.textContent = `update ${picks.length} selected`;
+      updateSel.title =
+        pickedUpdatable.length === picks.length
+          ? "fetch them again, overwriting your changes to them"
+          : `${picks.length - pickedUpdatable.length} of them are not in the catalogue, so there is nothing to update them from`;
+      removeSel.hidden = busy || picks.length === 0;
+      removeSel.disabled = busy;
+      removeSel.textContent = `remove ${picks.length} selected`;
       for (const name of names) {
         const entry = entryFor(name);
         const row = el("div", "mdn-proj-row");
+        if (selected.has(name)) row.dataset["picked"] = "1";
+
+        // A REAL CHECKBOX, not a div that looks like one: it is what a
+        // keyboard reaches with Tab and Space, what a screen reader calls
+        // a checkbox, and what the pointer already knows how to hit.
+        const pick = el("input", "mdn-proj-pick");
+        pick.type = "checkbox";
+        pick.checked = selected.has(name);
+        pick.disabled = busy;
+        pick.setAttribute("aria-label", `select ${name}`);
+        const toggle = (on: boolean): void => {
+          if (on) selected.add(name);
+          else selected.delete(name);
+          draw();
+        };
+        pick.addEventListener("change", () => toggle(pick.checked), { signal });
+        row.append(pick);
+
         const left = el("div", "mdn-proj-left");
         left.append(el("span", "mdn-proj-name", name));
         if (entry !== null) left.append(el("span", "mdn-proj-by", entry.author));
@@ -507,6 +663,17 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
         if (short.length > 0) {
           left.append(el("span", "mdn-proj-short", short.join(" · ")));
         }
+        // The text is part of the target too — a 13px tickbox is not a
+        // phone-sized thing to aim at, and the row has nothing else to do
+        // when it is clicked.
+        left.addEventListener(
+          "click",
+          () => {
+            if (busy) return;
+            toggle(!selected.has(name));
+          },
+          { signal },
+        );
         row.append(left);
 
         const update = el("button", "mdn-proj-act", "update");
@@ -534,14 +701,9 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
         remove.disabled = busy;
         remove.addEventListener(
           "click",
-          () => {
-            confirm(`delete ${name}? this cannot be undone.`, "delete", () => {
-              opts.remove(name);
-              log(`maiden: removed ${name}`);
-              say(`removed ${name}`);
-              draw();
-            });
-          },
+          // Through the same two as the selection, so one row gets the
+          // same warning about what else was using it. E9-184.
+          () => askToRemove([name], () => removeNames([name])),
           { signal },
         );
         row.append(update, remove);
@@ -1022,6 +1184,59 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
         `update all ${entries.length}? anything you changed in them is overwritten.`,
         "update all",
         () => enqueue(entries),
+      );
+    },
+    { signal },
+  );
+
+  // --- E9-184: the selection's three buttons -------------------------------
+
+  updateSel.addEventListener(
+    "click",
+    () => {
+      const entries = opts
+        .installed()
+        .filter((n) => selected.has(n))
+        .map((n) => entryFor(n))
+        .filter((e): e is CatalogEntry => e !== null);
+      if (entries.length === 0) return;
+      confirm(
+        `update ${entries.length}? ${entries.map((e) => e.name).join(", ")} — ` +
+          `anything you changed in them is overwritten.`,
+        "update",
+        // The ordinary queue: three at a time, one strip of progress, one
+        // cancel for the lot. Nothing here knows it is a selection.
+        () => enqueue(entries),
+      );
+    },
+    { signal },
+  );
+
+  removeSel.addEventListener(
+    "click",
+    () => {
+      const names = opts.installed().filter((n) => selected.has(n));
+      if (names.length === 0) return;
+      askToRemove(names, () => removeNames(names));
+    },
+    { signal },
+  );
+
+  removeAll.addEventListener(
+    "click",
+    () => {
+      const names = opts.installed();
+      if (names.length === 0) return;
+      // NO DEPENDENCY WARNING HERE, and not because it was forgotten:
+      // nothing remains to be stranded. What this one has to say instead
+      // is how much is going, because `remove all` is one press away from
+      // an empty `code/` and the list it empties is off screen above the
+      // button.
+      confirm(
+        `delete all ${names.length} installed projects? ${names.join(", ")}. ` +
+          `this cannot be undone.`,
+        "delete all",
+        () => removeNames(names),
       );
     },
     { signal },

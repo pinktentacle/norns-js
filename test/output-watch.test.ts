@@ -77,15 +77,17 @@ describe("the verdict", () => {
 
   // The case three rounds of this were spent on.
   it("names the mixer when the engine is producing and nothing leaves", () => {
-    const line = judgeVu(window([vu({ eng: 33, out: 0 })]), true, 0)!;
+    const v = judgeVu(window([vu({ eng: 33, out: 0 })]), true, 0)!;
+    const line = v.line;
+    expect(v.kind).toBe("mixer-eats-it");
     expect(line).toContain("engine 33");
     expect(line).toContain("NOTHING leaving it");
     expect(line).toContain("level_ext");
   });
 
   it("names softcut and tape the same way", () => {
-    expect(judgeVu(window([vu({ cut: 12, out: 0 })]), true, 0)).toContain("softcut 12");
-    expect(judgeVu(window([vu({ tape: 9, out: 0 })]), true, 0)).toContain("tape 9");
+    expect(judgeVu(window([vu({ cut: 12, out: 0 })]), true, 0)!.line).toContain("softcut 12");
+    expect(judgeVu(window([vu({ tape: 9, out: 0 })]), true, 0)!.line).toContain("tape 9");
   });
 
   // A quiet script is not a fault and this cannot know what a script
@@ -97,15 +99,17 @@ describe("the verdict", () => {
   });
 
   it("mentions a long silence only once a script is loaded and it has lasted", () => {
-    const line = judgeVu(window([vu({})]), true, 20_000)!;
-    expect(line).toContain("20 s");
-    expect(line).toContain("not arriving at crone");
+    const v = judgeVu(window([vu({})]), true, 20_000)!;
+    expect(v.kind).toBe("nothing-arrives");
+    expect(v.line).toContain("20 s");
+    expect(v.line).toContain("live looper");
   });
 
   // A poll that has stopped is not a silent page, it is a dead audio
   // thread, and those need different answers.
   it("says when crone has stopped reporting at all", () => {
-    expect(judgeVu(emptyVu(), true, 0)).toContain("stopped reporting");
+    expect(judgeVu(emptyVu(), true, 0)!.kind).toBe("stopped");
+    expect(judgeVu(emptyVu(), true, 0)!.line).toContain("stopped reporting");
   });
 });
 
@@ -113,5 +117,29 @@ describe("the line it prints for a person", () => {
   it("reads as a path through the mixer", () => {
     const line = describeVu(window([vu({ in: 1, eng: 2, cut: 3, tape: 4, mon: 5, out: 6 })]));
     expect(line).toBe("in 1, engine 2, softcut 3, tape 4, monitor 5 → out 6 (of 64)");
+  });
+});
+
+// E9-172 — the kind is what a caller rate-limits on.
+//
+// The sentence carries an elapsed time, so two readings of the same
+// finding three seconds apart are never equal as strings. A caller that
+// compared whole sentences printed fifty copies of one finding into a
+// log that was already hard to read.
+describe("telling two findings apart without reading them", () => {
+  it("gives the same kind for the same finding at different times", () => {
+    const a = judgeVu(window([vu({})]), true, 20_000)!;
+    const b = judgeVu(window([vu({})]), true, 50_000)!;
+    expect(a.line).not.toBe(b.line);
+    expect(a.kind).toBe(b.kind);
+  });
+
+  it("gives different kinds for different findings", () => {
+    const kinds = new Set([
+      judgeVu(window([vu({ eng: 20, out: 0 })]), true, 0)!.kind,
+      judgeVu(window([vu({})]), true, 20_000)!.kind,
+      judgeVu(emptyVu(), true, 0)!.kind,
+    ]);
+    expect(kinds.size).toBe(3);
   });
 });
