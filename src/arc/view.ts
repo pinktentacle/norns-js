@@ -19,6 +19,7 @@
 // true of a real encoder.
 
 import { alphaFor, quantise } from "../grid/ramp.js";
+import { drawingRatio } from "../ui/dpr.js";
 import { LEDS, RINGS, type ArcDescriptor, type ArcTransport } from "./device.js";
 
 export interface ArcViewOptions {
@@ -101,7 +102,7 @@ export class ArcView implements ArcTransport {
 
   layout(): void {
     const canvas = this.opts.canvas;
-    const dpr = globalThis.devicePixelRatio ?? 1;
+    const dpr = drawingRatio();
     const boxW = canvas.clientWidth || canvas.width;
     const boxH = canvas.clientHeight || canvas.height;
     canvas.width = Math.max(1, Math.round(boxW * dpr));

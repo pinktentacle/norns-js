@@ -15,14 +15,20 @@
 // redraws. There is no animation loop here.
 
 import { alphaFor, quantise } from "./ramp.js";
+import { drawingRatio } from "../ui/dpr.js";
 import type { GridDescriptor, GridTransport } from "./device.js";
-import { timed } from "../norns/call-cost.js";
+import { recordCount, timed } from "../norns/call-cost.js";
 
 export interface GridViewOptions {
   readonly canvas: HTMLCanvasElement;
   readonly descriptor: GridDescriptor;
   /** Device-space key, 0-based, straight to `GridDevice.key`. */
   readonly onKey: (x: number, y: number, state: 0 | 1) => void;
+  /**
+   * Ask for a frame. `requestAnimationFrame` unless a test supplies one,
+   * and absent entirely in node — see `draw`.
+   */
+  readonly frame?: (fn: () => void) => void;
   /** How wide the surface currently is — `GridDevice.cols()`, rotation included. */
   readonly cols: () => number;
   readonly rows: () => number;
@@ -90,7 +96,10 @@ export class GridView implements GridTransport {
   }
 
   ledIntensity(level: number): void {
+    if (level === this.intensity) return;
     this.intensity = level;
+    // Intensity scales every alpha, so every sprite is now wrong.
+    this.clearSprites();
     this.draw();
   }
 
@@ -108,7 +117,7 @@ export class GridView implements GridTransport {
     const canvas = this.opts.canvas;
     const w = this.opts.cols();
     const h = this.opts.rows();
-    const dpr = globalThis.devicePixelRatio ?? 1;
+    const dpr = drawingRatio();
     const boxW = canvas.clientWidth || canvas.width;
     const boxH = canvas.clientHeight || canvas.height;
     canvas.width = Math.max(1, Math.round(boxW * dpr));
@@ -118,13 +127,17 @@ export class GridView implements GridTransport {
     this.cell = Math.floor(Math.min(canvas.width / w, canvas.height / h));
     this.originX = Math.floor((canvas.width - this.cell * w) / 2);
     this.originY = Math.floor((canvas.height - this.cell * h) / 2);
-    this.makeBlank();
-    this.draw();
+    // The sprites are sized by `cell`, so a new layout invalidates all of
+    // them. Painted at once rather than next frame: this runs from the
+    // constructor, and a grid that appears a frame late flickers in.
+    this.clearSprites();
+    this.dirty = true;
+    this.flush();
   }
 
-  /** Canvas pixel → cell index, or -1 outside the surface. */
   /**
-   * E9-157 — ONE UNLIT KEY, DRAWN ONCE, BLITTED 64 TIMES.
+   * E9-157 / E9-162 — EVERY KEY IS A SPRITE, because there are only
+   * thirty-two of them.
    *
    * A `?profile=90` from a Pixel 9 Pro playing `kolor`, after
    * `encodeMessage` was dealt with:
@@ -140,45 +153,87 @@ export class GridView implements GridTransport {
    * A fifth of the page, and all of it in `key`. Every cell built its own
    * linear gradient with three stops, traced eight `arcTo` corners across
    * three paths, and filled and stroked them — sixty-four times a
-   * refresh, on a grid where most keys are dark and IDENTICAL. The only
-   * things that differ between two unlit keys are their coordinates.
+   * refresh.
    *
-   * So the unlit key is rendered once into its own canvas whenever the
-   * layout changes, and the loop blits it. A lit or held key still goes
-   * the long way, because those genuinely differ.
+   * E9-157 cached the UNLIT key, since most of a grid is dark and every
+   * dark key is identical. The next profile said that was half an answer:
+   * `kolor` lights most of its surface, `key` was still 19.8% self, and
+   * the long way was still being taken for eighty keys out of a hundred
+   * and twenty-eight.
    *
-   * THE MARGIN IS THE SHADOW. The cushion casts one past its own edge —
-   * `shadowBlur` of `pad * 0.12` and an offset below it — so the sprite
-   * is bigger than the key and is drawn at a negative offset. Without
-   * that the shadow is clipped and the keys look pressed into the plate
-   * rather than sitting on it.
+   * BUT A KEY HAS ONLY THIRTY-TWO APPEARANCES. What `key` draws is
+   * decided entirely by `(pad, r, alpha, down)`, and `pad` and `r` come
+   * from the layout: within one layout there are sixteen levels — the
+   * grid quantises to them — times held or not. So all thirty-two are
+   * rendered once, on demand, and the loop blits. Nothing is drawn the
+   * long way at all any more, lit or dark.
+   *
+   * THE MARGIN IS THE GLOW, AND IT IS PER LEVEL. The cushion casts a
+   * shadow past its own edge, and a LIT key spills much further —
+   * `shadowBlur` of `pad * (0.22 + alpha * 0.5)`, which at full
+   * brightness is most of a key again. A single margin big enough for
+   * the brightest would make the common dark key six times its own area
+   * to blit, so each sprite carries the margin ITS level needs.
+   *
+   * INVALIDATED BY LAYOUT AND BY INTENSITY, which are the only two other
+   * things `key` reads. Rebuilding on demand rather than up front keeps
+   * a script that uses three levels to three sprites.
    */
-  private blank: HTMLCanvasElement | null = null;
-  private blankPad = 0;
+  private sprites: Array<{ img: HTMLCanvasElement; m: number } | null> = [];
 
-  private makeBlank(): void {
-    this.blank = null;
+  /**
+   * What was last drawn into each cell, as the one number `spriteFor`
+   * reduces a key to. -1 is "nothing yet". E9-163.
+   */
+  private drawn = new Int16Array(0);
+  /** Set when the canvas cannot be trusted and the whole of it is repainted. */
+  private everything = true;
+
+  private clearSprites(): void {
+    this.sprites = [];
+    // Every cell now holds a picture that is no longer what its number
+    // means, so the record of what was drawn is worthless too.
+    this.drawn.fill(-1);
+    this.everything = true;
+  }
+
+  /** The 32 appearances, built the first time each is actually asked for. */
+  private spriteFor(level: number, down: boolean): { img: HTMLCanvasElement; m: number } | null {
+    const i = level * 2 + (down ? 1 : 0);
+    const got = this.sprites[i];
+    // `null` is a remembered failure — no document, no context — and must
+    // not be retried 128 times a refresh.
+    if (got !== undefined) return got;
+    const made = this.makeSprite(level, down);
+    this.sprites[i] = made;
+    return made;
+  }
+
+  private makeSprite(level: number, down: boolean): { img: HTMLCanvasElement; m: number } | null {
     const c = this.cell;
-    if (c <= 0) return;
+    if (c <= 0) return null;
     const gap = Math.max(1, Math.round(c * GAP_RATIO));
     const pad = c - gap;
-    if (pad <= 0) return;
+    if (pad <= 0) return null;
     const r = pad * 0.22;
-    const m = Math.ceil(pad * 0.2) + 2;
+    const alpha = alphaFor(level, this.intensity);
+    // What `key` can put outside the key: the cushion's own shadow, and
+    // the LED's glow when there is one. Kept in step with `key` by being
+    // written from the same two expressions.
+    const spill = Math.max(pad * 0.2, alpha > 0 ? pad * (0.22 + alpha * 0.5) : 0);
+    const m = Math.ceil(spill) + 2;
     const doc = this.opts.canvas.ownerDocument;
-    if (!doc) return;
+    if (!doc) return null;
     const off = doc.createElement("canvas");
     off.width = pad + m * 2;
     off.height = pad + m * 2;
     const octx = off.getContext("2d");
-    if (!octx) return;
+    if (!octx) return null;
     // The same routine, into the sprite's own origin — `key` takes its
-    // context now rather than reaching for the view's. Alpha 0 and not
-    // held is exactly the branch the loop replaces, so what is drawn here
+    // context rather than reaching for the view's, so what is drawn here
     // and what it stands in for cannot drift apart.
-    this.key(octx, m, m, pad, r, 0, false);
-    this.blank = off;
-    this.blankPad = m;
+    this.key(octx, m, m, pad, r, alpha, down);
+    return { img: off, m };
   }
 
   /** Canvas pixel → cell index, or -1 outside the surface. */
@@ -205,7 +260,57 @@ export class GridView implements GridTransport {
    * so the line that reports a busy span names this beside them instead
    * of leaving a hole where the answer should be.
    */
+  /**
+   * E9-162 — ONE DRAW PER FRAME, NOT ONE PER QUAD.
+   *
+   * `GridDevice.refresh()` sends one `ledLevelMap` per DIRTY QUAD, and a
+   * 16x8 grid is two quads. The universal script idiom is `g:all(0)`,
+   * draw, `g:refresh()` — which dirties both. So every refresh redrew all
+   * 128 keys TWICE, and a 256-key grid four times. Measured on the bench
+   * at `spike/grid-bench.html`: `drawsPerRefresh: 2`.
+   *
+   * It also put the redraw rate under the script's control rather than
+   * the display's. A script that refreshes faster than the screen can
+   * show it — and a lattice-driven one does — paid for every one of
+   * those frames, none of which was ever seen.
+   *
+   * So a present marks the canvas dirty and asks for a frame; the frame
+   * draws once, whatever arrived in the meantime. That is both halves at
+   * once: the quads of one refresh coalesce, and so do refreshes that
+   * arrive faster than the display.
+   *
+   * `flush()` IS PUBLIC because a test and a bench need the draw to have
+   * happened by the time they look, and because `layout()` must paint
+   * synchronously — it runs from the constructor, and a canvas that is
+   * blank until the next frame is a grid that flickers in on load.
+   *
+   * WITHOUT `requestAnimationFrame` IT DRAWS AT ONCE. Node has no rAF,
+   * and the node tests draw into a stub context; a view that silently
+   * stopped drawing there would pass every assertion by doing nothing.
+   */
+  private dirty = false;
+  private scheduled = false;
+  private disposed = false;
+
   private draw(): void {
+    this.dirty = true;
+    if (this.scheduled) return;
+    const raf = this.opts.frame ?? globalThis.requestAnimationFrame?.bind(globalThis);
+    if (raf === undefined) {
+      this.flush();
+      return;
+    }
+    this.scheduled = true;
+    raf(() => {
+      this.scheduled = false;
+      if (!this.disposed) this.flush();
+    });
+  }
+
+  /** Draw now if a present is still pending. */
+  flush(): void {
+    if (!this.dirty) return;
+    this.dirty = false;
     timed("draw:grid", () => this.drawNow());
   }
 
@@ -221,7 +326,6 @@ export class GridView implements GridTransport {
     // with a generous corner and that shape is most of what you recognise.
     const r = pad * 0.22;
 
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
     /**
      * E9-160 — THE HELD SET IS BUILT ONCE, not once per cell.
      *
@@ -236,22 +340,130 @@ export class GridView implements GridTransport {
      * the fastest part of this file.
      */
     const heldNow = this.held.size === 0 ? null : new Set(this.held.values());
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
+
+    /**
+     * E9-163 — AND ONLY THE KEYS THAT CHANGED.
+     *
+     * One draw per frame still redrew all 128 keys. A sequencer changes
+     * a handful between frames — a playhead moves one column, a pad
+     * lights — and the other hundred and twenty are blitted identically
+     * on top of themselves, sixty times a second.
+     *
+     * WHAT A KEY LOOKS LIKE IS ALREADY ONE NUMBER, because `spriteFor`
+     * reduced it to thirty-two appearances. So the last one drawn into
+     * each cell is remembered, and a cell whose number has not moved is
+     * not touched.
+     *
+     * THE CLIP IS LOAD-BEARING, not an optimisation. A lit key's glow
+     * spills past its own cell and over its neighbours, so repainting a
+     * cell means repainting everything that draws into the region —
+     * and a neighbour redrawn without clearing first would composite
+     * its half-transparent glow over the copy already there and come
+     * out brighter. Clipping to the cleared region makes that exact:
+     * everything inside it is rebuilt from every contributor, and
+     * nothing outside is touched at all.
+     *
+     * The spill is under one cell wide — the widest margin is
+     * `ceil(pad * 0.72) + 2` against a cell of `pad / 0.88` — so the
+     * contributors to a region are the changed cells and the ring
+     * around them. The ring is taken at two cells for margin, and the
+     * clip makes a ring that is too generous cost a few blits rather
+     * than a wrong picture.
+     */
+    const key = (i: number): number => {
+      const level = quantise(this.levels[i] ?? 0, this.descriptor.varibright);
+      const down = this.latched.has(i) || (heldNow !== null && heldNow.has(i));
+      return level * 2 + (down ? 1 : 0);
+    };
+
+    const n = w * h;
+    if (this.drawn.length !== n) {
+      this.drawn = new Int16Array(n).fill(-1);
+      this.everything = true;
+    }
+
+    let x0 = w;
+    let y0 = h;
+    let x1 = -1;
+    let y1 = -1;
+    if (this.everything) {
+      x0 = 0;
+      y0 = 0;
+      x1 = w - 1;
+      y1 = h - 1;
+    } else {
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = y * w + x;
+          if (this.drawn[i] === key(i)) continue;
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (y < y0) y0 = y;
+          if (y > y1) y1 = y;
+        }
+      }
+      if (x1 < 0) return; // nothing moved; the canvas is already right
+      // The ring that can draw into the region the changed cells occupy.
+      x0 = Math.max(0, x0 - 2);
+      y0 = Math.max(0, y0 - 2);
+      x1 = Math.min(w - 1, x1 + 2);
+      y1 = Math.min(h - 1, y1 + 2);
+    }
+
+    // The region that is about to be rebuilt, in canvas pixels, taken
+    // past the cells themselves by the widest glow any of them can cast.
+    const spill = Math.ceil(pad * 0.72) + 2;
+    const rx = this.originX + x0 * c - spill;
+    const ry = this.originY + y0 * c - spill;
+    const rw = (x1 - x0 + 1) * c + spill * 2;
+    const rh = (y1 - y0 + 1) * c + spill * 2;
+
+    const whole = this.everything;
+    this.everything = false;
+    if (whole) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    } else {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(rx, ry, rw, rh);
+      ctx.clip();
+      ctx.clearRect(rx, ry, rw, rh);
+    }
+
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
         const i = y * w + x;
-        const level = quantise(this.levels[i] ?? 0, this.descriptor.varibright);
+        const k = key(i);
+        this.drawn[i] = k;
+        const level = k >> 1;
+        const down = (k & 1) === 1;
         const px = this.originX + x * c;
         const py = this.originY + y * c;
-        const down = this.latched.has(i) || (heldNow !== null && heldNow.has(i));
-        const alpha = alphaFor(level, this.intensity);
-        // E9-157 — THE DARK ONES ARE ALL THE SAME KEY. See `blankKey`.
-        if (alpha <= 0 && !down && this.blank !== null) {
-          ctx.drawImage(this.blank, px - this.blankPad, py - this.blankPad);
+        // E9-162 — THERE ARE ONLY 32 KEYS. See `spriteFor`.
+        const s = this.spriteFor(level, down);
+        if (s !== null) {
+          ctx.drawImage(s.img, px - s.m, py - s.m);
           continue;
         }
-        this.key(ctx, px, py, pad, r, alpha, down);
+        this.key(ctx, px, py, pad, r, alphaFor(level, this.intensity), down);
       }
     }
+    if (!whole) ctx.restore();
+    /**
+     * E9-166 — HOW MANY CELLS, which decides whether E9-163 helped.
+     *
+     * The dirty region is a BOUNDING BOX, so it pays when the changes
+     * are clustered — a playhead moving down a column — and nothing at
+     * all when they are scattered, because the box then spans the
+     * surface. Measured on the bench: 128 cells to 49.7 for a playhead,
+     * 128 to 123.6 for a scatter.
+     *
+     * Which of those a real script looks like is not something a bench
+     * can answer. This counts it on the device, so a log from the Pixel
+     * says whether the optimisation is doing anything for `kolor`
+     * instead of leaving it to be argued about.
+     */
+    recordCount("draw:grid cells", (x1 - x0 + 1) * (y1 - y0 + 1));
   }
 
   /**
@@ -461,6 +673,10 @@ export class GridView implements GridTransport {
    */
   dispose(): void {
     this.releaseAll();
+    // A frame already asked for cannot be taken back, but it can be made
+    // to do nothing: the canvas belongs to the view that replaced this one.
+    this.disposed = true;
+    this.dirty = false;
     this.ac.abort();
   }
 

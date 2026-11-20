@@ -113,7 +113,7 @@ export function hotFrames(trace: ProfilerTrace, top = 12): HotFrame[] {
  * in the line now, first, so the percentages beneath it have something
  * to be a percentage OF.
  */
-export function summarise(trace: ProfilerTrace, top = 12): Summary {
+export function summarise(trace: ProfilerTrace, top = 12, since = -Infinity): Summary {
   const nameOf = (frameId: number): string => {
     const f = trace.frames[frameId];
     if (!f) return "(unknown)";
@@ -128,7 +128,11 @@ export function summarise(trace: ProfilerTrace, top = 12): Summary {
   const total = new Map<string, number>();
   let counted = 0;
 
+  let window = 0;
   for (const s of trace.samples) {
+    // E9-162 — AND THE BOOT IS NOT THE SCRIPT. See `startProfile`.
+    if (s.timestamp < since) continue;
+    window++;
     if (s.stackId === undefined) continue; // idle: nothing was running
     counted++;
     const leaf = trace.stacks[s.stackId];
@@ -159,12 +163,24 @@ export function summarise(trace: ProfilerTrace, top = 12): Summary {
           }))
           .sort((a, b) => b.selfPct - a.selfPct)
           .slice(0, top);
-  return { busy: counted, total: trace.samples.length, frames };
+  return { busy: counted, total: window, frames };
 }
 
 export interface ProfileRun {
   /** Resolves when the profile has been taken and summarised. */
   readonly done: Promise<void>;
+  /**
+   * Say that the boot is over and the rest is somebody using the thing.
+   *
+   * E9-162 — BECAUSE THE BOOT OUTWEIGHS THE SCRIPT. A `?profile=90` from
+   * a Pixel spent its first twenty-four seconds booting — restoring 1146
+   * files from OPFS, compiling the SuperCollider class library, starting
+   * the server — and three of the twelve lines it ranked were that
+   * restore. They are real costs and worth having, but they are not what
+   * somebody asking why `kolor` stutters is looking at, and mixed into
+   * one ranking there is no way to tell which is which.
+   */
+  mark(): void;
 }
 
 /**
@@ -179,7 +195,11 @@ export function startProfile(
   req: ProfileRequest,
   log: (line: string) => void,
   offer?: (bytes: Uint8Array, name: string) => void,
+  /** What else is worth printing beside the sampled frames. E9-162. */
+  account?: () => readonly string[],
 ): ProfileRun {
+  let bootEnded: number | null = null;
+  const mark = (): void => void (bootEnded = performance.now());
   const Ctor = (globalThis as { Profiler?: ProfilerCtor }).Profiler;
   if (typeof Ctor !== "function") {
     log(
@@ -187,7 +207,7 @@ export function startProfile(
         "Document-Policy: js-profiling header, which this page sends — so " +
         "on another browser there is nothing to do.",
     );
-    return { done: Promise.resolve() };
+    return { done: Promise.resolve(), mark };
   }
 
   let profiler: ProfilerLike;
@@ -201,7 +221,7 @@ export function startProfile(
     });
   } catch (err) {
     log(`profile: could not start — ${(err as Error).message}`);
-    return { done: Promise.resolve() };
+    return { done: Promise.resolve(), mark };
   }
 
   log(`profile: sampling for ${req.seconds} s. Load the script you want measured now.`);
@@ -211,23 +231,47 @@ export function startProfile(
       void profiler
         .stop()
         .then((trace) => {
-          const { busy, total, frames: hot } = summarise(trace);
-          if (hot.length === 0) {
+          const report = (s: Summary, what: string, seconds: number): void => {
+            if (s.frames.length === 0) {
+              log(`profile: ${what} — nothing was running.`);
+              return;
+            }
+            const share = (s.busy / Math.max(1, s.total)) * 100;
+            log(
+              `profile: ${what}: ${s.total} samples over ${seconds.toFixed(0)} s, ` +
+                `busy in ${s.busy} of them ` +
+                `(${share.toFixed(1)}% — the percentages below are of THOSE):`,
+            );
+            for (const f of s.frames) {
+              log(
+                `  ${f.selfPct.toFixed(1).padStart(5)}% self  ${f.totalPct
+                  .toFixed(1)
+                  .padStart(5)}% total   ${f.name}`,
+              );
+            }
+          };
+
+          const whole = summarise(trace);
+          if (whole.frames.length === 0) {
             log("profile: no samples — the page was idle, or the buffer ran out.");
             return;
           }
-          const share = (busy / Math.max(1, total)) * 100;
-          log(
-            `profile: ${total} samples over ${req.seconds} s, busy in ${busy} of them ` +
-              `(${share.toFixed(1)}% — the percentages below are of THOSE):`,
-          );
-          for (const f of hot) {
-            log(
-              `  ${f.selfPct.toFixed(1).padStart(5)}% self  ${f.totalPct
-                .toFixed(1)
-                .padStart(5)}% total   ${f.name}`,
-            );
+          report(whole, "the whole run, boot included", req.seconds);
+          /**
+           * E9-162 — AND AGAIN WITHOUT THE BOOT, when there was one.
+           *
+           * Only when the split leaves enough on the other side to rank:
+           * a profile that ended while the page was still booting would
+           * otherwise print a second table of four samples, which reads
+           * like a finding and is noise.
+           */
+          if (bootEnded !== null) {
+            const after = summarise(trace, 12, bootEnded);
+            if (after.total >= 100) {
+              report(after, "after the boot", (after.total * req.intervalMs) / 1000);
+            }
           }
+          for (const line of account?.() ?? []) log(line);
           if (offer) {
             const bytes = new TextEncoder().encode(JSON.stringify(trace));
             offer(bytes, `norns-js-profile-${new Date().toISOString().slice(0, 19).replace(/:/g, "")}.json`);
@@ -239,5 +283,5 @@ export function startProfile(
     }, req.seconds * 1000);
   });
 
-  return { done };
+  return { done, mark };
 }

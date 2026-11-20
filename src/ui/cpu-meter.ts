@@ -36,6 +36,26 @@ export interface CpuMeter {
   readonly percent: number;
   /** Windows measured since the start; 0 means nothing has been reported yet. */
   readonly windows: number;
+  /**
+   * The worst completed window since this was last called, and forget it.
+   *
+   * E9-162 — BECAUSE A READER THAT SAMPLES CAN MISS A WINDOW. `percent`
+   * is the LAST window, and the log polls it once a second. Those two
+   * clocks are not the same clock: a single blocking task stretches the
+   * meter's own interval, two windows then close between one poll and
+   * the next, and the busy one is overwritten by the quiet one that
+   * followed it.
+   *
+   * Measured, not guessed: a 2.6 second block of the main thread on the
+   * dev server produced no line at all, and a 3.2 second one two minutes
+   * later produced `cpu: 97%`. The instrument saw both. Only the reading
+   * of it lost one — which is the worst way for an instrument to fail,
+   * because the log then says the page was fine.
+   *
+   * Returns the current window when none has completed since, so a
+   * caller always gets a number rather than a sentinel to handle.
+   */
+  peakSince(): number;
   stop(): void;
 }
 
@@ -105,6 +125,8 @@ export function startCpuMeter(opts: CpuMeterOptions = {}): CpuMeter {
   let elapsed = 0;
   let percent = 0;
   let windows = 0;
+  /** Highest window since the last `peakSince`; -1 means none has closed. */
+  let peak = -1;
 
   const id = every(() => {
     const t = now();
@@ -120,11 +142,41 @@ export function startCpuMeter(opts: CpuMeterOptions = {}): CpuMeter {
     elapsed += gap;
     const over = gap - period - slack;
     if (over > 0) late += over;
+    /**
+     * E9-162 — ONE TASK LONGER THAN A WINDOW IS NOT A SHARE OF ONE.
+     *
+     * A window does not close on a clock, it closes when `elapsed`
+     * reaches the window length — so a block that arrives mid-window is
+     * added to whatever idle time came before it, and reported as a
+     * share of the sum. A 2.6 second block landing 900 ms into a window
+     * reads as 2594 of 3500, or 74%, and the line that fires at 80 never
+     * fires.
+     *
+     * Measured, twice, on the dev server: a 2.6 second block of the main
+     * thread produced no line at all, and a 3.2 second one produced
+     * `cpu: 97%`. Same instrument, same page, same kind of event — the
+     * difference was where in the window it happened to land.
+     *
+     * A gap longer than the whole window means the thread was gone for
+     * at least that window, which is not a proportion to work out. It is
+     * reported as the window it swallowed and the accounting starts
+     * again, so the next reading is about the next second rather than
+     * about this one twice.
+     */
+    if (over >= window) {
+      percent = 100;
+      if (percent > peak) peak = percent;
+      windows++;
+      late = 0;
+      elapsed = 0;
+      return;
+    }
     if (elapsed >= window) {
       // Clamped because the two clocks are not the same clock: a timer that
       // is late by more than the window it was measured over says only
       // that the thread was gone for all of it.
       percent = Math.max(0, Math.min(100, (late / elapsed) * 100));
+      if (percent > peak) peak = percent;
       windows++;
       late = 0;
       elapsed = 0;
@@ -137,6 +189,11 @@ export function startCpuMeter(opts: CpuMeterOptions = {}): CpuMeter {
     },
     get windows(): number {
       return windows;
+    },
+    peakSince(): number {
+      const p = peak < 0 ? percent : peak;
+      peak = -1;
+      return p;
     },
     stop(): void {
       cancel(id);

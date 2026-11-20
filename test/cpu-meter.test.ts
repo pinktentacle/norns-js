@@ -138,3 +138,77 @@ describe("the main-thread busy meter", () => {
     expect(cleared).toBe(7);
   });
 });
+
+// E9-162 — the window a once-a-second reader loses.
+//
+// `percent` is the LAST completed window and the log polls it once a
+// second. A single blocking task stretches the meter's own interval, two
+// windows close between one poll and the next, and the busy one is
+// overwritten by the quiet one behind it. Measured on the dev server: a
+// 2.6 s block of the main thread produced no line at all, while a 3.2 s
+// one produced `cpu: 97%`. The meter saw both; only the reading of it
+// lost one, which is the worst way for an instrument to fail.
+describe("the worst window since somebody last looked", () => {
+  /** One window that was half spent elsewhere, then one that was not. */
+  const busy = (f: ReturnType<typeof fake>): void => {
+    for (let i = 0; i < 25; i++) f.tick(40); // 1000 ms elapsed, 500 late
+  };
+  const quiet = (f: ReturnType<typeof fake>): void => {
+    for (let i = 0; i < 50; i++) f.tick(20); // 1000 ms elapsed, none late
+  };
+
+  it("keeps the busy window when a quiet one closes behind it", () => {
+    const f = fake();
+    busy(f);
+    expect(f.meter.percent).toBe(50);
+    quiet(f);
+    expect(f.meter.percent, "the last window is the quiet one").toBe(0);
+    expect(f.meter.peakSince(), "and the busy one would have been lost").toBe(50);
+  });
+
+  it("forgets it once it has been read, so the next answer is the next span", () => {
+    const f = fake();
+    busy(f);
+    expect(f.meter.peakSince()).toBe(50);
+    quiet(f);
+    expect(f.meter.peakSince()).toBe(0);
+  });
+
+  it("answers with the current reading when no window has closed since", () => {
+    const f = fake();
+    busy(f);
+    expect(f.meter.peakSince()).toBe(50);
+    expect(f.meter.peakSince(), "nothing new, so the same answer").toBe(50);
+  });
+});
+
+// E9-162 — and a block longer than a window is not a share of one.
+describe("one task that held the thread longer than a whole window", () => {
+  it("reports the window it swallowed, wherever in one it landed", () => {
+    // 900 ms of an honest window, then a single 2600 ms block. Added to
+    // what came before, that is 2594 of 3500 — 74%, under the threshold
+    // the log reports at, for a page that was gone for two and a half
+    // seconds.
+    const f = fake();
+    for (let i = 0; i < 45; i++) f.tick(20); // 900 ms, none of it late
+    f.tick(2600);
+    expect(f.meter.percent).toBe(100);
+    expect(f.meter.windows).toBe(1);
+  });
+
+  it("starts the next window clean, so the block is not counted twice", () => {
+    const f = fake();
+    f.tick(2600);
+    expect(f.meter.percent).toBe(100);
+    for (let i = 0; i < 50; i++) f.tick(20);
+    expect(f.meter.percent, "the second window was quiet").toBe(0);
+    expect(f.meter.windows).toBe(2);
+  });
+
+  it("leaves an ordinary late tick alone", () => {
+    const f = fake();
+    for (let i = 0; i < 40; i++) f.tick(20);
+    for (let i = 0; i < 5; i++) f.tick(40);
+    expect(f.meter.percent, "100 ms late over a 1000 ms window").toBe(10);
+  });
+});

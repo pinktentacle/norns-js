@@ -22,7 +22,12 @@ import { detect, effectiveKind, readSignals, type MachineKind } from "./ui/machi
 import { startCpuMeter } from "./ui/cpu-meter.js";
 import { createLog } from "./ui/log.js";
 import { profileRequest, startProfile } from "./ui/profiler.js";
-import { accountedMs, callCosts, resetCallCosts, timed, watchCallCost } from "./norns/call-cost.js";
+import { describeFrames, watchLongFrames } from "./ui/frames.js";
+import { describeDeviceLatency, describeGraphLatency } from "./ui/audio-latency.js";
+import { afterPaint } from "./ui/first-paint.js";
+import { describeVu, emptyVu, foldVu, judgeVu } from "./ui/output-watch.js";
+import { drawingRatio } from "./ui/dpr.js";
+import { accountedMs, callCosts, resetCallCosts, sayCost, timed, watchCallCost } from "./norns/call-cost.js";
 import { registerScreenImages } from "./screen/images.js";
 import { registerHardware, type Hardware } from "./norns/hardware.js";
 import { registerOsc } from "./osc/register.js";
@@ -124,7 +129,32 @@ function peakOf(analyser: AnalyserNode): number {
 }
 
 /** E9-130 — stamped and appended; see `src/ui/log.ts` for both reasons. */
-const log = createLog(logEl);
+const rawLog = createLog(logEl);
+
+/**
+ * E9-166 — THE ONE PLACE EVERY LINE GOES PAST, so it can also be read.
+ *
+ * `output-watch.ts` needs to know whether a script is running before it
+ * will say that nothing reaching the mixer is worth mentioning — a quiet
+ * page with no script is not a fault, and an instrument that cries wolf
+ * at idle is one people learn to scroll past.
+ *
+ * Matron does not tell this file; it tells the LOG. `# script run` and
+ * `# script clear` are norns' own vocabulary, printed by `core/script.lua`
+ * on every load and every unload, and they go through here like
+ * everything else. Reading them costs one `startsWith` per line.
+ *
+ * FRAGILE BY CONSTRUCTION, and said so here: if upstream reworded those
+ * two lines this would quietly answer `false` for ever. What it guards
+ * is one observational message, so the failure is a line that stops
+ * appearing rather than a wrong one.
+ */
+let scriptIsLoaded = false;
+const log = (line: string): void => {
+  if (line.startsWith("# script run")) scriptIsLoaded = true;
+  else if (line.startsWith("# script clear")) scriptIsLoaded = false;
+  rawLog(line);
+};
 
 /**
  * Baked in by vite (see `define` in vite.config.ts), so a page can say which
@@ -226,9 +256,49 @@ async function main(): Promise<void> {
    * channel that works from a phone.
    */
   let offerFile: ((bytes: Uint8Array, name: string) => void) | null = null;
+  /**
+   * E9-162 — the other half of "busy": what the main thread did that no
+   * script asked for. See `ui/frames.ts`.
+   *
+   * DECLARED HERE, above the profile that reads it, and not beside the
+   * CPU meter a thousand lines down where it belongs by subject: a short
+   * `?profile=2` finishes before the boot reaches that line, and the
+   * summary would reach this in its temporal dead zone.
+   */
+  const frameLoad = watchLongFrames();
   const profile = profileRequest(globalThis.location?.search ?? "");
+  /**
+   * E9-162 — THE SAMPLER AND THE INSTRUMENT, SIDE BY SIDE.
+   *
+   * The sampled table ranks by share of the busy samples; the account in
+   * `call-cost.ts` has been counting the same work in milliseconds the
+   * whole time. Printing them together is what makes either readable: a
+   * path at twenty per cent of six per cent of ninety seconds is a
+   * second and a bit, and a reader should not have to do that
+   * multiplication to find out.
+   */
+  let profileRun: { mark(): void } | null = null;
   if (profile !== null) {
-    startProfile(profile, (l) => log(l), (b, n) => offerFile?.(b, n));
+    profileRun = startProfile(
+      profile,
+      (l) => log(l),
+      (b, n) => offerFile?.(b, n),
+      () => {
+        const lines: string[] = [];
+        const costs = callCosts().filter((c) => c.ms >= 1);
+        lines.push(
+          costs.length === 0
+            ? "profile: the instrumented account is empty — nothing this project times ran for a millisecond."
+            : "profile: and what this project times, in milliseconds rather than shares:",
+        );
+        for (const c of costs.slice(0, 8)) {
+          lines.push(`  ${sayCost(c).padStart(10)}  over ${String(c.calls).padStart(6)} calls   ${c.path}`);
+        }
+        const frames = describeFrames(frameLoad.load());
+        lines.push(frames ?? "frames: none over 50 ms in the whole run.");
+        return lines;
+      },
+    );
   }
 
   log("restoring saved files…");
@@ -945,6 +1015,42 @@ async function main(): Promise<void> {
   // So the panel gets functions, and the functions find out whether there
   // is anything to talk to yet.
   let audioContext: AudioContext | null = null;
+
+  /**
+   * E9-163 — HOW LATE THE SOUND IS, WHICH NOTHING HERE HAS EVER ASKED.
+   *
+   * The project measures the main thread, the callbacks into Lua, the
+   * frames and now the audio thread's own load. It has never once asked
+   * the browser how long a sample takes to get from the graph to a
+   * speaker — and on a phone that is routinely tens of milliseconds,
+   * sometimes over a hundred. It is a floor under every gesture: a key
+   * pressed on the grid cannot sound sooner than this no matter how
+   * fast everything above it gets, so optimising the page without
+   * knowing it is working on the wrong end.
+   *
+   * TWO NUMBERS AND THEY MEAN DIFFERENT THINGS. `baseLatency` is what
+   * the AudioContext itself adds — the render quantum, essentially a
+   * property of the graph. `outputLatency` is the browser's estimate of
+   * everything after it, down through the OS mixer to the device, which
+   * is where Bluetooth headphones put their eighty milliseconds.
+   *
+   * REPORTED TWICE, because the second is not known yet when the first
+   * is. `outputLatency` reads 0 until audio has actually flowed, so a
+   * single reading at adoption would report the interesting half as
+   * zero and look like good news.
+   */
+  const reportAudioLatency = (ctx: AudioContext): void => {
+    const base = typeof ctx.baseLatency === "number" ? ctx.baseLatency : 0;
+    log(describeGraphLatency(base, ctx.sampleRate));
+    // The device's share, once something has gone through it. Six
+    // seconds is past the boot and past the first sound; one look, and
+    // a line of its own if the browser never fills it in.
+    setTimeout(() => {
+      const out = typeof ctx.outputLatency === "number" ? ctx.outputLatency : 0;
+      log(describeDeviceLatency(base, out));
+    }, 6000);
+  };
+
   /** Where a microphone goes: crone's input 1, which IS the adc (processor.js:16). */
   let adcInput: AudioNode | null = null;
   let liveInput: Awaited<ReturnType<typeof openAudioInput>> | null = null;
@@ -1175,6 +1281,154 @@ async function main(): Promise<void> {
   let cpuBusy = false;
   /** When the busy span started, for the duration it reports. */
   let cpuBusyAt = 0;
+  /** When it last said anything, so a span that never ends still reports. */
+  let cpuSaidAt = 0;
+
+  /**
+   * E9-162 — THE TWO PLACES THE COST CAN BE THAT ARE NOT OUR JAVASCRIPT.
+   *
+   * The first is the main thread doing work no script asked for — style,
+   * layout, paint, garbage collection — which `ui/frames.ts` gets from
+   * the browser's own long-frame reports.
+   *
+   * The second is not the main thread at all. scsynth and the six
+   * softcut voices run in an audio worklet, which has no
+   * `performance.now()` and cannot be measured from here at all; the CPU
+   * meter would nonetheless read high, because a saturated audio thread
+   * on a phone takes a core the main thread then waits for. But scsynth
+   * MEASURES ITSELF and has been answering `/status` once a second since
+   * E9-112 — the number was going into `audio_get_cpu_load` and nowhere a
+   * log could show it.
+   *
+   * NO LONG FRAMES PLUS A LOADED AUDIO THREAD IS AN ANSWER, and until
+   * now there was no way to write it down.
+   */
+  let audioStatus: () => {
+    avgCpu: number;
+    peakCpu: number;
+    ugens: number;
+    synths: number;
+    at: number;
+  } | null = () => null;
+
+  /**
+   * E9-166 — WHERE THE SOUND STOPS, read from crone's own VU.
+   *
+   * Folded over three-second windows rather than judged per poll: the
+   * levels arrive every 50 ms, a single flat reading means nothing at
+   * all, and a window is short enough that a person pressing a key and
+   * hearing nothing gets an answer while they are still looking at it.
+   *
+   * SAID ONCE, NOT SIXTY TIMES. A page in this state stays in it, so the
+   * same sentence every three seconds would bury the log it exists to
+   * explain — the same reasoning as `call-cost.ts`'s quiet period, and
+   * the same mistake was available here. It speaks when the verdict
+   * CHANGES, and says so again at most every thirty seconds.
+   */
+  let vuWindow = emptyVu();
+  let vuLast = emptyVu();
+  let vuWindowAt = 0;
+  let vuQuietSince = 0;
+  let vuSaid = "";
+  let vuSaidAt = -Infinity;
+
+  const watchVu = (levels: readonly number[]): void => {
+    const now = performance.now();
+    if (vuWindowAt === 0) {
+      vuWindowAt = now;
+      vuQuietSince = now;
+    }
+    if (!foldVu(vuWindow, levels)) return;
+    if (now - vuWindowAt < 3000) return;
+    if (vuWindow.outMax > 0) vuQuietSince = now;
+    const verdict = judgeVu(vuWindow, scriptIsLoaded, now - vuQuietSince);
+    vuLast = vuWindow;
+    vuWindow = emptyVu();
+    vuWindowAt = now;
+    if (verdict === null) {
+      // Coming back is worth one line, because a log that only ever
+      // reports trouble cannot be used to tell when it stopped.
+      if (vuSaid !== "") log(`audio: output is flowing again — ${describeVu(vuLast)}`);
+      vuSaid = "";
+      return;
+    }
+    if (verdict === vuSaid && now - vuSaidAt < 30000) return;
+    vuSaid = verdict;
+    vuSaidAt = now;
+    log(verdict);
+  };
+
+  /**
+   * E9-166 — EVERYTHING AT ONCE, because a phone has no console.
+   *
+   * Three rounds of this were spent asking for one number at a time and
+   * waiting for a reply. On a desktop that is a console paste; on the
+   * Pixel the console is not reachable at all, and the log IS the
+   * channel — it is already what gets copied and sent.
+   *
+   * So `?diagnose` prints the whole state as a block, and
+   * `__norns.diagnose()` does the same from a console that has one. It
+   * answers, in order: is the output flowing, where does it stop, is
+   * anything reaching the mixer, what did the page measure of itself,
+   * and which build is this anyway.
+   */
+  const diagnose = (): void => {
+    log("— diagnosis ——————————————————————————————");
+    log(`build ${__BUILD_ID__}`);
+    const st = audioStatus();
+    log(
+      `audio: master ${settings.muted ? "MUTED" : `${settings.volumeDb} dB`}` +
+        `, context ${audioContext?.state ?? "none"}` +
+        `, ${audioContext ? Math.round(audioContext.sampleRate) : 0} Hz`,
+    );
+    log(`crone vu (last 3 s): ${describeVu(vuLast)}`);
+    log(
+      `scsynth: ${st === null ? "no /status reply yet" : `${st.avgCpu.toFixed(0)}% avg, ${st.peakCpu.toFixed(0)}% peak, ${st.synths} synths, ${st.ugens} ugens`}`,
+    );
+    const l = audioLoad;
+    log(
+      `crone dsp: ${l === null ? "nothing reported yet" : `${l.meanMs.toFixed(2)} ms of ${l.budgetMs.toFixed(2)} ms a block`}`,
+    );
+    log(`script loaded: ${scriptIsLoaded ? "yes" : "no"}`);
+    log(`cpu: ${Math.round(cpuMeter.percent)}% of the main thread, ${cpuMeter.windows} window(s) measured`);
+    const frames = describeFrames(frameLoad.load());
+    log(frames ?? "frames: none over 50 ms");
+    const costs = callCosts().filter((c) => c.ms >= 1);
+    log(
+      costs.length === 0
+        ? "instrumented: nothing has cost a millisecond"
+        : `instrumented: ${costs
+            .slice(0, 5)
+            .map((c) => `${c.path} ${sayCost(c)} over ${c.calls}`)
+            .join(" · ")}`,
+    );
+    log(`storage: ${vfs.walk("/home/we/dust").length} file(s) under ~/dust`);
+    log(`drawing at ${drawingRatio()}x (device ${globalThis.devicePixelRatio ?? 1}x)`);
+    log("————————————————————————————————————————");
+  };
+
+  const reportFrames = (): void => {
+    const line = describeFrames(frameLoad.load());
+    log(
+      line ??
+        "frames: none over 50 ms — whatever held the thread, it was not " +
+          "a long frame on it",
+    );
+    // Read through a function set later, NOT `scEngine` directly: that is
+    // a `let` declared a thousand lines below, and the busiest moment this
+    // page has is the boot that happens before it — so a span that opened
+    // during the boot would reach it in its temporal dead zone and take
+    // the whole stat poll down with it. The same trap `pollServer` below
+    // carries a comment about, and the same answer.
+    const st = audioStatus();
+    if (st !== null && st.at > 0) {
+      log(
+        `audio thread: scsynth says ${st.avgCpu.toFixed(0)}% average, ` +
+          `${st.peakCpu.toFixed(0)}% peak, ${st.synths} synths and ${st.ugens} ugens ` +
+          `— measured by the server, not by this page`,
+      );
+    }
+  };
 
   /**
    * Ask the audio server for its load, once there is one.
@@ -1211,7 +1465,10 @@ async function main(): Promise<void> {
     // rather than repeating it. On hardware they are four cores of a Pi;
     // here there is one main thread, and no browser reports per-core load.
     // Four copies of one number would read as four cores at that load.
-    const main = Math.round(cpuMeter.percent);
+    // The WORST window since the last poll, not the last one: these two
+    // clocks drift, and the window that is lost when they do is always
+    // the busy one. See `peakSince`. E9-162.
+    const main = Math.round(cpuMeter.peakSince());
     /**
      * E9-138 — AND IT GOES IN THE LOG, not only on the home overlay.
      *
@@ -1232,6 +1489,8 @@ async function main(): Promise<void> {
       // The account starts with the trouble, so what it reports is what
       // happened DURING it rather than since the page booted.
       resetCallCosts();
+      frameLoad.reset();
+      cpuSaidAt = cpuBusyAt;
       log(`cpu: ${main}% of the main thread — the page is at its limit`);
     } else if (cpuBusy && main < 50) {
       cpuBusy = false;
@@ -1258,7 +1517,7 @@ async function main(): Promise<void> {
       const top = callCosts()
         .filter((c) => c.ms >= 1)
         .slice(0, 4)
-        .map((c) => `${c.path} ${c.ms.toFixed(0)} ms over ${c.calls}`)
+        .map((c) => `${c.path} ${sayCost(c)} over ${c.calls}`)
         .join(" · ");
       /**
        * E9-160 — HOW MUCH OF IT IS EXPLAINED, before what explains it.
@@ -1280,6 +1539,41 @@ async function main(): Promise<void> {
           `${share.toFixed(0)}% of it accounted for` +
           (top === "" ? ", none of it instrumented" : `: ${top}`),
       );
+      reportFrames();
+    } else if (cpuBusy && performance.now() - cpuSaidAt >= 15000) {
+      /**
+       * E9-162 — A PAGE THAT NEVER RECOVERS MUST STILL REPORT.
+       *
+       * The span line was written for a page that struggles and comes
+       * back, and it only prints on the way DOWN. A log from a Pixel
+       * playing `kolor` went to 92% at fifty seconds and never dropped
+       * below fifty again: the thresholds did exactly what they say, and
+       * the account — the one thing that would have named the cost —
+       * was never printed at all, for fifty-three seconds of exactly the
+       * trouble it exists to explain.
+       *
+       * The worst case for this instrument is therefore the case it was
+       * silent for. Every fifteen seconds of a span that is still going,
+       * it says so and empties the account, so a page that stays stuck
+       * produces a reading every fifteen seconds instead of one reading
+       * never.
+       */
+      const spanMs = performance.now() - cpuBusyAt;
+      const top = callCosts()
+        .filter((c) => c.ms >= 1)
+        .slice(0, 4)
+        .map((c) => `${c.path} ${sayCost(c)} over ${c.calls}`)
+        .join(" · ");
+      const share = (accountedMs() / Math.max(1, performance.now() - cpuSaidAt)) * 100;
+      log(
+        `cpu: still ${main}% after ${(spanMs / 1000).toFixed(1)} s — ` +
+          `${share.toFixed(0)}% of the last 15 s accounted for` +
+          (top === "" ? ", none of it instrumented" : `: ${top}`),
+      );
+      reportFrames();
+      resetCallCosts();
+      frameLoad.reset();
+      cpuSaidAt = performance.now();
     }
     cb.stat(freeMb, 0, main, main, 0, 0, 0);
     // One round trip a second, beside the disk poll that was already here.
@@ -2106,7 +2400,18 @@ async function main(): Promise<void> {
     log(`exercise: ${report.ok} of ${report.total} ok`);
     return report;
   };
-  expose({ exercise: runExercise, scripts: () => scriptsIn(vfs) });
+  expose({ exercise: runExercise, scripts: () => scriptsIn(vfs), diagnose });
+  /**
+   * E9-166 — AND FROM THE URL, which is the only control a phone has.
+   *
+   * `?diagnose` prints the block once the page has settled. Ten seconds:
+   * past the engine, past crone's first VU windows, and past the six the
+   * device latency needs — a block printed before those are in is a
+   * block of "nothing reported yet".
+   */
+  if (new URLSearchParams(globalThis.location?.search ?? "").has("diagnose")) {
+    setTimeout(diagnose, 10_000);
+  }
 
   /** Turn the gamepad on or off to match the profile. */
   const applyMachine = (): void => {
@@ -2767,6 +3072,9 @@ async function main(): Promise<void> {
   };
 
   log(`booted, ${installed} community scripts in ~/dust/code.`);
+  // Everything from here is somebody using the thing rather than it
+  // starting up, and a profile ranks the two apart. E9-162.
+  profileRun?.mark();
   log("SELECT lists the scripts. The gear has the key bindings.");
 
   // --- audio -------------------------------------------------------------
@@ -2792,7 +3100,14 @@ async function main(): Promise<void> {
     // page sits black for as long as that takes. Reported as "the screen
     // stayed black at first, then appeared after a while": the screen was
     // fine, the browser simply never got a frame.
-    await new Promise<void>((paint) => requestAnimationFrame(() => paint()));
+    //
+    // E9-164 — AND NOT FOR EVER IF NO FRAME EVER COMES. A tab that is
+    // occluded or backgrounded is painted no frames at all, while still
+    // reporting itself visible, and this await then never resolves:
+    // scsynth and sclang are never loaded, there is no engine and no
+    // sound, and nothing says so because the line that would have is on
+    // the other side of it. See `ui/first-paint.ts`.
+    await afterPaint();
 
     let engineState: ReturnType<typeof registerEngine> | null = null;
     // Kept so the console tap below can reach it: crone is the only node
@@ -3025,6 +3340,21 @@ async function main(): Promise<void> {
     // effect the next time you opened the panel would look like it had not
     // been remembered.
     audioContext = ctx;
+    reportAudioLatency(ctx);
+    /**
+     * E9-165 — THE LAST GATE BEFORE THE SPEAKERS, said out loud.
+     *
+     * `__norns.peak()` is taken on crone's output, which is BEFORE this
+     * gain — deliberately, so a muted page can still be measured. The
+     * consequence is that every instrument in this project can report a
+     * healthy signal for a page that is making no sound at all, because
+     * nothing ever looked at the one number between the mixer and the
+     * destination.
+     */
+    log(
+      `audio: master at ${settings.muted ? "0 (muted)" : `${settings.volumeDb} dB`}` +
+        `, context ${ctx.state}`,
+    );
     if (settings.audioOut !== "") void applyOutputDevice();
     expose({ master, meter, peak: () => peakOf(meter) });
 
@@ -3047,7 +3377,26 @@ async function main(): Promise<void> {
       const crone = await startCrone({
         context: ctx,
         log: (l) => log(l),
-        events: croneEvents(cb, (l) => log(l)),
+        /**
+         * E9-166 — AND THE LEVELS GO PAST A WATCHER ON THE WAY.
+         *
+         * `croneEvents` hands the twelve peaks to matron, which draws
+         * them on an overlay. They are also the only measurement in this
+         * project taken INSIDE the audio thread, at the points where
+         * sound is actually lost — so they go past `output-watch.ts`
+         * first. Wrapped rather than replaced: matron must still get
+         * every reading, on time, or the overlay stops moving.
+         */
+        events: (() => {
+          const base = croneEvents(cb, (l) => log(l));
+          return {
+            ...base,
+            vu: (levels: number[]) => {
+              watchVu(levels);
+              base.vu?.(levels);
+            },
+          };
+        })(),
         onFileWritten: croneFileWriter(vfs, (l) => log(l)),
         onTapeData: (pcm) => tapeWriter.onTapeData(pcm),
         onTapeFinished: (d) => tapeWriter.onTapeFinished(d),
@@ -3085,6 +3434,34 @@ async function main(): Promise<void> {
         }
         node.connect(crone.node, 0, 0);
       }
+      /**
+       * E9-165 — AND HOW MANY, because none is the interesting number.
+       *
+       * The line below said "scsynth routed through the mixer" whether
+       * this loop moved two nodes or none of them. `scsynthOut` is a
+       * SNAPSHOT taken before the master exists, of whatever had already
+       * connected itself to the destination — so a scsynth that reaches
+       * the destination a moment later is never in it, never re-routed,
+       * and never heard, while the log says it was routed.
+       *
+       * What that looks like from the outside is a page that boots
+       * perfectly: the engine loads, the script runs, the clock keeps
+       * time, the loop cycles, and there is no sound and nothing says
+       * why. Reported on 2026-11-20 — `amen` installed after a factory
+       * reset, every line in the log right, silence.
+       *
+       * It is also the only part of the chain nothing could see. The
+       * meter is on crone's output, so `__norns.peak()` answers "did the
+       * engine make a signal" — not "did it reach the mixer", which is
+       * this, and not "did it leave the page", which is the master gain
+       * below it.
+       */
+      if (scsynthOut.length === 0) {
+        log(
+          "audio: NOTHING was routed into the mixer — scsynth had not reached " +
+            "the speakers when the mixer was built, so the engine plays into nothing",
+        );
+      }
       // CRONE INPUT 1 IS THE ADC (processor.js:16), kept apart from input 0
       // which carries the engine. A microphone summed into the engine bus
       // would make `level_adc` and `level_ext` the same control, which is
@@ -3094,7 +3471,10 @@ async function main(): Promise<void> {
       crone.node.connect(meter);
       void crone.poll("vu", true);
       croneForConsole = crone;
-      log(`crone: ${crone.voices} softcut voices, scsynth routed through the mixer`);
+      log(
+        `crone: ${crone.voices} softcut voices, ${scsynthOut.length} scsynth output(s) ` +
+          `routed through the mixer`,
+      );
     } catch (err) {
       // A page without crone is still a usable norns: the engine reaches
       // the speakers, and softcut and the tape stay stubs. Saying so beats
@@ -3181,6 +3561,9 @@ Crone.startBoot;`);
     liveEngines = () => engineState?.engines ?? [];
     // The server exists now, so the status poll has something to ask.
     pollServer = () => engine.pollStatus();
+    // E9-162 — and the reply it fetches is readable by the log now, not
+    // only by `audio_get_cpu_load`. See `reportFrames`.
+    audioStatus = () => engine.status;
     engineState.queryStartup();
   }
 }
