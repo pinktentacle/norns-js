@@ -223,7 +223,132 @@ async function saveBounds(win) {
  * on which devices a granted page may see — measured, because allowing one
  * without the other still produced an empty list.
  */
-const ALLOWED = new Set(["midi", "midiSysex", "media", "audioCapture"]);
+const ALLOWED = new Set(["midi", "midiSysex", "media", "audioCapture", "serial"]);
+
+// ---------------------------------------------------------------------------
+// E9-205 — a serial port, which is how a real grid, arc or crow is reached.
+//
+// ELECTRON HAS NO PORT PICKER. Chrome answers `navigator.serial.requestPort()`
+// with a window of its own; here `select-serial-port` is raised instead and
+// nothing happens until this file says which port. So the list is handed to
+// the page, which shows it in the panel the `usb` button is in
+// (`src/ui/port-chooser.ts`), and the id that was clicked comes back.
+//
+// USB ONLY. A machine's serial ports include Bluetooth ones, and none of
+// them is a grid.
+//
+// WHAT IS REMEMBERED is the port that was CHOSEN, by its USB ids and serial
+// number, in `serial-ports.json` beside the window's position. The device
+// handler answers yes for those and for nothing else — answering yes for
+// every serial port would hand the page the whole machine's, and it opens
+// what it is given at start to see whether a grid is there.
+// ---------------------------------------------------------------------------
+
+const portsPath = () => join(app.getPath("userData"), "serial-ports.json");
+let chosenPorts = [];
+const portKey = (p) => `${p?.vendorId ?? ""}:${p?.productId ?? ""}:${p?.serialNumber ?? ""}`;
+const isUsb = (p) => p?.vendorId !== undefined && p.vendorId !== "";
+
+async function loadChosenPorts() {
+  try {
+    const raw = JSON.parse(await readFile(portsPath(), "utf8"));
+    chosenPorts = Array.isArray(raw) ? raw.filter((k) => typeof k === "string") : [];
+  } catch {
+    chosenPorts = [];
+  }
+}
+
+async function rememberPort(port) {
+  const key = portKey(port);
+  if (!isUsb(port) || chosenPorts.includes(key)) return;
+  chosenPorts.push(key);
+  try {
+    await mkdir(dirname(portsPath()), { recursive: true });
+    await writeFile(portsPath(), JSON.stringify(chosenPorts));
+  } catch {
+    // Not remembered: the list is shown again next time, which is all it costs.
+  }
+}
+
+/** A USB id as Electron gives it: a string, decimal. Hex is taken too. */
+const usbId = (s) => (/^[0-9]+$/.test(String(s)) ? Number(s) : parseInt(String(s), 16));
+
+function describePort(p) {
+  const what = p.displayName || "serial device";
+  const name = p.portName && !what.includes(p.portName) ? `${what} (${p.portName})` : what;
+  const vid = usbId(p.vendorId);
+  const pid = usbId(p.productId);
+  const hint =
+    vid === 0x0403
+      ? "an FTDI serial chip — most grids and arcs are one"
+      : vid === 0x0483 && pid === 0x5740
+        ? "an STM32 serial port — a crow is one"
+        : undefined;
+  return { id: p.portId, name, ...(hint ? { hint } : {}) };
+}
+
+/** The ports worth showing, the likely ones first. */
+function portsToShow(list) {
+  const likely = (p) => (usbId(p.vendorId) === 0x0403 || usbId(p.vendorId) === 0x0483 ? 0 : 1);
+  return list.filter(isUsb).sort((a, b) => likely(a) - likely(b)).map(describePort);
+}
+
+/** What the probe reads back: was the question raised, and with how many ports. */
+const serialSeen = { raised: 0, ports: 0, usb: 0 };
+
+function offerSerialPorts(ses) {
+  /** The question in front of the user, if there is one. */
+  let asking = null;
+  const refresh = () => {
+    if (asking === null) return;
+    const list = JSON.stringify(portsToShow(asking.ports));
+    asking.webContents
+      .executeJavaScript(`window.__nornsPortList && window.__nornsPortList(${list})`)
+      .catch(() => {});
+  };
+
+  ses.on("select-serial-port", (event, portList, webContents, callback) => {
+    event.preventDefault();
+    // A second question closes the first unanswered.
+    asking?.answer("");
+    const ports = [...portList];
+    serialSeen.raised++;
+    serialSeen.ports = ports.length;
+    serialSeen.usb = ports.filter(isUsb).length;
+    let done = false;
+    const answer = (id) => {
+      if (done) return;
+      done = true;
+      if (asking?.answer === answer) asking = null;
+      // ONLY AN ID THAT WAS OFFERED. The page returns a string, and a
+      // string is not a port until it is one of these.
+      const port = ports.filter(isUsb).find((p) => p.portId === id);
+      if (port !== undefined) void rememberPort(port);
+      callback(port !== undefined ? port.portId : "");
+    };
+    asking = { ports, webContents, answer };
+    webContents
+      .executeJavaScript(`window.__nornsChoosePort(${JSON.stringify(portsToShow(ports))})`, true)
+      .then(
+        (id) => answer(typeof id === "string" ? id : ""),
+        () => answer(""),
+      );
+  });
+
+  // Plugged in or pulled out while the list is open: the list follows.
+  ses.on("serial-port-added", (_event, port) => {
+    if (asking === null || asking.ports.some((p) => p.portId === port.portId)) return;
+    asking.ports.push(port);
+    refresh();
+  });
+  ses.on("serial-port-removed", (_event, port) => {
+    if (asking === null) return;
+    const at = asking.ports.findIndex((p) => p.portId === port.portId);
+    if (at < 0) return;
+    asking.ports.splice(at, 1);
+    refresh();
+  });
+}
 
 function lockDown(ses, origin, asked = new Set()) {
   ses.setPermissionRequestHandler((_wc, permission, done) => {
@@ -234,10 +359,15 @@ function lockDown(ses, origin, asked = new Set()) {
     asked.add(`check:${permission}`);
     return ALLOWED.has(permission);
   });
-  // Audio devices only. This handler also gates USB, serial and HID, none
-  // of which this page has any business with — Web Serial would be crow
-  // (E5-10) and it is not built.
-  ses.setDevicePermissionHandler((d) => d.deviceType === "audioOutput" || d.deviceType === "audioInput");
+  // This handler gates USB, serial and HID. E9-205: a SERIAL port the user
+  // has chosen from the list is allowed — that is a grid, an arc or a crow
+  // — and that is the only way in; USB and HID are still refused whole.
+  ses.setDevicePermissionHandler(
+    (d) =>
+      d.deviceType === "audioOutput" ||
+      d.deviceType === "audioInput" ||
+      (d.deviceType === "serial" && String(d.origin ?? "").startsWith(origin) && chosenPorts.includes(portKey(d.device))),
+  );
 
   // A Content-Security-Policy, added HERE rather than in `tools/serve.mjs`:
   // that file is the portable copy's server as well, and a policy that suits
@@ -276,6 +406,13 @@ function lockDown(ses, origin, asked = new Set()) {
       "https://raw.githubusercontent.com",
       "https://cdn.jsdelivr.net",
       "https://data.jsdelivr.com",
+      // E9-203 — the three services a catalogue script reads with `curl`
+      // and that answer a page: avonlea's weather, ppm_norns' CO2 reading,
+      // ufo's space station. STILL A LIST. A script bringing some other
+      // URL is refused here and the log says it was this policy that did.
+      "https://api.open-meteo.com",
+      "https://global-warming.org",
+      "https://api.wheretheiss.at",
     ].join(" "),
     "object-src 'none'",
     "base-uri 'none'",
@@ -327,6 +464,16 @@ function printReport(report, asked, packaged) {
     // it CAN survive is decidable here, because a loopback port can never
     // be the same origin twice.
     stableOrigin: report.origin === ORIGIN,
+    // The store opened, has scripts on its shelves, their pictures on them
+    // and the charts they are ordered by.
+    scriptStore: report.store?.cards > 0 && report.store?.covers > 0 && report.store?.charted > 0,
+    // The question reached this file, the page showed the list, and closing
+    // it gave the page the refusal a closed picker gives.
+    serialPortList:
+      report.serial?.raised === 1 &&
+      report.serial?.shown === true &&
+      report.serial?.listed === report.serial?.usb &&
+      report.serial?.outcome === "NotFoundError",
     // Only in a package. From a checkout the payload is `dist/`, which has
     // no source tree in it — `build-portable` is what assembles one, and
     // asserting it here would be asserting that somebody ran a build step
@@ -356,6 +503,9 @@ function printReport(report, asked, packaged) {
     line(`                          responds: ${s.responds?.join(" ") || "nothing"}`);
     if (s.errors?.length) line(`                          errors: ${s.errors.join(" | ")}`);
   }
+  line(`  script store            ${report.store?.cards} card(s) on the front page, ${report.store?.covers} picture(s) shown, ${report.store?.charted} with stars or a date, kept in a cache: ${report.store?.kept}${report.store?.why ? " — " + report.store.why : ""}`);
+  line(`  serial ports            api ${report.serial?.api}, button enabled ${report.serial?.button} — the list ${report.serial?.shown ? "opened" : "DID NOT OPEN"}`);
+  line(`                          with ${report.serial?.listed} of ${report.serial?.usb} usb port(s), ${report.serial?.ports} serial port(s) in all; closed: ${report.serial?.outcome}`);
   line(`  origin                  ${report.origin}`);
   line(`  survives a restart      ${report.persisted?.found} — ${report.persisted?.found ? "SELECT lists the script left at" + report.persisted.was : "no marker yet; one has been left for the next run"}`);
   if (report.logTail && report.logTail.length) {
@@ -446,7 +596,9 @@ async function main() {
   });
 
   const asked = new Set();
+  await loadChosenPorts();
   lockDown(session.defaultSession, ORIGIN, asked);
+  offerSerialPorts(session.defaultSession);
 
   const bounds = await loadBounds();
   const win = new BrowserWindow({
@@ -548,6 +700,76 @@ async function main() {
   } catch (e) {
     report = { fatal: String(e?.message ?? e) };
   }
+  // E9-208 — the script store, opened the way its button opens it. What
+  // this application could break and a browser could not: the pictures are
+  // another site's, fetched under this window's policy and shown from a
+  // blob, and they are kept in a cache that has to exist on `norns://`.
+  try {
+    report.store = await win.webContents.executeJavaScript(
+      `(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const button = document.querySelector("#scripts");
+        if (button === null) return { button: false, cards: 0, covers: 0, charted: 0, kept: false };
+        button.click();
+        let covers = 0;
+        for (let i = 0; i < 48 && covers === 0; i++) {
+          await sleep(250);
+          covers = document.querySelectorAll(".st-cover[data-has=yes]").length;
+        }
+        const out = {
+          button: true,
+          cards: document.querySelectorAll(".st-card").length,
+          covers,
+          // E9-209 — the stars and dates are a file shipped beside the
+          // page: a card with a number in its corner is that file read
+          // under this application's own address.
+          charted: document.querySelectorAll(".st-meta").length,
+          kept: typeof caches !== "undefined" && (await caches.keys()).includes("norns-js-covers-1"),
+        };
+        window.__norns?.store?.hide();
+        return out;
+      })()`,
+      true,
+    );
+  } catch (e) {
+    report.store = { button: false, cards: 0, covers: 0, charted: 0, kept: false, why: String(e?.message ?? e) };
+  }
+  // E9-205 — the port list, asked for the way the `usb` button asks, in a
+  // call of its own because the picker needs a gesture and this carries
+  // one. Nothing is chosen: the list is looked at and closed, so no port
+  // is opened and nothing is sent to anybody's device.
+  try {
+    report.serial = await win.webContents.executeJavaScript(
+      `(async () => {
+        const button = document.querySelector("#hwattach");
+        const out = {
+          api: "serial" in navigator,
+          button: button !== null && !button.hasAttribute("disabled"),
+          shown: false,
+          listed: 0,
+        };
+        setTimeout(() => {
+          const host = document.querySelector("#portchooser");
+          out.shown = host !== null && host.hidden === false;
+          out.listed = host === null ? 0 : host.querySelectorAll("button[data-port]").length;
+          host?.querySelector("[data-cancel]")?.click();
+        }, 800);
+        try {
+          await navigator.serial.requestPort();
+          out.outcome = "a port was returned with nothing chosen";
+        } catch (e) {
+          out.outcome = e.name;
+        }
+        return out;
+      })()`,
+      true,
+    );
+  } catch (e) {
+    report.serial = { outcome: String(e?.message ?? e) };
+  }
+  report.serial.raised = serialSeen.raised;
+  report.serial.ports = serialSeen.ports;
+  report.serial.usb = serialSeen.usb;
   const pass = printReport(report, asked, app.isPackaged);
   for (const n of noise.slice(0, 12)) line("  " + n.slice(0, 300));
   if (noise.length) line("");

@@ -34,6 +34,13 @@ import type { NornsRegistry } from "../norns/registry.js";
 
 export interface SerialRegisterOptions {
   readonly log?: (line: string) => void;
+  /**
+   * E9-204 — the crow on a serial port, when there is one.
+   *
+   * Asked at every send and not captured: a crow is plugged in and pulled
+   * out while a script runs, and the answer has to be today's.
+   */
+  readonly crow?: () => { send(command: string): void } | null;
 }
 
 export interface SerialStats {
@@ -41,8 +48,7 @@ export interface SerialStats {
   serialSends: number;
 }
 
-const CROW_WHY =
-  "crow is not attached (Web Serial could carry it — E5-10 explains what that needs)";
+const CROW_WHY = "crow is not attached — plug it in and use `usb` under devices";
 const SERIAL_WHY =
   "no serial device is attached (Web Serial could carry one — E5-10 explains what that needs)";
 
@@ -68,6 +74,12 @@ export function registerSerial(
     // generic "crow is missing".
     if (typeof cmd !== "string") {
       log(`crow_send: expected a string command, got ${typeof cmd}`);
+      return;
+    }
+    // `dev_crow_send`: the string, then a newline. The link adds it.
+    const crow = opts.crow?.() ?? null;
+    if (crow !== null) {
+      crow.send(cmd);
       return;
     }
     sayOnce("crow_send", CROW_WHY);

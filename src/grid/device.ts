@@ -124,7 +124,12 @@ export class GridDevice {
    * 16)` goes dark.
    */
   setLed(x: number, y: number, z: number, rel: boolean): void {
-    if (x < 0 || y < 0 || x >= this.descriptor.cols || y >= this.descriptor.rows) return;
+    // E9-204 — THE TURNED SIZE, not the descriptor's. A 16x8 turned a
+    // quarter is 8 wide and 16 tall to the script, and this compared
+    // against 16 and 8: every LED of its lower half was refused and
+    // `g:led(9, 1)` was accepted for a column that is not there. Found by
+    // lighting a (simulated) real grid, which shows what the bytes say.
+    if (x < 0 || y < 0 || x >= this.cols() || y >= this.rows()) return;
     const q = this.quadOf(x, y);
     if (q >= this.quads) return;
     const at = q * 64 + GridDevice.offsetIn(x, y);

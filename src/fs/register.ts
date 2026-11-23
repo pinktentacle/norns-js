@@ -8,6 +8,7 @@ import type { NornsRegistry } from "../norns/registry.js";
 import { lua, lauxlib, pushValue, type LuaValue } from "../lua/lua.js";
 import { Vfs, normalise } from "./vfs.js";
 import { runShell, globToRegExp } from "./shell.js";
+import type { NetReplies } from "./net-replies.js";
 import { parseWavHeader } from "./wav-header.js";
 
 export interface FsOptions {
@@ -38,6 +39,14 @@ export interface FsOptions {
    * were not there on the next run either.
    */
   readonly onFetch?: (fetch: { kind: "repo" | "file"; url: string; dest: string }) => void;
+  /**
+   * E9-203 — answers a `curl` whose output is being read.
+   *
+   * `_norns.execute` returns the token as a second value and the Lua
+   * wrapper waits on it; `_norns.system_cmd` already answers later, so its
+   * callback simply runs when the reply is in.
+   */
+  readonly net?: NetReplies;
   /** Called after a command that may have changed the tree. */
   readonly onChanged?: () => void;
   /**
@@ -128,6 +137,11 @@ export function registerFs(registry: NornsRegistry, vfs: Vfs, opts: FsOptions = 
     // for the same reason a failed shell command would.
     const cmd = String(command ?? "");
     const r = runShell(vfs, cmd);
+    if (r.request !== undefined && opts.net !== undefined) {
+      const ready = opts.net.take(cmd);
+      if (ready !== null) return [ready];
+      return ["", opts.net.start(cmd, r.request)];
+    }
     if (r.fetch !== undefined) opts.onFetch?.(r.fetch);
     if (!r.ok) opts.onRefused?.(cmd, r.refused ?? "unsupported");
     else opts.onChanged?.();
@@ -221,6 +235,26 @@ export function registerFs(registry: NornsRegistry, vfs: Vfs, opts: FsOptions = 
     const ref = lauxlib.luaL_ref(L, lua.LUA_REGISTRYINDEX);
 
     const r = runShell(vfs, cmd);
+    /** Run the callback with what the command printed, and let it go. */
+    const deliver = (out: string): void => {
+      lua.lua_rawgeti(L, lua.LUA_REGISTRYINDEX, ref);
+      pushValue(L, out);
+      const status = lua.lua_pcall(L, 1, 0, 0);
+      if (status !== lua.LUA_OK) {
+        opts.onRefused?.(cmd, `callback failed: ${lua.lua_tojsstring(L, -1)}`);
+        lua.lua_pop(L, 1);
+      }
+      lauxlib.luaL_unref(L, lua.LUA_REGISTRYINDEX, ref);
+      opts.onChanged?.();
+    };
+    // E9-203 — a `curl` whose output the callback is waiting for. This is
+    // the one door that was always asynchronous, so there is nothing to
+    // work around: the callback runs when the reply is in.
+    if (r.request !== undefined && opts.net !== undefined) {
+      opts.net.whenDone(opts.net.start(cmd, r.request), deliver);
+      lua.lua_pushboolean(L, true);
+      return 1;
+    }
     if (!r.ok) {
       // false means "no event will fire", so the callback is correctly never
       // invoked — which is exactly what upstream does for a command that
@@ -238,17 +272,7 @@ export function registerFs(registry: NornsRegistry, vfs: Vfs, opts: FsOptions = 
     // and SELECT sets `m.len = "scan"` before the call and redraws when the
     // answer arrives — delivering inline would run the callback before the
     // caller had finished setting itself up.
-    setTimeout(() => {
-      lua.lua_rawgeti(L, lua.LUA_REGISTRYINDEX, ref);
-      pushValue(L, r.out);
-      const status = lua.lua_pcall(L, 1, 0, 0);
-      if (status !== lua.LUA_OK) {
-        opts.onRefused?.(cmd, `callback failed: ${lua.lua_tojsstring(L, -1)}`);
-        lua.lua_pop(L, 1);
-      }
-      lauxlib.luaL_unref(L, lua.LUA_REGISTRYINDEX, ref);
-      opts.onChanged?.();
-    }, delay);
+    setTimeout(() => deliver(r.out), delay);
 
     lua.lua_pushboolean(L, true);
     return 1;

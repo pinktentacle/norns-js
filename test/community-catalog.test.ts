@@ -126,6 +126,21 @@ describe("which repository a link means", () => {
     expect(parseRepoUrl("https://github.com/a")).toBeNull();
     expect(parseRepoUrl("not a url")).toBeNull();
   });
+
+  // E9-203 — the catalogue still says jaseknighter/semiconductor, which is a
+  // 404; the author deleted it and published the script again as
+  // norns_semiconductor, so GitHub forwards nothing. Listed and read on
+  // 2026-11-23: its own includes say 'semiconductor/lib/…'.
+  it("follows a script that was published again under another name", () => {
+    expect(parseRepoUrl("https://github.com/jaseknighter/semiconductor")).toEqual({
+      owner: "jaseknighter",
+      repo: "norns_semiconductor",
+    });
+    expect(parseRepoUrl("https://github.com/JaseKnighter/Semiconductor.git")?.repo).toBe("norns_semiconductor");
+    // And nothing else is touched, the new name included.
+    expect(parseRepoUrl("https://github.com/jaseknighter/norns_semiconductor")?.repo).toBe("norns_semiconductor");
+    expect(parseRepoUrl("https://github.com/jaseknighter/flora")).toEqual({ owner: "jaseknighter", repo: "flora" });
+  });
 });
 
 describe("which of a repository's files belong in a dust tree", () => {

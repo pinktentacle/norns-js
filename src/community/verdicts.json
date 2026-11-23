@@ -1,0 +1,65 @@
+{
+ "what": "What happened when each script in public/community-blockers.json was installed and run here, one at a time with the engine up: the campaigns written down in docs/11-MISSING.md, sections 9, 17, 18 and 19. The blockers table says what is MISSING and is worked out from the source; this says what that cost, and is measured. A verdict counts only while the script is still in that table — one that is fixed leaves the table and its row here stops meaning anything. A script in the table and not here gets the plain 'something is missing' mark.",
+ "verdicts": {
+  "gone": "it cannot be installed",
+  "no": "it starts, or tries to, and cannot do what it is for",
+  "part": "it runs and plays, with a part of it absent",
+  "needs": "it runs once something is done, and the label says what"
+ },
+ "scripts": {
+  "amenbreak": {
+   "verdict": "no",
+   "measured": "it asks for a restart for ever: its 293 MB of audio and two programs come from a GitHub release, which a page may not fetch"
+  },
+  "arp_index": {
+   "verdict": "no",
+   "measured": "it starts, 153 pixels lit, silent: cloud.iexapis.com, where its numbers come from, has closed — on a norns too"
+  },
+  "cheat_codes_2": {
+   "verdict": "needs",
+   "label": "needs a midi device",
+   "measured": "it stops in ping_midi_devices with no MIDI device attached, and runs with one: the keyboard in the rail is enough"
+  },
+  "fixed-filter-banking-crisis": {
+   "verdict": "needs",
+   "label": "brings fx with it",
+   "measured": "it runs, 301 pixels lit, with sixolet/fx beside it — which installing it here fetches too"
+  },
+  "lorenzos-drums": {
+   "verdict": "no",
+   "measured": "it draws its screen and has no drums: its 66 MB of samples come from a GitHub release, which a page may not fetch"
+  },
+  "makebreakbeat": {
+   "verdict": "no",
+   "measured": "it starts, 147 pixels lit; sox, the program that does its work, is built for the Raspberry Pi and is not here"
+  },
+  "norns.online": {
+   "verdict": "no",
+   "measured": "it draws its screen; the program that does its sharing is built for the Raspberry Pi and is not here"
+  },
+  "paracosms": {
+   "verdict": "no",
+   "measured": "what the catalogue points at is only an installer, for plugins built for the Raspberry Pi"
+  },
+  "pirate-radio": {
+   "verdict": "part",
+   "measured": "it runs and plays, peak 0.137; dust2dust and ogg123, which it broadcasts and plays files with, are programs for the Raspberry Pi"
+  },
+  "sampswap": {
+   "verdict": "no",
+   "measured": "it draws its screen and stays silent, peak 0.0005: sox and sendosc, which do its work, are programs built for the Raspberry Pi"
+  },
+  "tulpamancer": {
+   "verdict": "no",
+   "measured": "it stops at line 46: the file it asks nyse.com for is one no page is allowed to read"
+  },
+  "vials": {
+   "verdict": "gone",
+   "measured": "its repository answers 404, on GitHub and on jsDelivr, on main and on master"
+  },
+  "zxcvbn": {
+   "verdict": "no",
+   "measured": "it starts, 120 pixels lit, silent: its tools come from a GitHub release and are built for the Raspberry Pi"
+  }
+ }
+}

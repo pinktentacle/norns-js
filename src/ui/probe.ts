@@ -512,6 +512,8 @@ export interface ProbeSources {
   readonly audio: () => unknown;
   /** Presents drawn and skipped by the grid view, cumulative. */
   readonly grid: () => { drawn: number; skipped: number } | null;
+  /** The same for the arc's view, when one is attached. E9-207. */
+  readonly arc?: () => { drawn: number; skipped: number } | null;
   /** Bytes of each wasm heap worth watching, by name. */
   readonly heaps: () => ReadonlyArray<readonly [string, number]>;
   /** Whole lines the page adds: slow events, pressure, battery. */
@@ -579,6 +581,7 @@ export function createProbe(src: ProbeSources): Probe {
   // reports everything since the page began.
   let playback: PlaybackReading | null = null;
   let grid: { drawn: number; skipped: number } | null = null;
+  let arc: { drawn: number; skipped: number } | null = null;
   const pairNs = clockPairNs(now);
   // Run before it is read: the first call of any function is the engine
   // still deciding how to compile it, and the first mark printed 4.1 ns
@@ -718,6 +721,17 @@ export function createProbe(src: ProbeSources): Probe {
         out.push(`grid: ${drawn} present(s) drawn, ${skipped} skipped as identical`);
       }
       grid = g;
+
+      const a = src.arc?.() ?? null;
+      if (a !== null) {
+        const since = (nowN: number, then: number): number => (nowN >= then ? nowN - then : nowN);
+        const drawn = since(a.drawn, arc?.drawn ?? 0);
+        const skipped = since(a.skipped, arc?.skipped ?? 0);
+        // Counted per ring sent: a refresh that touches four rings and
+        // changes none is four skipped.
+        out.push(`arc: ${drawn} frame(s) painted, ${skipped} ring update(s) skipped as identical`);
+      }
+      arc = a;
 
       for (const line of src.notes()) out.push(line);
       out.push(`machine: ${speedGauge(now).toFixed(1)} ns an iteration of the fixed loop`);

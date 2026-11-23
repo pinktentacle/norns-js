@@ -35,6 +35,12 @@ interface Library {
   readonly wanted_by: readonly string[];
   readonly guard: string;
   readonly what: string;
+  /**
+   * E9-203 — the path a script asks for it by INSIDE ITS OWN FOLDER while
+   * carrying no such file: `require "metronome/lib/nb"` in a repository
+   * with no `lib/`. See `CARRIED`.
+   */
+  readonly carried_as?: readonly string[];
 }
 
 const LIBRARIES = offCatalogue.libraries as Record<string, Library>;
@@ -63,6 +69,24 @@ export const OFF_CATALOGUE: ReadonlyMap<string, CatalogEntry> = new Map(
       documentation: null,
     } satisfies CatalogEntry,
   ]),
+);
+
+/**
+ * E9-203 — a library a script asks for as a file of its own and does not ship.
+ *
+ * `lib/nb` -> `{ library: "nb", module: "nb/lib/nb" }`. Two readers:
+ * `needs.ts` installs the library with the script, and the Lua searcher in
+ * `lua/host.ts` answers the `require` from the installed copy. NOTHING IS
+ * WRITTEN INTO THE SCRIPT'S FOLDER — that was the objection to fixing
+ * `metronome` in E9-73, and it still stands: the file is not theirs to be
+ * given. The `require` is answered from where the library really is.
+ */
+export const CARRIED: ReadonlyMap<string, { readonly library: string; readonly module: string }> = new Map(
+  Object.entries(LIBRARIES).flatMap(([head, v]) =>
+    (v.carried_as ?? []).map(
+      (tail) => [tail, { library: head, module: `${v.name}/${v.file.replace(/\.lua$/, "")}` }] as const,
+    ),
+  ),
 );
 
 /** The entry for an off-catalogue library, by the folder name a script uses. */

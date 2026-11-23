@@ -1,0 +1,27 @@
+{
+  "what": "Engines no catalogue script publishes because monome's own engine studies have you write them — and that a catalogue script then depends on. The source is the study's page, pinned to a commit of monome/docs so that what is fetched is exactly what was checked, and each file carries the SHA-256 of what was read on the day. The files are fetched from monome by the user's own browser into the user's own storage, into the folder the study itself tells you to make; nothing of it ships with this build.",
+  "engines": {
+    "Moonshine": {
+      "folder": "engine_study",
+      "page": "https://raw.githubusercontent.com/monome/docs/8e9e1316c9c9a353606319d698f3b042d3b262a1/norns/engine-study-2.md",
+      "read": "https://monome.org/docs/norns/engine-study-2/",
+      "title": "skilled labor — norns engine study 2",
+      "credit": "The Moonshine engine was written by Dani Derks + Ezra Buchla for monome.org.",
+      "licence": "CC BY 4.0 (the licence of monome/docs)",
+      "checked": "2026-11-23",
+      "wanted_by": ["streams"],
+      "files": [
+        {
+          "path": "lib/moonshine.sc",
+          "starts": "Moonshine {",
+          "sha256": "dbdf056dc9ac74ed95886f392bba97dd2bb967dea7855d087c15271511c1eef7"
+        },
+        {
+          "path": "lib/Engine_Moonshine.sc",
+          "starts": "Engine_Moonshine : CroneEngine {",
+          "sha256": "4e9c1cd77e4c12811ce75fcc82b24729e1b457da9441c3d6e95306824248f2a5"
+        }
+      ]
+    }
+  }
+}

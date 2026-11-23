@@ -1,0 +1,10 @@
+{
+  "what": "Catalogue entries whose repository is no longer where the catalogue says, and where it is now. GitHub forwards a RENAMED repository by itself; these are the ones it does not forward, because the old one was deleted and the script published again under another name. Every row was checked by listing the new repository and reading the file that names the script. One file, two readers: the installer (src/community/install.ts) and the sweep behind the notes maiden shows (tools/fetch-catalogue.mjs).",
+  "moved": {
+    "jaseknighter/semiconductor": {
+      "to": "jaseknighter/norns_semiconductor",
+      "checked": "2026-11-23",
+      "evidence": "22 files on main; lib/mod.lua includes itself as 'semiconductor/lib/…' and its header reads 'docs: https://github.com/jaseknighter/semiconductor'. It is installed under the catalogue's name, which is the one its own includes use."
+    }
+  }
+}

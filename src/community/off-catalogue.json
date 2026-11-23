@@ -1,6 +1,6 @@
 {
   "what": "Libraries a norns script asks for by folder name that are NOT in the 354-entry community catalogue, and that do exist. E9-70 found them by reading the ten scripts the blockers table had wrongly called blocked; E9-71 made them installable. Every row was checked by fetching the repository and confirming it holds the exact file the script asks for, and every row is a manual install ON HARDWARE TOO - none of the six is a catalogue entry, so a norns owner pastes the url into maiden or git-clones it on the box, which is the same gesture as the project panel's url install.",
-  "optional": "ALL SIX ARE OPTIONAL. Each sits behind a guard the script writes - a mod that must be enabled, a folder it tests for, a device that must be plugged in, a constant shipped false - and all eight scripts that ask for one were measured running without it. They are installed with the script anyway, so that enabling the mod or plugging in the device is all there is left to do.",
+  "optional": "THE SIX OF E9-70 ARE OPTIONAL (nb, added in E9-203, is not: see its guard). Each sits behind a guard the script writes - a mod that must be enabled, a folder it tests for, a device that must be plugged in, a constant shipped false - and all eight scripts that ask for one were measured running without it. They are installed with the script anyway, so that enabling the mod or plugging in the device is all there is left to do.",
   "libraries": {
     "namesizer": {
       "name": "namesizer",
@@ -41,6 +41,15 @@
       "wanted_by": ["shnthsalslied", "tetrabobo", "tetrabotis"],
       "guard": "sh = hid.connect(1) / if sh.device then",
       "what": "the Shbobo shnth library, reached only with a shnth plugged in over HID"
+    },
+    "nb": {
+      "name": "nb",
+      "url": "https://github.com/sixolet/nb",
+      "file": "lib/nb.lua",
+      "wanted_by": ["metronome"],
+      "guard": "none, and that is the difference: metronome.lua:24 is require 'metronome/lib/nb', at load, for a copy inside its own folder that its repository has never carried (two files on main: README.md and metronome.lua)",
+      "what": "the note-player library. Eight catalogue scripts carry it as a git submodule and get it with their own files; metronome asks for it as a file of its own and ships none, so it cannot start on a norns either",
+      "carried_as": ["lib/nb"]
     },
     "gridcapture": {
       "name": "GridCapture",

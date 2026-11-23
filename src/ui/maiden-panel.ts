@@ -45,7 +45,7 @@ import "ace-builds/src-noconflict/theme-dawn";
 import type { EditorEntry, EditorStore } from "../editor/store.js";
 import type { MaidenRunner } from "../editor/runner.js";
 import { createMaidenRepl, type ReplSource } from "./maiden-repl.js";
-import { createMaidenProject, type MaidenProjectOptions } from "./maiden-project.js";
+import { createMaidenProject, type CommunityLibrary, type MaidenProjectOptions } from "./maiden-project.js";
 
 /**
  * The configure activity's four settings.
@@ -123,6 +123,8 @@ export interface MaidenPanel {
    * pretending to have queued them.
    */
   want(names: readonly string[], neededBy: string): Promise<string[]>;
+  /** E9-208 — the installer's queue, shared with the script store. Null with no installer. */
+  readonly library: CommunityLibrary | null;
   dispose(): void;
 }
 
@@ -1270,6 +1272,8 @@ export function createMaidenPanel(opts: MaidenPanelOptions): MaidenPanel {
       if (project === null) return [...names];
       return project.want(names, neededBy);
     },
+    // E9-208 — the installer's queue, for the script store to share.
+    library: project?.library ?? null,
     dispose() {
       ac.abort();
       unwatch();

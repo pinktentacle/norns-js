@@ -9,6 +9,13 @@ import { mkdir, writeFile, readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 const HERE = dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"));
+// E9-203 — a repository the catalogue still points at and GitHub no longer
+// forwards. The installer reads the same file; the cache keeps the
+// catalogue's key, so everything downstream goes on finding it by name.
+const MOVED = JSON.parse(
+  await readFile(new URL("../src/community/moved.json", import.meta.url), "utf8"),
+).moved;
+const whereNow = (key) => MOVED[key]?.to ?? key;
 const CATALOG = "https://raw.githubusercontent.com/monome/norns-community/main/community.json";
 
 async function getJson(url) {
@@ -77,17 +84,25 @@ async function main() {
     listings = {};
   }
 
-  const todo = repos.filter((r) => !listings[`${r.owner}/${r.repo}`]);
+  // A listing that FAILED is asked for again: `semiconductor` sat here as
+  // "will not list" for as long as nobody looked, and the answer changed.
+  const todo = repos.filter((r) => {
+    const l = listings[`${r.owner}/${r.repo}`];
+    return !l || l.failed === true;
+  });
   console.log(`listings to fetch: ${todo.length}`);
   let done = 0;
   await pool(todo, 8, async (r) => {
+    const key = `${r.owner}/${r.repo}`;
+    const now = whereNow(key);
+    const from = now === key ? {} : { from: now };
     for (const branch of ["main", "master"]) {
       try {
         const j = await getJson(
-          `https://data.jsdelivr.com/v1/packages/gh/${r.owner}/${r.repo}@${branch}?structure=flat`,
+          `https://data.jsdelivr.com/v1/packages/gh/${now}@${branch}?structure=flat`,
         );
         const files = (j.files ?? []).map((f) => f.name.replace(/^\//, ""));
-        listings[`${r.owner}/${r.repo}`] = { branch, name: r.name, files };
+        listings[key] = { branch, name: r.name, files, ...from };
         if (++done % 25 === 0) console.log(`  ${done}/${todo.length}`);
         return;
       } catch {
@@ -113,21 +128,21 @@ async function main() {
     for (const branch of ["main", "master"]) {
       try {
         const j = await getJson(
-          `https://api.github.com/repos/${r.owner}/${r.repo}/git/trees/${branch}?recursive=1`,
+          `https://api.github.com/repos/${now}/git/trees/${branch}?recursive=1`,
         );
         if (j.truncated === true) continue;
         const files = (j.tree ?? [])
           .filter((e) => e.type === "blob" && typeof e.path === "string")
           .map((e) => e.path);
         if (files.length === 0) continue;
-        listings[`${r.owner}/${r.repo}`] = { branch, name: r.name, files, via: "github" };
+        listings[key] = { branch, name: r.name, files, via: "github", ...from };
         done++;
         return;
       } catch {
         /* try the next branch, then give up */
       }
     }
-    listings[`${r.owner}/${r.repo}`] = { branch: null, name: r.name, files: [], failed: true };
+    listings[key] = { branch: null, name: r.name, files: [], failed: true };
     done++;
   });
   await writeFile(listPath, JSON.stringify(listings, null, 1));
@@ -138,7 +153,9 @@ async function main() {
   const wanted = [];
   for (const [key, v] of Object.entries(listings)) {
     for (const p of v.files ?? []) {
-      if (WANT.test(p) && !/node_modules/.test(p)) wanted.push({ key, branch: v.branch, path: p });
+      if (WANT.test(p) && !/node_modules/.test(p)) {
+        wanted.push({ key, from: v.from ?? key, branch: v.branch, path: p });
+      }
     }
   }
   console.log(`files wanted: ${wanted.length}`);
@@ -155,7 +172,7 @@ async function main() {
     } catch {
       /* not cached */
     }
-    const url = `https://cdn.jsdelivr.net/gh/${f.key}@${f.branch}/${f.path}`;
+    const url = `https://cdn.jsdelivr.net/gh/${f.from}@${f.branch}/${f.path}`;
     const r = await fetch(url);
     if (!r.ok) {
       bad++;

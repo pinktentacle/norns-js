@@ -22,6 +22,7 @@
 import { lua, to_luastring, readArgs, pushValue, type LuaState } from "../lua/lua.js";
 import type { Vfs } from "./vfs.js";
 import { runShell } from "./shell.js";
+import type { NetReplies } from "./net-replies.js";
 
 /** Install `_vfs_*` as globals. The Lua prelude below is written against them. */
 export function installVfsPrimitives(
@@ -36,6 +37,8 @@ export function installVfsPrimitives(
    * refusal beside this, that the files are not there YET.
    */
   onShellFetch?: (fetch: { kind: "repo" | "file"; url: string; dest: string }) => void,
+  /** E9-203 — where a `curl` whose output is being read goes to be answered. */
+  net?: NetReplies,
 ): void {
   const fn = (name: string, impl: (args: unknown[]) => unknown): void => {
     lua.lua_pushcfunction(L, (S: LuaState) => {
@@ -115,11 +118,27 @@ export function installVfsPrimitives(
   fn("_vfs_shell", (a) => {
     const cmd = String(a[0] ?? "");
     const r = runShell(vfs, cmd);
+    // E9-203 — a reply the caller wants to READ (`io.popen`, which says so
+    // with its second argument; `os.execute` throws the output away and
+    // has nothing to wait for). A third value is the token to wait on.
+    if (r.request !== undefined && a[1] === true && net !== undefined) {
+      const ready = net.take(cmd);
+      if (ready !== null) return [ready, true] as unknown;
+      return ["", false, net.start(cmd, r.request)] as unknown;
+    }
     if (r.fetch !== undefined) onShellFetch?.(r.fetch);
     if (!r.ok) onShellRefused?.(cmd, r.refused ?? "unsupported");
     // Two values: the output, and whether it ran. Lua's `os.execute` wants a
     // boolean and `io.popen` wants the text, and they are the same call.
     return [r.out, r.ok] as unknown;
+  });
+  fn("_vfs_net_poll", (a) => {
+    const p = net?.poll(Number(a[0])) ?? { done: true, body: "" };
+    return [p.body, p.done] as unknown;
+  });
+  fn("_vfs_net_leave", (a) => {
+    net?.leave(Number(a[0]));
+    return true;
   });
 }
 
@@ -406,12 +425,42 @@ os.rename = function(from, to)
   return nil, from .. ': No such file or directory'
 end
 
+-- E9-203. A reply from the network that a script is asking to read.
+--
+-- Nothing here can stop and wait for it. A CLOCK COROUTINE CAN SLEEP,
+-- though, and every catalogue script that reads a service does it from
+-- one: so the coroutine sleeps a fiftieth of a second at a time until the
+-- reply is in, and the rest of the page never notices. Anywhere else the
+-- answer is the one a download gets -- nothing now, and the reply the next
+-- time the same thing is asked.
+function _njs_await_reply(token)
+  local co, is_main = coroutine.running()
+  local clk = rawget(_G, 'clock')
+  local can_sleep = false
+  if not is_main and type(clk) == 'table' and type(clk.threads) == 'table' then
+    for _, th in pairs(clk.threads) do
+      if th == co then can_sleep = true break end
+    end
+  end
+  if not can_sleep then
+    _vfs_net_leave(token)
+    return ''
+  end
+  while true do
+    local r = _vfs_net_poll(token)
+    if r[2] then return r[1] or '' end
+    clk.sleep(0.02)
+  end
+end
+
 io.popen = function(cmd, mode)
   -- The command has already run by the time this returns, which is what
   -- 'execSync' did too. A read handle over its output is the whole of what
   -- scripts use popen for: 'local f = io.popen(c) local s = f:read('a')'.
-  local r = _vfs_shell(cmd)
-  return setmetatable({ path = nil, data = r[1] or '', pos = 1, mode = 'r', buf = {} }, File)
+  local r = _vfs_shell(cmd, true)
+  local data = r[1] or ''
+  if r[3] ~= nil then data = _njs_await_reply(r[3]) end
+  return setmetatable({ path = nil, data = data, pos = 1, mode = 'r', buf = {} }, File)
 end
 
 -- loadfile and dofile, because fengari's read through the browser fs shim and
@@ -427,5 +476,22 @@ dofile = function(path)
   local chunk, err = loadfile(path)
   if not chunk then error(err, 2) end
   return chunk()
+end
+`;
+
+/**
+ * E9-203 — `_norns.execute`, taught to wait for a reply.
+ *
+ * `util.os_capture` is `_norns.execute`, which is a function of the page's
+ * and cannot sleep. Wrapped in Lua it can: the page answers with a token
+ * when the command is a `curl` whose output is wanted, and the wrapper
+ * waits on it the way `io.popen` does. Run after `_norns` exists.
+ */
+export const LUA_NET_PRELUDE = `
+local raw_execute = _norns.execute
+_norns.execute = function(cmd)
+  local out, token = raw_execute(cmd)
+  if token == nil then return out end
+  return _njs_await_reply(token)
 end
 `;

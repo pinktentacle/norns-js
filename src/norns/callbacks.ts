@@ -146,6 +146,11 @@ export function makeCallbacks(L: LuaState) {
       call("grid.tilt", id0 + 1, sensor0 + 1, x0 + 1, y0 + 1, z0 + 1),
     arcDelta: (id0: number, n0: number, delta: number) => call("arc.delta", id0 + 1, n0 + 1, delta),
     arcKey: (id0: number, n0: number, state: number) => call("arc.key", id0 + 1, n0 + 1, state),
+    // E9-204 — crow, as `w_handle_crow_*` calls them: a 1-based id, the
+    // name, and whatever the page uses for a handle.
+    crowAdd: (id0: number, name: string, dev: LuaValue) => call("crow.add", id0 + 1, name, dev),
+    crowRemove: (id0: number) => call("crow.remove", id0 + 1),
+    crowEvent: (id0: number, line: string) => call("crow.event", id0 + 1, line),
     midiAdd: (id0: number, name: string, dev: LuaValue) => call("midi.add", id0 + 1, name, dev),
     midiRemove: (id0: number) => call("midi.remove", id0 + 1),
     midiEvent: (id0: number, bytes: readonly number[]) => call("midi.event", id0 + 1, bytes as LuaValue),

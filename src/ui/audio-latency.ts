@@ -60,3 +60,22 @@ export function describeDeviceLatency(baseSeconds: number, outSeconds: number): 
     `${ms(baseSeconds + outSeconds)} ms in all, which is the floor under every key you press`
   );
 }
+
+/**
+ * E9-202 — what the browser MEASURED, where it measures.
+ *
+ * `outputLatency` is the device alone and is rounded to 8 ms.
+ * `playbackStats` times every buffer from the graph to the speaker, and
+ * is the only one of the two that includes what an underrun leaves in
+ * the output FIFO: a Pixel read 24 and 52. So the measured figure is the
+ * floor, and the estimate is kept beside it because the difference
+ * between them is itself the reading.
+ */
+export function describeMeasuredLatency(measuredSeconds: number, outSeconds: number): string {
+  const estimate =
+    outSeconds > 0 ? ` (its estimate for the device alone is ${ms(outSeconds)} ms)` : "";
+  return (
+    `audio latency: ${ms(measuredSeconds)} ms from the graph to the speaker, measured by the browser — ` +
+    `the floor under every key you press${estimate}`
+  );
+}

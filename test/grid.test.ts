@@ -215,6 +215,21 @@ describe("rotation", () => {
     expect(d.front()[8]).toBe(0);
   });
 
+  it("lights the lower half of a 16x8 turned a quarter", () => {
+    // E9-204. The bounds were the unturned 16 and 8, so on a grid that is
+    // 8 wide and 16 tall every `g:led(x, y)` with y past 8 was dropped,
+    // and x past 8 was let through.
+    const { d } = device(16, 8);
+    d.setRotation(1);
+    d.setLed(7, 15, 6, false);
+    d.setLed(0, 8, 3, false);
+    d.setLed(12, 0, 9, false); // a column that is not there any more
+    d.refresh();
+    expect(d.front()[15 * 8 + 7]).toBe(6);
+    expect(d.front()[8 * 8]).toBe(3);
+    expect([...d.front()].filter((l) => l === 9)).toEqual([]);
+  });
+
   it("swaps rows and cols on a quarter turn", () => {
     // `Grid:rotation` re-reads both straight after setting it.
     const { d } = device(16, 8);

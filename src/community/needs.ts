@@ -30,8 +30,9 @@
 
 import type { Vfs } from "../fs/vfs.js";
 import type { CatalogEntry } from "./catalog.js";
-import { OFF_CATALOGUE } from "./off-catalogue.js";
+import { CARRIED, OFF_CATALOGUE } from "./off-catalogue.js";
 import engineIndex from "./engines.json";
+import { studyEntry } from "./study-engines.js";
 
 /**
  * E9-74 — which catalogue script declares an engine class.
@@ -209,7 +210,23 @@ export function needsOf(
       const target = m[1]!;
       if (!target.includes("/")) continue; // `require 'musicutil'`: no folder
       const head = target.split("/")[0]!.toLowerCase();
-      if (head === name.toLowerCase()) continue; // itself, by its own name
+      if (head === name.toLowerCase()) {
+        // Itself, by its own name — and nearly always a file it has.
+        // E9-203: `metronome` asks for `metronome/lib/nb` and its
+        // repository has no `lib/` at all. A known library asked for that
+        // way and not carried is installed beside the script; the Lua
+        // searcher answers the `require` from there.
+        const tail = target.split("/").slice(1).join("/");
+        const carried = CARRIED.get(tail);
+        if (carried === undefined || vfs.exists(`${mine}/${tail}.lua`)) continue;
+        const lib = OFF_CATALOGUE.get(carried.library);
+        if (lib === undefined || present.has(carried.library)) continue;
+        const k = `script:${carried.library}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        needs.push({ kind: "script", want: lib.name, from: p, entry: lib, offCatalogue: true });
+        continue;
+      }
       if (present.has(head)) continue;
       // E9-71 — the catalogue first, then the six that are real without
       // being in it. Catalogue first and not the other way round: if an
@@ -243,10 +260,18 @@ export function needsOf(
       // provider can be installed and its `.sc` not yet compiled — a
       // restart, not an install.
       const from = ENGINE_IN[want];
-      const provider =
+      let provider =
         from !== undefined && !present.has(from.toLowerCase())
           ? (byName.get(from.toLowerCase()) ?? null)
           : null;
+      // E9-203 — an engine no script publishes because monome's study has
+      // you write it. The study's page carries it whole; see
+      // `study-engines.ts`. Passed over when the folder is already there:
+      // somebody who did the study has their own, and it is theirs.
+      if (provider === null && from === undefined) {
+        const study = studyEntry(want);
+        if (study !== null && !present.has(study.name.toLowerCase())) provider = study;
+      }
       needs.push({ kind: "engine", want, from: p, entry: provider });
       break;
     }

@@ -1,5 +1,5 @@
 {
- "generated": "2026-11-17",
+ "generated": "2026-11-23",
  "from": "the 355-entry monome/norns-community catalogue",
  "note": "A script listed here is missing something. Some will not start; some run with less. Absence from this list is not a promise.",
  "scripts": {
@@ -7,10 +7,7 @@
    "amenbreak.tar and amenbreak_data.tar.gz, from a GitHub release the browser may not fetch"
   ],
   "arp_index": [
-   "reads a network reply at once, which cannot arrive in time"
-  ],
-  "avonlea": [
-   "reads a network reply at once, which cannot arrive in time"
+   "reads cloud.iexapis.com, which has closed and answers nobody"
   ],
   "cheat_codes_2": [
    "needs a MIDI device before it starts — attach the keyboard in the rail, or plug one in"
@@ -24,39 +21,20 @@
   "makebreakbeat": [
    "sox, from a GitHub release the browser may not fetch"
   ],
-  "metronome": [
-   "requires metronome/lib/nb, which is not in its repository"
-  ],
   "norns.online": [
    "norns.online, from a GitHub release the browser may not fetch"
-  ],
-  "nornsfetch": [
-   "reads a network reply at once, which cannot arrive in time"
   ],
   "paracosms": [
    "ignore.zip and extra.zip, and 1 more, from a GitHub release the browser may not fetch"
   ],
   "pirate-radio": [
-   "reads a network reply at once, which cannot arrive in time",
    "dust2dust, from a GitHub release the browser may not fetch"
-  ],
-  "ppm_norns": [
-   "reads a network reply at once, which cannot arrive in time"
   ],
   "sampswap": [
    "sox and sendosc, and 1 more, from a GitHub release the browser may not fetch"
   ],
-  "semiconductor": [
-   "its repository will not list — renamed, private or gone"
-  ],
-  "streams": [
-   "the Moonshine engine is in no catalogue script"
-  ],
   "tulpamancer": [
-   "fetches a tulpa with curl at init, and there is no curl"
-  ],
-  "ufo": [
-   "reads a network reply at once, which cannot arrive in time"
+   "reads a file from nyse.com, which does not let a page read it"
   ],
   "vials": [
    "its repository will not list — renamed, private or gone"

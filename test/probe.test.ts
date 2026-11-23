@@ -476,6 +476,18 @@ describe("one report", () => {
     expect(probe.report().join("\n")).toContain("grid: 3 present(s) drawn, 0 skipped as identical");
   });
 
+  it("says the same of the arc, and nothing when there is none", () => {
+    // E9-207. No arc attached is the ordinary case, and a line about an
+    // instrument that is not there would be noise in every mark.
+    const none = session({});
+    expect(none.probe.report().join("\n")).not.toContain("arc:");
+    let a = { drawn: 12, skipped: 100 };
+    const { probe } = session({ arc: () => a });
+    expect(probe.report().join("\n")).toContain("arc: 12 frame(s) painted, 100 ring update(s) skipped as identical");
+    a = { drawn: 15, skipped: 104 };
+    expect(probe.report().join("\n")).toContain("arc: 3 frame(s) painted, 4 ring update(s) skipped as identical");
+  });
+
   it("reads the audio context only when asked, because it does not exist yet when this is built", () => {
     let asked = 0;
     session({

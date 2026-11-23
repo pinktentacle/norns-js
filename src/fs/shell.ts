@@ -46,6 +46,24 @@ export interface ShellResult {
     readonly url: string;
     readonly dest: string;
   };
+  /**
+   * E9-203 — a network reply the caller is asking to READ.
+   *
+   * `curl -s <url>` with nowhere to put it means "give me the body", and
+   * the caller is `util.os_capture`. A browser can fetch that; this
+   * function cannot wait for it. So the request is handed up, and whoever
+   * called decides how to wait: a script in a clock coroutine can be put
+   * to sleep until the reply is in, which is better than the hardware
+   * does — there the whole of matron stops for the length of the request.
+   */
+  readonly request?: ShellRequest;
+}
+
+export interface ShellRequest {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+  /** From `-m` / `--max-time`; thirty seconds when the command gives none. */
+  readonly timeoutMs: number;
 }
 
 const OK = (out: string): ShellResult => ({ out, ok: true });
@@ -60,6 +78,20 @@ const LATER = (refused: string, fetch: NonNullable<ShellResult["fetch"]>): Shell
   refused,
   fetch,
 });
+/** Not answered here: the caller may go and get it. `ok` is false until it has. */
+const ASK = (request: ShellRequest): ShellResult => ({
+  out: "",
+  ok: false,
+  refused: `reading ${request.url} — nothing here can wait for the reply`,
+  request,
+});
+
+/** `curl` flags that take a value this shell has no use for. */
+const CURL_SKIPS_ONE = new Set([
+  "-A", "--user-agent", "-e", "--referer", "--retry", "--retry-delay", "--output-dir", "-w", "--write-out",
+]);
+/** What makes it something other than reading a page. */
+const CURL_NOT_A_GET = /^(-F|--form|-d|--data|--data-\w+|-T|--upload-file|-X|--request|-u|--user|-b|--cookie)$/;
 
 /** Strip one layer of single or double quotes. */
 /**
@@ -978,20 +1010,59 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
       const ws = words(body);
       let dest: string | null = null;
       let url: string | null = null;
+      const headers: Record<string, string> = {};
+      let seconds = 30;
+      let notAGet: string | null = null;
       for (let i = 1; i < ws.length; i++) {
         const w = ws[i]!;
         if (w === "-O" || w === "-o" || w === "--output") {
           dest = unquote(ws[++i] ?? "");
           continue;
         }
-        if (w.startsWith("-")) continue; // -q, -s, -L, -k, --max-time …
+        // `wget -qO- <url>`: the dash is the destination, and it is stdout.
+        if (/^-[a-zA-Z]*O-$/.test(w)) {
+          dest = "-";
+          continue;
+        }
+        if (w === "-H" || w === "--header") {
+          const h = /^([^:]+):\s*(.*)$/.exec(unquote(ws[++i] ?? ""));
+          if (h) headers[h[1]!.trim()] = h[2]!;
+          continue;
+        }
+        if (w === "-m" || w === "--max-time" || w === "--connect-timeout") {
+          const n = Number(unquote(ws[++i] ?? ""));
+          if (Number.isFinite(n) && n > 0 && (w !== "--connect-timeout" || seconds === 30)) seconds = n;
+          continue;
+        }
+        if (CURL_SKIPS_ONE.has(w)) {
+          i++;
+          continue;
+        }
+        if (CURL_NOT_A_GET.test(w)) notAGet ??= w;
+        if (w.startsWith("-")) continue; // -q, -s, -L, -k …
         if (/^\d+$/.test(w)) continue; // the value of a numeric flag
-        if (/^https?:\/\//.test(w) && url === null) url = unquote(w);
+        // E9-203 — THE QUOTES COME OFF BEFORE THE TEST. `avonlea` writes
+        // curl … '<url>' and the pattern was run on the token with its
+        // quote still on, so the command had "no url". And a bare host is
+        // a url to curl: `pirate-radio` asks for `wttr.in/?format=…`.
+        const bare = unquote(w);
+        if (url !== null || bare === "&") continue;
+        if (/^https?:\/\//.test(bare)) url = bare;
+        else if (ws[0] === "curl" && /^[a-z0-9-]+(\.[a-z0-9-]+)+(:\d+)?(\/|$)/i.test(bare)) url = `https://${bare}`;
       }
       // `> file` is a redirect, not a flag.
       const redirect = /\s>\s*(\S+)\s*$/.exec(body);
       if (redirect && dest === null) dest = unquote(redirect[1]!);
       if (url === null) return NO(`${ws[0]} with no url`);
+      // E9-203 — NOWHERE TO PUT IT IS A REQUEST TO READ IT. curl prints
+      // the body; `-O-` is wget saying the same. Three scripts in the
+      // catalogue do exactly this to a service that welcomes a browser
+      // (avonlea, ppm_norns, ufo), and were told the command had no
+      // destination.
+      if (dest === "-" || (dest === null && ws[0] === "curl" && cwd === null && redirect === null)) {
+        if (notAGet !== null) return NO(`${ws[0]} ${notAGet}: only a plain read of a page can be done here`);
+        return ASK({ url, headers, timeoutMs: Math.min(seconds, 60) * 1000 });
+      }
       if (dest === null) {
         // `wget <url>` writes the basename into the working directory,
         // which only `cd … &&` gives us.

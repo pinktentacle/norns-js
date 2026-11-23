@@ -136,6 +136,18 @@ const ugens = new Set(
   JSON.parse(readFileSync(new URL("public/norns-sc/ugens.json", ROOT), "utf8")),
 );
 
+// E9-203 — a service a script reads with curl and that will not answer a
+// page. MEASURED, with an Origin header, on the date beside it; a service
+// not listed here is assumed to answer, which is the table failing open.
+// Three that do, for the record: api.open-meteo.com (avonlea),
+// global-warming.org (ppm_norns) and api.wheretheiss.at (ufo), all
+// `Access-Control-Allow-Origin: *` on 2026-11-23.
+const SERVICES = {
+  // 2026-11-23: connection timed out. IEX Cloud closed, so this is as
+  // true on a norns as it is here.
+  "cloud.iexapis.com": "has closed and answers nobody",
+};
+
 const blockers = new Map(); // script -> [reasons]
 const add = (script, why) => {
   if (!blockers.has(script)) blockers.set(script, []);
@@ -163,8 +175,16 @@ const add = (script, why) => {
  * trying it — so they come out the moment the measurement changes.
  */
 const MEASURED = {
-  tulpamancer: "fetches a tulpa with curl at init, and there is no curl",
-  metronome: "requires metronome/lib/nb, which is not in its repository",
+  // E9-203 — reworded, because there is a curl of sorts now and the reason
+  // was never its absence: the file is NYSE's and NYSE sends no
+  // `Access-Control-Allow-Origin`. Checked again on 2026-11-23.
+  tulpamancer: "reads a file from nyse.com, which does not let a page read it",
+  // METRONOME CAME OUT HERE in E9-203. Its note said it "requires
+  // metronome/lib/nb, which is not in its repository", and that is still
+  // true of the repository. But the library is sixolet/nb; the panel now
+  // installs it beside the script and the `require` is answered from
+  // there, without writing anything into the script's folder. Measured in
+  // the page: `# script init`, no error.
   // TERRARIUM CAME OUT HERE in E9-73, and the note it used to carry said
   // "It LOADS and inits in about a second; what it will not do is play".
   // It plays. Installed fresh and run: engine Terrarium, 919 pixels,
@@ -284,9 +304,22 @@ for (const [key, v] of Object.entries(listings)) {
       add(name, `the stock ${m[1].split("/")[1]} samples, which this build does not ship`);
     }
 
-    // A url fetched for its OUTPUT: no synchronous answer is possible.
-    if (/(?:os_capture|io\.popen)[^\n]*(?:curl|wget)/.test(live)) {
-      add(name, "reads a network reply at once, which cannot arrive in time");
+    // A url fetched for its OUTPUT.
+    //
+    // E9-203 — THIS USED TO SAY "reads a network reply at once, which cannot
+    // arrive in time" of every script that does it, and it is no longer
+    // true: a `curl` whose output is read is answered now (the coroutine
+    // that asked sleeps until the reply is in). What is left to say is
+    // about the SERVICE, and only where it was measured: a note on a
+    // script that works is the one mistake this table cannot afford.
+    //
+    // AND `\b`, WHICH IT NEVER HAD. `nornsfetch` was on this list for
+    // `util.os_capture("iwgetid -r")` — "iWGETid". It reads no network.
+    if (/(?:os_capture|io\.popen|os\.capture)[^\n]*\b(?:curl|wget)\b/.test(live)) {
+      for (const m of live.matchAll(/https?:\/\/([A-Za-z0-9.-]+)/g)) {
+        const why = SERVICES[m[1].toLowerCase()];
+        if (why !== undefined) add(name, `reads ${m[1]}, which ${why}`);
+      }
     }
   }
 
@@ -405,6 +438,11 @@ for (const [key, v] of Object.entries(listings)) {
 // Engines the server itself reports with nothing installed: norns' own and
 // the ones our dust bundle brings. Read off a running page. Without these
 // every script using `PolyPerc` looked blocked, which is 30 of them.
+// E9-203 — and the engines of monome's studies, which no script publishes
+// and the panel now fetches from the study itself (study-engines.ts).
+for (const n of Object.keys(
+  JSON.parse(readFileSync(new URL("src/community/study-engines.json", ROOT), "utf8")).engines,
+)) haveEngine.add(n);
 for (const n of ["Glut","TextureC","Rudiments","PolySub","ResonateR","SimpleDelay","Zxcvbn",
                  "Ack","MGlut","SimplePassThru","MacroB","SimpleDelayKolor","Pedalboard",
                  "MollyThePoly","Decimator","PolyPerc","Timber","MxSamples","Amen","Passersby",

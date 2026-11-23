@@ -28,11 +28,24 @@
 // our own build).
 
 import type { Vfs } from "../fs/vfs.js";
+import moved from "./moved.json";
 import limits from "./limits.json";
 
 export interface Repo {
   readonly owner: string;
   readonly repo: string;
+}
+
+/**
+ * E9-203 — a repository the catalogue still points at and GitHub no longer
+ * forwards. See `moved.json` for what is in it and how each row was checked.
+ */
+export function resolveMoved(repo: Repo): Repo {
+  const table = (moved as { moved: Record<string, { to: string }> }).moved;
+  const hit = Object.entries(table).find(([from]) => from.toLowerCase() === `${repo.owner}/${repo.repo}`.toLowerCase());
+  if (hit === undefined) return repo;
+  const [owner, name] = hit[1].to.split("/");
+  return owner !== undefined && name !== undefined ? { owner, repo: name } : repo;
 }
 
 /** `https://github.com/owner/repo(.git)(/tree/branch)` → the two names. */
@@ -49,7 +62,7 @@ export function parseRepoUrl(url: string): Repo | null {
   const owner = parts[0]!;
   const repo = parts[1]!.replace(/\.git$/i, "");
   if (owner === "" || repo === "") return null;
-  return { owner, repo };
+  return resolveMoved({ owner, repo });
 }
 
 /**

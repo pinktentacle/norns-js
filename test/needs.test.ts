@@ -255,18 +255,20 @@ describe("an engine set conditionally", () => {
 
 describe("an engine the index does not name", () => {
   it("fails open, exactly as every engine did before E9-74", () => {
-    // `Moonshine` is real and is in NO catalogue script: it is the engine
-    // monome's engine study has you build yourself, and `streams` sets
-    // `engine.name = "Moonshine"` expecting you to have done it. The index
-    // leaves it out, so the need is honest and empty-handed rather than
-    // wrong.
+    // An engine that is in no catalogue script and that nothing else knows
+    // where to find. The index leaves it out, so the need is honest and
+    // empty-handed rather than wrong.
+    //
+    // This test used `Moonshine` until E9-203: `streams` sets it, and it
+    // is the engine monome's study has you build. The study publishes it,
+    // so it is fetched from there now — see `study-engines.test.ts`.
     const vfs = new Vfs();
-    write(vfs, "/home/we/dust/code/streams/streams.lua", 'engine.name = "Moonshine"' + String.fromCharCode(92) + "n");
-    const needs = needsOf(vfs, "streams", CATALOGUE);
-    expect(needs.map((n) => [n.kind, n.want])).toEqual([["engine", "Moonshine"]]);
+    write(vfs, "/home/we/dust/code/thing/thing.lua", 'engine.name = "Nowhere"' + String.fromCharCode(92) + "n");
+    const needs = needsOf(vfs, "thing", CATALOGUE);
+    expect(needs.map((n) => [n.kind, n.want])).toEqual([["engine", "Nowhere"]]);
     expect(needs[0]!.entry).toBeNull();
-    expect(sayNeeds("streams", needs)).toBe(
-      "streams also needs the Moonshine engine, which no catalogue script has",
+    expect(sayNeeds("thing", needs)).toBe(
+      "thing also needs the Nowhere engine, which no catalogue script has",
     );
   });
 

@@ -29,7 +29,9 @@ import {
 } from "./lua.js";
 import { installNorns } from "../norns/install.js";
 import { NornsRegistry } from "../norns/registry.js";
-import { installVfsPrimitives, LUA_IO_PRELUDE } from "../fs/lua-io.js";
+import { installVfsPrimitives, LUA_IO_PRELUDE, LUA_NET_PRELUDE } from "../fs/lua-io.js";
+import type { NetReplies } from "../fs/net-replies.js";
+import { CARRIED } from "../community/off-catalogue.js";
 import { COMPAT_PRELOAD_LUA } from "./compat.js";
 import type { Vfs } from "../fs/vfs.js";
 
@@ -60,6 +62,8 @@ export interface HostOptions {
   readonly onShellRefused?: (command: string, reason: string) => void;
   /** E9-37 — a `git clone`, `wget -O` or `curl -o` for the host to run. */
   readonly onShellFetch?: (fetch: { kind: "repo" | "file"; url: string; dest: string }) => void;
+  /** E9-203 — answers a `curl` whose output a script reads. */
+  readonly net?: NetReplies;
 }
 
 export interface Host {
@@ -324,7 +328,7 @@ end
   // which norns handles exactly as it handles a first boot on real hardware,
   // and `_NORNS_IO_STUBBED` counts how often that was reached.
   if (opts.vfs) {
-    installVfsPrimitives(L, opts.vfs, opts.onShellRefused, opts.onShellFetch);
+    installVfsPrimitives(L, opts.vfs, opts.onShellRefused, opts.onShellFetch, opts.net);
     err = doString(L, LUA_IO_PRELUDE, "=(norns-js io)");
     if (err) throw new Error(`io over the vfs failed: ${err}`);
     // The LAST entry of config.lua's package.path: `~/dust/code/?.lua`.
@@ -367,6 +371,37 @@ end)
       "=(norns-js dust searcher)",
     );
     if (err) throw new Error(`dust searcher failed: ${err}`);
+    // E9-203 — A LIBRARY ASKED FOR AS THE SCRIPT'S OWN FILE, AND NOT SHIPPED.
+    //
+    // `metronome.lua:24` is `require "metronome/lib/nb"`, and its repository
+    // has no `lib/` on any branch: it cannot start on a norns either. The
+    // library is real (sixolet/nb) and is installed beside the script; this
+    // answers the `require` from there, LAST, when nothing else found it.
+    // Nothing is written into the script's folder — the file is not ours
+    // to give it. `nb` finds its own `player` from where it really is.
+    const carried = [...CARRIED].map(([tail, v]) => `['${tail}'] = '${v.module}'`).join(", ");
+    err = doString(
+      L,
+      `
+local carried = { ${carried} }
+table.insert(package.searchers, function(name)
+  local n = name:gsub('%.', '/')
+  local tail = n:match('^[^/]+/(.+)$')
+  local lib = tail and carried[tail]
+  if not lib then return nil end
+  local base = (_path and _path.code) or '/home/we/dust/code/'
+  local p = base .. lib .. '.lua'
+  local chunk = loadfile(p)
+  if chunk then
+    print('norns-js: ' .. name .. ' is not in the script; answered by the installed ' .. lib)
+    return chunk
+  end
+  return '\\n\\tno file ' .. p
+end)
+`,
+      "=(norns-js carried libraries)",
+    );
+    if (err) throw new Error(`carried-library searcher failed: ${err}`);
   } else {
     err = doString(
       L,
@@ -385,6 +420,12 @@ io.close = io.close or function() end
 
   // ---- _norns ----------------------------------------------------------
   installNorns(L, registry);
+  // E9-203 — after `_norns` exists, and only where the io shim is: the
+  // wrapper leans on `_njs_await_reply`, which that shim defines.
+  if (opts.vfs) {
+    const netErr = doString(L, LUA_NET_PRELUDE, "=(norns-js net)");
+    if (netErr) throw new Error(`net shim failed: ${netErr}`);
+  }
 
   return {
     L,

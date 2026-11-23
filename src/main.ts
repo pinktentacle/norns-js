@@ -17,7 +17,8 @@ import benchLua from "./lua/norns-js/bench.lua?raw";
 import cpuLua from "./lua/norns-js/cpu.lua?raw";
 import luaprofLua from "./lua/norns-js/luaprof.lua?raw";
 import { luaHeapBytes } from "./lua/wasm53.js";
-import { clockStepMs, createProbe, oscName, type Probe } from "./ui/probe.js";
+import { clockStepMs, createProbe, oscName, readPlayback, type Probe } from "./ui/probe.js";
+import { createReclaim, type Reclaim } from "./ui/latency-reclaim.js";
 import { decode as decodeOsc, encodeMessage as encodeOsc } from "./engine/osc.js";
 import { createScreen, type Screen } from "./screen/screen.js";
 import { loadScreenModuleWeb } from "./screen/screen-web.js";
@@ -29,7 +30,7 @@ import { startCpuMeter } from "./ui/cpu-meter.js";
 import { createLog } from "./ui/log.js";
 import { profileRequest, startProfile } from "./ui/profiler.js";
 import { describeFrames, watchLongFrames } from "./ui/frames.js";
-import { describeDeviceLatency, describeGraphLatency } from "./ui/audio-latency.js";
+import { describeDeviceLatency, describeGraphLatency, describeMeasuredLatency } from "./ui/audio-latency.js";
 import { afterPaint } from "./ui/first-paint.js";
 import { describeVu, emptyVu, foldVu, judgeVu } from "./ui/output-watch.js";
 import {
@@ -61,8 +62,9 @@ import { createMaidenPanel } from "./ui/maiden-panel.js";
 import { createVfsStore } from "./editor/store.js";
 import { createRunner } from "./editor/runner.js";
 import { installFromRepo, parseRepoUrl } from "./community/install.js";
-import { fetchAndStoreCatalogs } from "./community/maiden-catalogs.js";
+import { CATALOGS_DIR, fetchAndStoreCatalogs } from "./community/maiden-catalogs.js";
 import { needsOf } from "./community/needs.js";
+import { installStudyEngine, studyEngineOf } from "./community/study-engines.js";
 import { initLua, lua, luaVersion, to_luastring } from "./lua/lua.js";
 import {
   MISSING_INCLUDE,
@@ -74,6 +76,7 @@ import { exportTree, fetchArchive, importTree, installScript } from "./fs/transf
 import { makeCallbacks } from "./norns/callbacks.js";
 import { loadDustWeb } from "./fs/dust-web.js";
 import { registerFs } from "./fs/register.js";
+import { createNetReplies } from "./fs/net-replies.js";
 import { restoreFromOpfs, mirrorToOpfs, wipeOpfs } from "./fs/opfs.js";
 import { GridManager } from "./grid/manager.js";
 import { registerGrid } from "./grid/register.js";
@@ -89,6 +92,20 @@ import { createFadersView, type FadersView } from "./ui/faders-view.js";
 import { createKnobsMidiPort, KNOBS_MIDI_NAME, type KnobsMidiPort } from "./midi/knobs.js";
 import { createKnobsView, type KnobsView } from "./ui/knobs-view.js";
 import { RemoteGridTransport } from "./grid/remote.js";
+import { createScriptsStore } from "./ui/scripts-store.js";
+import { createCoverStore } from "./community/covers.js";
+import { createMetaStore } from "./community/meta.js";
+import { parseCatalog } from "./community/catalog.js";
+import { mainScript } from "./ui/scripts-model.js";
+import { CrowClockSource } from "./clock/crow-source.js";
+import { createPortChooser, type ChooserElement, type PortChoice } from "./ui/port-chooser.js";
+import {
+  MonomeHardware,
+  type CrowLink,
+  type SerialArc,
+  type SerialGrid,
+  type SerialLike,
+} from "./monome/hardware.js";
 import { ArcManager } from "./arc/manager.js";
 import { registerArc } from "./arc/register.js";
 import { ArcView } from "./arc/view.js";
@@ -165,6 +182,9 @@ const rawLog = createLog(logEl);
 let scriptIsLoaded = false;
 /** Whether this script has already been told its input is off. E9-173. */
 let saidInputIsOff = false;
+/** How many `# script clear` have gone by, and who wants to hear the next. E9-202. */
+let scriptClears = 0;
+let onScriptClear: (() => void) | null = null;
 const log = (line: string): void => {
   if (line.startsWith("# script run")) scriptIsLoaded = true;
   else if (line.startsWith("# script clear")) {
@@ -172,6 +192,8 @@ const log = (line: string): void => {
     // A new script gets its own warning: the last one having been told
     // says nothing about this one.
     saidInputIsOff = false;
+    scriptClears++;
+    onScriptClear?.();
   }
   rawLog(line);
 };
@@ -323,6 +345,7 @@ async function main(): Promise<void> {
           costs: () => callCosts(),
           audio: () => audioContext,
           grid: () => gridView?.stats() ?? null,
+          arc: () => arcView?.stats() ?? null,
           heaps: () => {
             const out: Array<readonly [string, number]> = [["lua", luaHeapBytes()]];
             const size = (m: unknown): number =>
@@ -602,6 +625,26 @@ async function main(): Promise<void> {
   // the same function: `util.os_capture` is `_norns.execute`, which is
   // what norns' own Lua gives a script to shell out with, and that door
   // reported the download and never started it.
+  /**
+   * E9-203 — a `curl` whose OUTPUT a script reads: the weather, the CO2
+   * reading, where the space station is. Fetched like any page would, with
+   * no cookies; a service that does not welcome a browser is not relayed.
+   */
+  const refusedHosts = new Set<string>();
+  globalThis.document?.addEventListener("securitypolicyviolation", (e) => {
+    try {
+      refusedHosts.add(new URL(e.blockedURI).host);
+    } catch {
+      /* `inline`, `eval` and the like: not a host */
+    }
+  });
+  const netReplies = createNetReplies({
+    fetch: (url, init) => fetch(url, init),
+    now: () => performance.now(),
+    log,
+    secure: () => globalThis.location?.protocol === "https:",
+    refusedByPolicy: (host) => refusedHosts.has(host),
+  });
   const startFetch = (f: { kind: "repo" | "file"; url: string; dest: string }): void => {
     void (async () => {
       try {
@@ -724,11 +767,13 @@ async function main(): Promise<void> {
     // and `io.popen`, which reported nothing at all until E9-12.
     onShellRefused: refused,
     onShellFetch: startFetch,
+    net: netReplies,
   });
   screen.register(host.registry);
   registerFs(host.registry, vfs, {
     onRefused: refused,
     onFetch: startFetch,
+    net: netReplies,
     onSystemAction: (action, outcome) => log(`${action}: ${outcome}`),
     // SELECT answers asynchronously and norns redraws when it does, but the
     // redraw metro is E3, so the page asks for one itself.
@@ -900,6 +945,11 @@ async function main(): Promise<void> {
     const gate = document.querySelector("#gate");
     if (!(gate instanceof HTMLElement)) return;
     gate.dataset["state"] = needsGesture ? "gesture" : painted ? "off" : "loading";
+  };
+  /** The page stopped its own output and it did not restart: the boot's gate again. E9-202. */
+  const onOutputStuck = (waiting: boolean): void => {
+    needsGesture = waiting;
+    showGate();
   };
   // A SCREEN THAT NEVER DRAWS MUST NOT LEAVE A BLACK PAGE. If the module
   // fails, nothing ever paints, and an opaque veil would hide the console
@@ -1293,10 +1343,45 @@ async function main(): Promise<void> {
     // The device's share, once something has gone through it. Six
     // seconds is past the boot and past the first sound; one look, and
     // a line of its own if the browser never fills it in.
-    setTimeout(() => {
+    //
+    // E9-202 — THE MEASURED FIGURE WHEN THERE IS ONE. `outputLatency`
+    // is the device alone, rounded to 8 ms; what an underrun leaves in
+    // the output FIFO is only in `playbackStats`. A Pixel was told 29 ms
+    // here while it was playing 52 late. Not read while the output is
+    // being restarted: the average is of nothing then.
+    const say = (): void => {
+      if (latencyReclaim?.busy === true) return void setTimeout(say, 4000);
       const out = typeof ctx.outputLatency === "number" ? ctx.outputLatency : 0;
-      log(describeDeviceLatency(base, out));
-    }, 6000);
+      const measured = readPlayback(ctx)?.averageLatency ?? 0;
+      log(measured > 0 ? describeMeasuredLatency(measured, out) : describeDeviceLatency(base, out));
+    };
+    setTimeout(say, 6000);
+  };
+  /** Takes back what an underrun left in the output. Null until there is a context. E9-202. */
+  let latencyReclaim: Reclaim | null = null;
+  const startLatencyReclaim = (ctx: AudioContext): void => {
+    const stats = (): { resetLatency?: () => void } | undefined => {
+      const c = ctx as unknown as { playbackStats?: { resetLatency?: () => void }; playoutStats?: { resetLatency?: () => void } };
+      return c.playbackStats ?? c.playoutStats;
+    };
+    const r = createReclaim({
+      now: () => performance.now(),
+      playback: () => readPlayback(ctx),
+      resetLatency: () => stats()?.resetLatency?.(),
+      state: () => ctx.state,
+      hidden: () => globalThis.document?.hidden === true,
+      suspend: () => ctx.suspend(),
+      resume: () => ctx.resume(),
+      periodMs: () => (typeof ctx.baseLatency === "number" ? ctx.baseLatency : 0) * 1000,
+      deviceMs: () => (typeof ctx.outputLatency === "number" ? ctx.outputLatency : 0) * 1000,
+      sleep: (ms) => new Promise<void>((go) => setTimeout(go, ms)),
+      log,
+      stuck: (waiting) => onOutputStuck(waiting),
+    });
+    latencyReclaim = r;
+    // norns' own startup clear may already have gone by.
+    if (scriptClears > 0) r.scriptCleared();
+    onScriptClear = () => r.scriptCleared();
   };
 
   /** Where a microphone goes: crone's input 1, which IS the adc (processor.js:16). */
@@ -1640,6 +1725,8 @@ async function main(): Promise<void> {
    */
   const watchVu = (levels: readonly number[]): void => {
     if (foldVu(vuWindow, levels)) vuHeardEver = true;
+    // The mixer's own output pair: is anything sounding? E9-202.
+    latencyReclaim?.heard((levels[2] ?? 0) > 0 || (levels[3] ?? 0) > 0);
     // Same reading, second span. A reading that is not twelve numbers is
     // refused by both, so the two cannot disagree about what arrived.
     foldVu(vuPhase, levels);
@@ -2328,6 +2415,12 @@ async function main(): Promise<void> {
   let gridView: GridView | null = null;
   /** A second sink, when `?grid-remote=` asked for one. See E5-06. */
   let remoteGrid: RemoteGridTransport | null = null;
+  /**
+   * E9-204 — a REAL grid, on a serial port, lighting the same device the
+   * picture on the page shows. One grid, shown twice: the script draws
+   * once and both follow, and a key on either reaches it. See below.
+   */
+  let realGrid: SerialGrid | null = null;
 
   // Stable identity across a resize: the serial and the name never change,
   // so the vport binding `system.state` persisted survives. See
@@ -2373,6 +2466,10 @@ async function main(): Promise<void> {
    */
   function teardownGridView(): void {
     if (remoteGrid !== null) gridDevice?.removeTransport(remoteGrid);
+    if (realGrid !== null) {
+      gridDevice?.removeTransport(realGrid);
+      realGrid.bind(null);
+    }
     if (!gridView) return;
     gridDevice?.removeTransport(gridView);
     gridView.dispose();
@@ -2401,6 +2498,16 @@ async function main(): Promise<void> {
     });
     d.addTransport(gridView);
     if (remoteGrid !== null) d.addTransport(remoteGrid);
+    if (realGrid !== null) {
+      // Bound before it is added: adding sends the current picture, and
+      // the picture has to be turned the way this device is turned.
+      realGrid.bind({
+        key: (x, y, state) => d.key(x, y, state),
+        tilt: (s, x, y, z) => d.tilt(s, x, y, z),
+        rotation: () => d.currentRotation,
+      });
+      d.addTransport(realGrid);
+    }
     // The canvas has just been given a new aspect ratio; its box is only
     // the right size after layout, so the measurement has to wait a frame.
     requestAnimationFrame(() => gridView?.layout());
@@ -2760,6 +2867,14 @@ async function main(): Promise<void> {
   const arcButton = $("#arcattach");
   let arcDevice: ReturnType<ArcManager["add"]> | null = null;
   let arcView: ArcView | null = null;
+  /** E9-204 — a real arc, lighting the same device the page's arc shows. */
+  let realArc: SerialArc | null = null;
+  const bindRealArc = (): void => {
+    const d = arcDevice;
+    if (realArc === null || d === null) return;
+    realArc.bind({ delta: (ring, delta) => d.delta(ring, delta), key: (ring, state) => d.key(ring, state) });
+    d.addTransport(realArc);
+  };
   arcButton.addEventListener("click", () => {
     if (arcDevice === null) {
       arcDevice = arcManager.add({ serial: "v0001", name: "monome arc 4" });
@@ -2776,7 +2891,12 @@ async function main(): Promise<void> {
       requestAnimationFrame(() => arcView?.layout());
       arcButton.setAttribute("aria-pressed", "true");
       log("arc: virtual arc attached");
+      bindRealArc();
     } else {
+      if (realArc !== null) {
+        arcDevice.removeTransport(realArc);
+        realArc.bind(null);
+      }
       arcView?.dispose();
       arcDevice.removeTransport(arcView!);
       arcManager.remove(arcDevice.id);
@@ -2790,6 +2910,134 @@ async function main(): Promise<void> {
     dirty = true;
   });
   globalThis.addEventListener("resize", () => arcView?.layout());
+
+  // --- real monome hardware, on a serial port ----------------------------
+  //
+  // E9-204. A grid, an arc or a crow plugged into this computer, opened
+  // the way a norns opens it: directly, with no serialosc in between — see
+  // `monome/hardware.ts`. Chrome and Edge have serial ports; a browser
+  // that does not gets a button that says so.
+  //
+  // THE FIRST GRID IS THE PAGE'S GRID. It is added to the device the
+  // picture already shows and that device takes its size, so a script on
+  // port 1 lights the real one without anything being reassigned in
+  // SYSTEM > DEVICES — and the picture and the grid show the same thing.
+  // The first arc likewise. A SECOND grid or arc is a device of its own
+  // and takes the next free port, as it would on a norns.
+  const extraGrids = new Map<SerialGrid, ReturnType<GridManager["add"]>>();
+  const extraArcs = new Map<SerialArc, ReturnType<ArcManager["add"]>>();
+  let crow: CrowLink | null = null;
+  /** Made further down, beside the clock it drives. */
+  let crowClock: CrowClockSource | null = null;
+  const hwButton = $("#hwattach");
+  const monomeHw = new MonomeHardware(
+    ((globalThis.navigator as unknown as { serial?: SerialLike } | undefined)?.serial ?? null) as SerialLike | null,
+    {
+      log,
+      sleep: (ms) => new Promise<void>((go) => setTimeout(go, ms)),
+      gridArrived: (g) => {
+        if (realGrid !== null) {
+          const d = gridManager.add(g.descriptor);
+          g.bind({
+            key: (x, y, state) => d.key(x, y, state),
+            tilt: (s, x, y, z) => d.tilt(s, x, y, z),
+            rotation: () => d.currentRotation,
+          });
+          d.addTransport(g);
+          extraGrids.set(g, d);
+          return;
+        }
+        realGrid = g;
+        const { cols, rows } = g.descriptor;
+        gridSize = cols * rows;
+        markSize();
+        if (gridDevice === null) {
+          attachGrid(cols, rows);
+        } else if (gridDevice.descriptor.cols !== cols || gridDevice.descriptor.rows !== rows) {
+          teardownGridView();
+          const next = gridManager.resize(gridDevice.id, cols, rows);
+          if (next) gridDevice = next;
+          buildGridView();
+        } else {
+          buildGridView();
+        }
+      },
+      gridLeft: (g) => {
+        const extra = extraGrids.get(g);
+        if (extra !== undefined) {
+          extraGrids.delete(g);
+          gridManager.remove(extra.id);
+          return;
+        }
+        if (g !== realGrid) return;
+        gridDevice?.removeTransport(g);
+        g.bind(null);
+        realGrid = null;
+      },
+      arcArrived: (a) => {
+        if (realArc !== null) {
+          const d = arcManager.add(a.descriptor);
+          a.bind({ delta: (ring, delta) => d.delta(ring, delta), key: (ring, state) => d.key(ring, state) });
+          d.addTransport(a);
+          extraArcs.set(a, d);
+          return;
+        }
+        realArc = a;
+        // The page's arc is the device; attaching it binds the real one.
+        if (arcDevice === null) arcButton.click();
+        else bindRealArc();
+      },
+      arcLeft: (a) => {
+        const extra = extraArcs.get(a);
+        if (extra !== undefined) {
+          extraArcs.delete(a);
+          arcManager.remove(extra.id);
+          return;
+        }
+        if (a !== realArc) return;
+        arcDevice?.removeTransport(a);
+        a.bind(null);
+        realArc = null;
+      },
+      crowArrived: (c) => {
+        crow = c;
+        c.onLine = (line) => {
+          // matron watches for the clock pulse itself, before Lua has the
+          // line and whatever Lua makes of it.
+          crowClock?.line(line, performance.now() / 1000);
+          const e = cb.crowEvent(0, line);
+          if (e) log(`crow.event: ${e.message}`);
+          dirty = true;
+        };
+        const e = cb.crowAdd(0, "crow", 0);
+        if (e) log(`crow.add: ${e.message}`);
+      },
+      crowLeft: (c) => {
+        if (c !== crow) return;
+        crow = null;
+        const e = cb.crowRemove(0);
+        if (e) log(`crow.remove: ${e.message}`);
+      },
+      changed: () => {
+        const have = monomeHw.list();
+        hwButton.setAttribute("aria-pressed", have.length > 0 ? "true" : "false");
+        hwButton.title =
+          have.length > 0
+            ? `connected: ${have.map((h) => h.name).join(", ")} — click to add another`
+            : HW_TITLE;
+        dirty = true;
+      },
+    },
+  );
+  // E9-205 — the desktop application too. It has no port picker of its own,
+  // so it hands the list to this page; see `ui/port-chooser.ts`.
+  const HW_TITLE = monomeHw.supported
+    ? "a real monome grid, arc or crow, over usb — quit serialosc first, it holds the port"
+    : "this browser has no serial ports — Chrome and Edge do";
+  hwButton.title = HW_TITLE;
+  if (!monomeHw.supported) hwButton.setAttribute("disabled", "");
+  hwButton.addEventListener("click", () => void monomeHw.connect());
+  expose({ monome: monomeHw });
 
   // --- the virtual MIDI keyboard -----------------------------------------
   //
@@ -3431,6 +3679,12 @@ async function main(): Promise<void> {
       // and `community.json`, which is where `folio` reads the library
       // from. The community catalogue is fetched once and used twice.
       catalog: () => fetchAndStoreCatalogs(vfs, { log }),
+      // E9-209 — and what that left on disk the last time, which is what
+      // the script store opens on while the network is being asked.
+      catalogKept: () => {
+        const text = vfs.readText(`${CATALOGS_DIR}/community.json`);
+        return text === null ? null : parseCatalog(JSON.parse(text));
+      },
       // E9-56 — a FOLDER is not a script. This listed every directory
       // under `~/dust/code`, and an empty one is a directory: 281 of the
       // 329 here were the leftovers of removed scripts, every one of them
@@ -3448,6 +3702,18 @@ async function main(): Promise<void> {
           .filter((e) => e.isDir && vfs.walk(`/home/we/dust/code/${e.name}`).length > 0)
           .map((e) => e.name),
       install: async (entry, signal, onProgress) => {
+        // E9-203 — an engine that comes from one of monome's studies and
+        // not from a repository. Two listings off one page.
+        const study = studyEngineOf(entry.url);
+        if (study !== null) {
+          const r = await installStudyEngine(vfs, study, {
+            signal: withStallTimeout(signal),
+            commit: () => mirror.flush(),
+          });
+          onProgress(r.files, r.files);
+          log(`maiden: the ${study.engine} engine is from ${study.read} — ${study.credit}`);
+          return r;
+        }
         const repo = parseRepoUrl(entry.url);
         if (!repo) throw new Error("that entry does not point at a GitHub repository");
         return installFromRepo(vfs, repo, {
@@ -3502,6 +3768,56 @@ async function main(): Promise<void> {
   });
   maidenButton.addEventListener("click", () => maiden.toggle());
 
+  // --- the script store ----------------------------------------------------
+  //
+  // E9-208. What the project panel in maiden does, in the shape of an
+  // application store: shelves, a search, a library, and one button a
+  // script. It is a second VIEW of the same installer — `maiden.library`
+  // is the panel's own queue — so a download started in one shows in the
+  // other, and the three at a time are shared.
+  const scriptsButton = $("#scripts");
+  /** Data saver on, or a connection the browser itself calls 2g. */
+  const spendLess = (): boolean => {
+    const c = (navigator as { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+    return c?.saveData === true || (c?.effectiveType ?? "").endsWith("2g");
+  };
+  const scriptsStore =
+    maiden.library === null
+      ? null
+      : createScriptsStore({
+          host: $("#scriptspanel") as HTMLElement,
+          library: maiden.library,
+          covers: createCoverStore(),
+          // E9-209 — stars and dates, for "popular" and "new", and the
+          // pictures fetched before they are scrolled to. Both are things
+          // somebody who asked their browser to spend less did not ask for.
+          meta: createMetaStore({ log, saveData: spendLess }),
+          ahead: () => !spendLess(),
+          run: (name) => {
+            const file = mainScript(name, scriptsIn(vfs));
+            if (file === null) {
+              log(`scripts: ${name} has no script of its own to run — it is a library, or a mod`);
+              return false;
+            }
+            log(`scripts: opening ${name}`);
+            // A JSON string is a Lua string: the same quotes and escapes.
+            const e = host.run(`norns.script.load(${JSON.stringify(file)})`);
+            if (e) log(`scripts: ${name} — ${e}`);
+            dirty = true;
+            return true;
+          },
+          restartOwed: () => [...restartOwed],
+          restart: doRestart,
+          onToggle: (on) => {
+            dialogOpen = on;
+            if (on) closeOtherPanels(null);
+            scriptsButton.setAttribute("aria-expanded", String(on));
+          },
+        });
+  if (scriptsStore === null) scriptsButton.setAttribute("disabled", "");
+  scriptsButton.addEventListener("click", () => scriptsStore?.toggle());
+  expose({ store: scriptsStore });
+
   // --- the devices panel --------------------------------------------------
   //
   // The bottom row's buttons, moved rather than rewritten: they kept their
@@ -3509,8 +3825,30 @@ async function main(): Promise<void> {
   // and this only decides when they are on screen.
   const devicesButton = $("#devices");
   const devicesPanel = $("#devicespanel") as HTMLElement;
+  /**
+   * E9-205 — the list of serial ports the DESKTOP application asks for.
+   *
+   * Electron raises `select-serial-port` in its main process and has no
+   * window to show; it calls `__nornsChoosePort` with the ports and waits
+   * for an id. In a browser nothing ever calls it.
+   */
+  const portChooser = createPortChooser({
+    host: $("#portchooser") as unknown as ChooserElement,
+    create: (tag) => document.createElement(tag) as unknown as ChooserElement,
+    onOpen: () => showDevices(true),
+  });
+  const portsFrom = (given: unknown): PortChoice[] =>
+    (Array.isArray(given) ? given : [])
+      .filter((p): p is PortChoice => typeof p?.id === "string" && typeof p?.name === "string")
+      .map((p) => ({ id: p.id, name: p.name, ...(typeof p.hint === "string" ? { hint: p.hint } : {}) }));
+  Object.assign(globalThis, {
+    __nornsChoosePort: (ports: unknown) => portChooser.choose(portsFrom(ports)),
+    __nornsPortList: (ports: unknown) => portChooser.update(portsFrom(ports)),
+  });
   const showDevices = (on: boolean): void => {
     if (on) closeOtherPanels(devicesToken);
+    // Putting the panel away is an answer: nothing was chosen.
+    if (!on) portChooser.cancel();
     devicesPanel.hidden = !on;
     devicesButton.setAttribute("aria-expanded", String(on));
   };
@@ -3565,6 +3903,15 @@ async function main(): Promise<void> {
   // discarded, which is what a norns does before its audio thread is up.
   let clockSource: ClockSource = "internal";
   let liveClock: Clock | null = null;
+  /**
+   * E9-206 — crow as the clock source: `clock_crow.c`. Fed by the lines a
+   * real crow sends (see `crowArrived` above), and followed only while the
+   * source says crow, as the MIDI one is.
+   */
+  crowClock = new CrowClockSource((ref) => {
+    if (clockSource !== "crow") return;
+    liveClock?.setSourceReference(ref.beat, ref.beatDuration);
+  });
   const midiClock = new MidiClockSource({
     onReference: (ref) => {
       if (clockSource !== "midi") return;
@@ -3608,7 +3955,7 @@ async function main(): Promise<void> {
   });
   registerMidi(host.registry, midiManager, { log: (l) => log(l) });
   // crow and serial: not implemented, and saying so clearly (E5-10).
-  registerSerial(host.registry, { log: (l) => log(l) });
+  registerSerial(host.registry, { log: (l) => log(l), crow: () => crow });
   // Exposed whether or not the browser grants MIDI: the manager is how a
   // device gets attached at all, and SYSTEM > DEVICES (E5-08) will need it
   // on a machine that refused the permission just as much as on one that
@@ -3654,6 +4001,9 @@ async function main(): Promise<void> {
   };
 
   log(`booted, ${installed} community scripts in ~/dust/code.`);
+  // E9-204 — whatever was allowed last time and is plugged in comes back,
+  // with no picker. After the boot: `_norns.crow.add` reads `params`.
+  void monomeHw.restore();
   // Everything from here is somebody using the thing rather than it
   // starting up, and a profile ranks the two apart. E9-162.
   profileRun?.mark();
@@ -3964,6 +4314,7 @@ async function main(): Promise<void> {
     // been remembered.
     audioContext = ctx;
     reportAudioLatency(ctx);
+    startLatencyReclaim(ctx);
     /**
      * E9-165 — THE LAST GATE BEFORE THE SPEAKERS, said out loud.
      *
@@ -3979,7 +4330,17 @@ async function main(): Promise<void> {
         `, context ${ctx.state}`,
     );
     if (settings.audioOut !== "") void applyOutputDevice();
-    expose({ master, meter, peak: () => peakOf(meter) });
+    expose({
+      master,
+      meter,
+      peak: () => peakOf(meter),
+      latency: () => ({
+        verdict: latencyReclaim?.verdict ?? "none",
+        attempts: latencyReclaim?.attempts ?? 0,
+        busy: latencyReclaim?.busy ?? false,
+        playback: readPlayback(ctx),
+      }),
+    });
 
     // CRONE, BETWEEN scsynth AND THE SPEAKERS.
     //
@@ -4351,7 +4712,11 @@ async function main(): Promise<void> {
       onSource: (source) => {
         clockSource = source;
         log(`clock source: ${source}`);
+        if (source === "crow" && crow === null) {
+          log("clock source: no crow is connected — plug one in and use `usb` under devices");
+        }
       },
+      onCrowDiv: (div) => crowClock?.setDiv(div),
     });
     expose({
       clock,

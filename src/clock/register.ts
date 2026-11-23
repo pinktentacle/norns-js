@@ -11,6 +11,8 @@ export interface ClockRegisterOptions {
   readonly onStub?: (name: string, why: string) => void;
   /** `clock_set_source`, 0-based as `clock.lua` sends it. */
   readonly onSource?: (source: ClockSource) => void;
+  /** `clock_crow_in_div` — how many of crow's pulses make a beat. E9-206. */
+  readonly onCrowDiv?: (div: number) => void;
 }
 
 /**
@@ -40,8 +42,9 @@ export const CLOCK_STUBS: Readonly<Record<string, string>> = {
   clock_link_set_transport_stop: "Ableton Link needs UDP multicast",
   clock_link_set_start_stop_sync: "Ableton Link needs UDP multicast",
   clock_link_get_number_of_peers: "Ableton Link needs UDP multicast; zero peers is true",
-  clock_crow_in_div: "crow is a USB serial device; WebSerial could carry it, E5-10",
   // `clock_set_source` is NOT here any more: internal and midi both work.
+  // `clock_crow_in_div` came out in E9-206: crow is reached over a serial
+  // port now, and its pulses drive the clock as they do on a norns.
 };
 
 export function registerClock(
@@ -118,7 +121,7 @@ export function registerClock(
   registry.implement("clock_set_source", (source) => {
     const i = num(source);
     const name = CLOCK_SOURCES[i] ?? "internal";
-    if (name === "link" || name === "crow") {
+    if (name === "link") {
       // Accepting the call and staying on the clock we have is what upstream
       // does for a source it cannot reach. Saying nothing would leave the
       // param page showing a source that is not running anything.
@@ -130,6 +133,8 @@ export function registerClock(
     }
     opts.onSource?.(name);
   });
+
+  registry.implement("clock_crow_in_div", (div) => opts.onCrowDiv?.(num(div)));
 
   // --- the impossible ---------------------------------------------------
   for (const [name, why] of Object.entries(CLOCK_STUBS)) {

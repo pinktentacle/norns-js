@@ -66,10 +66,62 @@ export interface MaidenProjectOptions {
     absent?: readonly string[],
   ) => Need[];
   readonly log?: (line: string) => void;
+  /** E9-209 — the catalogue a previous `catalog()` left on disk, if any. */
+  readonly catalogKept?: () => Catalog | null;
+}
+
+/**
+ * E9-208 — where one script stands: in `code/`, in the queue, or neither.
+ */
+export interface LibraryState {
+  readonly installed: boolean;
+  /** `failed` is the last attempt's verdict, kept until the next one. */
+  readonly job: "queued" | "running" | "failed" | null;
+  readonly done: number;
+  readonly total: number;
+  /** Why the last attempt failed. */
+  readonly why?: string;
+  /** What this build is missing for it, from the blockers table. */
+  readonly notes: readonly string[];
+}
+
+/**
+ * E9-208 — THE SAME QUEUE, FOR ANOTHER VIEW OF IT.
+ *
+ * The script store installs, cancels and removes through this, so that it
+ * and the project panel are two windows onto one thing: three downloads at
+ * a time between them, one list of what is installed, one restart owed.
+ * A second installer would have been a second set of all of those.
+ *
+ * NO CONFIRMATION IN HERE. `remove` deletes; whoever calls it has asked.
+ * `stranded` is how they find out what else would be left wanting.
+ */
+export interface CommunityLibrary {
+  /** The catalogue, fetched once between both views. Null if it cannot be read. */
+  load(): Promise<Catalog | null>;
+  /**
+   * E9-209 — the catalogue as it is on disk from the last time it was
+   * fetched, without asking anybody. Null when it never was.
+   */
+  kept(): Catalog | null;
+  entry(name: string): CatalogEntry | null;
+  installedNames(): readonly string[];
+  state(name: string): LibraryState;
+  /** Install, or install again over what is there. */
+  install(entries: readonly CatalogEntry[]): void;
+  /** Take it out of the queue, or give up on it part way. */
+  cancel(name: string): void;
+  /** Installed projects that would lose something they use, and what. */
+  stranded(names: readonly string[]): Array<[string, string[]]>;
+  remove(names: readonly string[]): void;
+  busy(): { running: number; waiting: number };
+  /** Called when anything above may answer differently. Returns the way out. */
+  onChange(listener: () => void): () => void;
 }
 
 export interface MaidenProject {
   readonly element: HTMLElement;
+  readonly library: CommunityLibrary;
   /** Shown or hidden. The catalogue is fetched the first time it is shown. */
   active(on: boolean): void;
   /**
@@ -366,7 +418,17 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
    */
   const pending = new Map<string, Need[]>();
 
+  // E9-208 — whoever else is looking at this queue. `draw` and `drawJobs`
+  // are already called at every change, so they are where it is said.
+  const watchers = new Set<() => void>();
+  let installedNow: Set<string> | null = null;
+  const notify = (): void => {
+    installedNow = null;
+    for (const w of watchers) w();
+  };
+
   const drawJobs = (): void => {
+    notify();
     // See `jobRowsDrawn` above. `pending` adds a line of its own below the
     // job rows, so the count is of what will be DRAWN, not of `jobList`.
     const willDraw = jobList.length + pending.size;
@@ -595,6 +657,7 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
   };
 
   const draw = (): void => {
+    notify();
     rowButtons.clear();
     list.textContent = "";
     installedTab.setAttribute("aria-pressed", String(tab === "installed"));
@@ -1257,8 +1320,53 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
 
   draw();
 
+  const library: CommunityLibrary = {
+    async load() {
+      await load();
+      return catalog;
+    },
+    kept() {
+      if (catalog !== null) return catalog;
+      try {
+        return opts.catalogKept?.() ?? null;
+      } catch {
+        return null;
+      }
+    },
+    entry: (name) => entryFor(name),
+    installedNames: () => opts.installed(),
+    state(name) {
+      const key = name.toLowerCase();
+      // One walk of `code/` for a whole screen of cards, not one a card.
+      installedNow ??= new Set(opts.installed().map((n) => n.toLowerCase()));
+      const base = { installed: installedNow.has(key), notes: blockedBy(name) };
+      const live = running.get(key);
+      if (live !== undefined) return { ...base, job: "running", done: live.done, total: live.total };
+      if (queue.some((q) => q.name.toLowerCase() === key)) return { ...base, job: "queued", done: 0, total: 0 };
+      const job = jobFor(name);
+      if (job?.state === "failed") {
+        return { ...base, job: "failed", done: 0, total: 0, ...(job.why === undefined ? {} : { why: job.why }) };
+      }
+      return { ...base, job: null, done: 0, total: 0 };
+    },
+    install: (entries) => enqueue(entries),
+    cancel(name) {
+      const live = running.get(name.toLowerCase());
+      if (live !== undefined) live.ac.abort();
+      else dequeue(name);
+    },
+    stranded: (names) => strandedBy(names),
+    remove: (names) => removeNames(names),
+    busy: () => ({ running: running.size, waiting: queue.length }),
+    onChange(listener) {
+      watchers.add(listener);
+      return () => void watchers.delete(listener);
+    },
+  };
+
   return {
     element: root,
+    library,
     async want(names, neededBy) {
       // The catalogue may never have been opened, so this is the one place
       // it is fetched for a reason other than somebody looking at it.

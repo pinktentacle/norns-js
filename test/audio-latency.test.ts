@@ -11,7 +11,11 @@
 // read as what it is rather than as a zero.
 
 import { describe, expect, it } from "vitest";
-import { describeDeviceLatency, describeGraphLatency } from "../src/ui/audio-latency.js";
+import {
+  describeDeviceLatency,
+  describeGraphLatency,
+  describeMeasuredLatency,
+} from "../src/ui/audio-latency.js";
 
 describe("what the graph adds", () => {
   it("says the milliseconds and the frames behind them", () => {
@@ -57,5 +61,20 @@ describe("what the device adds", () => {
   it("treats a missing reading the same as a zero one", () => {
     expect(describeDeviceLatency(0.002667, Number.NaN)).toContain("does not say");
     expect(describeDeviceLatency(0.002667, -1)).toContain("does not say");
+  });
+});
+
+// E9-202 — a Pixel was told 29 ms while it was playing 52 ms late.
+describe("what the browser measured", () => {
+  it("gives the measured figure as the floor, and the estimate beside it", () => {
+    const line = describeMeasuredLatency(0.052, 0.024);
+    expect(line).toContain("52.0 ms from the graph to the speaker, measured by the browser");
+    expect(line).toContain("its estimate for the device alone is 24.0 ms");
+    // The two are not added: the measurement already runs from the graph.
+    expect(line).not.toContain("in all");
+  });
+
+  it("leaves the estimate out where the browser has none", () => {
+    expect(describeMeasuredLatency(0.052, 0)).not.toContain("estimate");
   });
 });
