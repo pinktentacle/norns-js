@@ -81,6 +81,13 @@ export interface CroneLoad {
    * resolve one 2.67 ms block.
    */
   readonly coarse?: boolean;
+  /**
+   * How many blocks measured 0, 1, 2, 3 and 4+ whole milliseconds.
+   * E9-197 — the raw counts, with no verdict attached. A mean hides its
+   * tail and `over` is a judgement this clock cannot reach; this is what
+   * it can actually say, and the distribution reads straight off it.
+   */
+  readonly hist?: readonly number[];
 }
 
 export interface CroneOptions {

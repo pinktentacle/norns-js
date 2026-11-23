@@ -134,13 +134,15 @@ class NornsClockProcessor extends AudioWorkletProcessor {
     this.fired.length = 0;
     this.metros.tick(this.core.time, this.fired);
     for (let i = 0; i < this.fired.length; i += 2) {
-      this.emit(EV_METRO, this.fired[i], this.fired[i + 1], 0);
+      // E9-200 — the fourth number was always zero. It is the audio time
+      // of this block now, so the page can say how long delivery took.
+      this.emit(EV_METRO, this.fired[i], this.fired[i + 1], currentTime);
     }
 
     this.fired.length = 0;
     this.sched.tick(this.core.beat, this.core.time, this.fired);
     for (let i = 0; i < this.fired.length; i++) {
-      this.emit(EV_CLOCK, this.fired[i], this.core.beat, 0);
+      this.emit(EV_CLOCK, this.fired[i], this.core.beat, currentTime);
     }
 
     // Returning true keeps the node alive. It has no outputs, so there is

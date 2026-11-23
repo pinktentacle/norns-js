@@ -15,6 +15,10 @@ import menuHereLua from "./lua/norns-js/menu-here.lua?raw";
 import screenDirectLua from "./lua/norns-js/screen-direct.lua?raw";
 import benchLua from "./lua/norns-js/bench.lua?raw";
 import cpuLua from "./lua/norns-js/cpu.lua?raw";
+import luaprofLua from "./lua/norns-js/luaprof.lua?raw";
+import { luaHeapBytes } from "./lua/wasm53.js";
+import { clockStepMs, createProbe, oscName, type Probe } from "./ui/probe.js";
+import { decode as decodeOsc, encodeMessage as encodeOsc } from "./engine/osc.js";
 import { createScreen, type Screen } from "./screen/screen.js";
 import { loadScreenModuleWeb } from "./screen/screen-web.js";
 import { createScreenCanvas } from "./ui/canvas.js";
@@ -293,13 +297,78 @@ async function main(): Promise<void> {
    * second and a bit, and a reader should not have to do that
    * multiplication to find out.
    */
-  let profileRun: { mark(): void } | null = null;
+  let profileRun: { mark(): void; phase(label: string, fromMs: number, toMs: number): void } | null = null;
+  /**
+   * E9-200 — EVERY INSTRUMENT A PROFILE CARRIES BACK. See `ui/probe.ts`.
+   *
+   * Built here, a few lines after the URL is read, because the frame loop
+   * and the timer that feed it are set up long before the things it
+   * REPORTS on exist. Every source below is a function for that reason:
+   * the host, the grid, the audio context and the engine are declared
+   * hundreds of lines down and are only asked for at a mark.
+   *
+   * `null` WITHOUT `?profile`, and every feed is `probe?.`. A page nobody
+   * is measuring runs none of it.
+   */
+  /** What the page adds to each report: slow events, pressure, battery. */
+  const probeNotes: Array<() => string | null> = [];
+  const probe: Probe | null =
+    profile === null
+      ? null
+      : createProbe({
+          now: () => performance.now(),
+          heap: () =>
+            (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory?.usedJSHeapSize ?? null,
+          bridge: () => host.registry.slots,
+          costs: () => callCosts(),
+          audio: () => audioContext,
+          grid: () => gridView?.stats() ?? null,
+          heaps: () => {
+            const out: Array<readonly [string, number]> = [["lua", luaHeapBytes()]];
+            const size = (m: unknown): number =>
+              (m as { HEAPU8?: { length: number } } | null | undefined)?.HEAPU8?.length ?? 0;
+            const lang = size(scEngine?.sclang);
+            const synth = size(scEngine?.scsynth);
+            if (lang > 0) out.push(["sclang", lang]);
+            if (synth > 0) out.push(["scsynth", synth]);
+            return out;
+          },
+          notes: () => probeNotes.map((f) => f()).filter((l): l is string => l !== null),
+        });
+  /** Set once there is an engine to ask; see where the engine comes up. */
+  let probeRun: ((what: string, n: number, text: string) => void) | null = null;
+  /** The whole of a mark, callable from the page as well as from Lua. */
+  let reportPhase: ((what: string, fromLua: boolean) => void) | null = null;
   if (profile !== null) {
     profileRun = startProfile(
       profile,
       (l) => log(l),
       (b, n) => offerFile?.(b, n),
       () => {
+        // E9-200 — the span since the last mark is a span like any other.
+        // Reported as one, so the end of a hand-driven session carries
+        // the same lines as a phase of the bench.
+        if (reportPhase !== null) {
+          reportPhase("the end of the profile window", false);
+          /**
+           * AND THE WHOLE LOG AS A FILE. A run of `_cpu` and `_bench` is
+           * a couple of thousand lines; the copy button still works, but
+           * a quarter of a megabyte through a phone's clipboard is the
+           * step most likely to lose the end of it. Offered a moment
+           * later, so the lines this very function is about to cause —
+           * the Lua half of the last mark — are in it.
+           */
+          setTimeout(() => {
+            const text = logEl.textContent ?? "";
+            const stamp = new Date().toISOString().slice(0, 19).replace(/:/g, "");
+            offerFile?.(new TextEncoder().encode(text), `norns-js-log-${stamp}.txt`);
+            log(
+              `profile: this log is downloading too (${(text.length / 1024).toFixed(0)} KB) — ` +
+                `the copy button gives the same text.`,
+            );
+          }, 500);
+          return [];
+        }
         const lines: string[] = [];
         const costs = callCosts().filter((c) => c.ms >= 1);
         lines.push(
@@ -715,6 +784,8 @@ async function main(): Promise<void> {
   let audioLoad: { meanMs: number; budgetMs: number } | null = null;
   /** When `profile_mark` last reported, so a phase knows its own length. E9-176. */
   let markAt = performance.now();
+  /** The battery as last heard, for a profile to print beside its speed. E9-200. */
+  let batteryNote = "battery: no reading";
   const hardware: Hardware = registerHardware(host.registry, {
     load: () => audioLoad,
     log: (l) => log(l),
@@ -765,6 +836,20 @@ async function main(): Promise<void> {
   // back.
   const directErr = host.run(screenDirectLua, "=(norns-js screen)");
   if (directErr) log(`screen: ${directErr}`);
+
+  // E9-200 — the two instruments that live on the Lua side of the bridge.
+  // Both are `?profile` only: the dispatcher times one call in eight, and
+  // `luaprof.lua` wraps `coroutine.create` so a hook can follow a script
+  // into its clocks. The hook itself stays off without `&lua`.
+  if (profile !== null) {
+    host.registry.timing = true;
+    const profErr = host.run(luaprofLua, "=(norns-js luaprof)");
+    if (profErr) log(`profile: the Lua profiler did not load — ${profErr}`);
+    else if (profile.lua) {
+      host.run("_njs_prof.start()");
+      log("profile: Lua is being sampled (&lua). Costs measured in this session are of a slower interpreter.");
+    }
+  }
 
   const cb = makeCallbacks(host.L);
   // The callbacks exist only after boot, and the OSC relay may deliver
@@ -955,6 +1040,8 @@ async function main(): Promise<void> {
    * frames nobody asked for.
    */
   const present = (now: number): void => {
+    // E9-200 — how far apart frames really are, while somebody is looking.
+    probe?.frame(now);
     timed("draw:pad", () => padFrame(now));
     if (dirty) {
       dirty = false;
@@ -1438,6 +1525,9 @@ async function main(): Promise<void> {
    * was measured against.
    */
   const cpuMeter = startCpuMeter();
+  // E9-200 — the same timer, read tick by tick when a profile wants the
+  // shape of the lateness and not only its share of a second.
+  if (probe !== null) cpuMeter.watch((lateMs) => probe.timerLate(lateMs));
   /** Hysteresis for the two lines below; see `pollStat`. */
   let cpuBusy = false;
   /** When the busy span started, for the duration it reports. */
@@ -1515,6 +1605,10 @@ async function main(): Promise<void> {
    * measured by anything else. Both are reset by the mark.
    */
   let dspPhase = emptyAudioLoad();
+  /** Where the OSC counters stood at the last mark. E9-197. */
+  let oscReadAt = 0;
+  let oscRelayedAt = 0;
+  let oscSeen = 0;
   /** `/status.reply` timestamps already folded, so a poll counts once. */
   let scStatusAt = 0;
   let vuQuietSince = 0;
@@ -1832,7 +1926,7 @@ async function main(): Promise<void> {
     const sc = audioStatus();
     if (sc !== null && sc.at !== scStatusAt) {
       scStatusAt = sc.at;
-      foldScsynth(dspPhase, sc.avgCpu, sc.peakCpu);
+      foldScsynth(dspPhase, sc.avgCpu, sc.peakCpu, sc.synths, sc.ugens);
     }
     // One round trip a second, beside the disk poll that was already here.
     // The answer lands in `engine.status` and is read by
@@ -1886,8 +1980,8 @@ async function main(): Promise<void> {
    * and guessing which phase it came from, which is the mistake this
    * whole file has been correcting for five releases.
    */
-  host.registry.implement("profile_mark", (label) => {
-    const what = String(label ?? "");
+  reportPhase = (what: string, fromLua: boolean): void => {
+    const from = markAt;
     const spentMs = performance.now() - markAt;
     markAt = performance.now();
     log(`mark: ${what} — ${(spentMs / 1000).toFixed(1)} s`);
@@ -1911,12 +2005,167 @@ async function main(): Promise<void> {
     // phase timer and nothing else.
     log(`  audio thread: ${describeAudioLoad(dspPhase)}`);
     dspPhase = emptyAudioLoad();
+    /**
+     * E9-197 — HOW MUCH OF THE OSC THIS SIDE ACTUALLY LOOKS AT.
+     *
+     * On a Pixel the bench's engine phase carried 327 inbound messages
+     * for 159 notes and `osc:from-server` cost 0.25 ms each — a third of
+     * what a note costs. All but about nine were `/n_go` and `/n_end`,
+     * which nothing here reads. Printed as a pair with `osc:to-sclang`
+     * in the instrumented list above, the two together say whether that
+     * quarter-millisecond is ours or sclang's.
+     */
+    const t = scEngine?.transport;
+    if (t !== undefined && t.oscRead + t.oscRelayed > oscSeen) {
+      const read = t.oscRead - oscReadAt;
+      const relayed = t.oscRelayed - oscRelayedAt;
+      oscReadAt = t.oscRead;
+      oscRelayedAt = t.oscRelayed;
+      oscSeen = t.oscRead + t.oscRelayed;
+      log(`  osc from the server: ${read} read, ${relayed} relayed without reading`);
+    }
     const frames = describeFrames(frameLoad.load());
     log(`  ${frames ?? "frames: none over 50 ms"}`);
+    /**
+     * E9-200 — AND EVERYTHING ELSE, when a profile is running.
+     *
+     * Read BEFORE the account is cleared two lines down: the probe prints
+     * the same account in full, with the count and the cost of one call
+     * for every path and not only the six that reached a millisecond.
+     * The span is handed to the sampler too, so the stacks taken inside
+     * it are ranked on their own at the end.
+     */
+    if (probe !== null) {
+      for (const line of probe.report()) log(`  ${line}`);
+      profileRun?.phase(what, from, markAt);
+    }
     resetCallCosts();
     frameLoad.reset();
+    // A mark made by Lua is finished by Lua, which prints its own half on
+    // the way out (`luaprof.lua`). One made by the page has to ask.
+    if (!fromLua && probe !== null) host.run("if _njs_prof then _njs_prof.report() end");
+  };
+  host.registry.implement("profile_mark", (label) => {
+    reportPhase?.(String(label ?? ""), true);
     return [];
   });
+  host.registry.implement("profile_probe", (what, n, text) => {
+    const name = String(what ?? "");
+    if (probeRun === null) log(`probe ${name}: needs ?profile and a running engine`);
+    else probeRun(name, Number(n ?? 0), String(text ?? ""));
+    return [];
+  });
+
+  if (probe !== null && profile !== null) {
+    /**
+     * E9-200 — A SESSION NOBODY SCRIPTED STILL GETS ITS PHASES.
+     *
+     * `_bench` and `_cpu` mark their own. Somebody playing `awake` for
+     * two minutes does not, and used to get one total for the lot — the
+     * blend this whole file keeps having to un-learn. Fifteen seconds
+     * without a mark makes one, until the window closes.
+     */
+    const AUTO_MS = 15_000;
+    let autoN = 0;
+    const openedAt = performance.now();
+    const auto = setInterval(() => {
+      if (performance.now() - openedAt > profile.seconds * 1000) {
+        clearInterval(auto);
+        return;
+      }
+      // Numbered, because five spans with one name cannot be told apart
+      // when the sampler prints a table for each of them at the end.
+      if (performance.now() - markAt >= AUTO_MS) reportPhase?.(`auto ${++autoN}, nothing marked for 15 s`, false);
+    }, 1000);
+
+    setInterval(() => probe.heapTick(), 500);
+
+    /**
+     * HOW LONG AN INPUT WAITED BEFORE ANYTHING HEARD IT.
+     *
+     * `event.timeStamp` is when the browser received it and this listener
+     * is the first thing that can run for it — capture, on the window —
+     * so the difference is the time the main thread was busy with
+     * something else. That is the lag a hand feels, before a single line
+     * of this project has had the chance to add to it.
+     */
+    for (const type of ["pointerdown", "pointerup", "pointermove", "keydown", "keyup", "wheel"] as const) {
+      globalThis.addEventListener?.(
+        type,
+        (e: Event) => probe.input(type, Math.max(0, performance.now() - e.timeStamp)),
+        { capture: true, passive: true },
+      );
+    }
+
+    /**
+     * AND HOW LONG THE ONES THAT TOOK LONG TOOK, from the browser itself.
+     * Event Timing reports any interaction over sixteen milliseconds from
+     * hardware to the next paint, with the part spent waiting.
+     */
+    let slow = 0;
+    let worstMs = 0;
+    let worstWaitMs = 0;
+    let worstName = "";
+    try {
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries() as Array<PerformanceEntry & { processingStart?: number }>) {
+          slow++;
+          if (e.duration > worstMs) {
+            worstMs = e.duration;
+            worstName = e.name;
+          }
+          const wait = (e.processingStart ?? e.startTime) - e.startTime;
+          if (wait > worstWaitMs) worstWaitMs = wait;
+        }
+      }).observe({ type: "event", durationThreshold: 16 } as PerformanceObserverInit);
+      probeNotes.push(() => {
+        const line =
+          slow === 0
+            ? "events over 16 ms to paint: none"
+            : `events over 16 ms to paint: ${slow}, worst ${worstMs.toFixed(0)} ms (${worstName}), ` +
+              `worst wait ${worstWaitMs.toFixed(0)} ms`;
+        slow = 0;
+        worstMs = 0;
+        worstWaitMs = 0;
+        worstName = "";
+        return line;
+      });
+    } catch {
+      probeNotes.push(() => "events over 16 ms to paint: not observable in this browser");
+    }
+
+    /**
+     * WHETHER THE MACHINE SAYS IT IS HOT. The Compute Pressure API where
+     * there is one; the reason a phone that was fast a minute ago is not.
+     */
+    let pressure = "not reported by this browser";
+    let pressureChanges = 0;
+    try {
+      const PO = (globalThis as unknown as {
+        PressureObserver?: new (cb: (r: Array<{ state?: string }>) => void) => {
+          observe(source: string, opts?: { sampleInterval?: number }): Promise<void>;
+        };
+      }).PressureObserver;
+      if (typeof PO === "function") {
+        pressure = "no reading yet";
+        const po = new PO((records) => {
+          const state = records[records.length - 1]?.state;
+          if (state !== undefined && state !== pressure) {
+            pressure = state;
+            pressureChanges++;
+          }
+        });
+        void po.observe("cpu", { sampleInterval: 2000 }).catch(() => void (pressure = "refused"));
+      }
+    } catch {
+      /* said as "not reported" */
+    }
+    probeNotes.push(() => {
+      const line = `pressure: ${pressure}${pressureChanges > 1 ? `, changed ${pressureChanges - 1} time(s)` : ""} · ${batteryNote}`;
+      pressureChanges = Math.min(pressureChanges, 1);
+      return line;
+    });
+  }
 
   // --- the battery, when the machine has one -----------------------------
   //
@@ -1951,6 +2200,7 @@ async function main(): Promise<void> {
       .then((b) => {
         const push = (): void => {
           cb.battery(Math.round(b.level * 100), b.charging ? 1 : -1);
+          batteryNote = `battery ${Math.round(b.level * 100)}%, ${b.charging ? "charging" : "discharging"}`;
         };
         b.addEventListener?.("levelchange", push);
         b.addEventListener?.("chargingchange", push);
@@ -3407,6 +3657,51 @@ async function main(): Promise<void> {
   // Everything from here is somebody using the thing rather than it
   // starting up, and a profile ranks the two apart. E9-162.
   profileRun?.mark();
+  if (probe !== null && profile !== null) {
+    /**
+     * E9-200 — WHAT THE NUMBERS BELOW WERE TAKEN WITH.
+     *
+     * Three lines that turn every later one from a reading into a
+     * measurement: which machine, how fine its clock is and what reading
+     * it costs, and which of the browser's own instruments exist here.
+     * A profile from a phone that lacks one of them should say so at the
+     * top rather than leave a line missing forty lines down.
+     */
+    const nav = navigator as unknown as { deviceMemory?: number };
+    const sc = globalThis.screen;
+    log(`profile machine: ${navigator.userAgent}`);
+    log(
+      `profile machine: ${navigator.hardwareConcurrency ?? "?"} core(s), ` +
+        `${nav.deviceMemory ?? "?"} GB reported, dpr ${globalThis.devicePixelRatio ?? 1}, ` +
+        `screen ${sc?.width ?? "?"}x${sc?.height ?? "?"}, ` +
+        `isolated ${String(globalThis.crossOriginIsolated)}, ${batteryNote}`,
+    );
+    // What `timed()` adds to the account it keeps, and what it costs the
+    // caller, so both can be taken off any path by its call count.
+    const N = 20000;
+    const noop = (): void => {};
+    const t0 = performance.now();
+    for (let i = 0; i < N; i++) timed("(calibration)", noop);
+    const wallNs = ((performance.now() - t0) * 1e6) / N;
+    const got = callCosts().find((c) => c.path === "(calibration)");
+    const recordedNs = got === undefined ? 0 : (got.ms * 1e6) / got.calls;
+    log(
+      `profile clocks: performance.now() steps by ${(clockStepMs(() => performance.now()) * 1000).toFixed(1)} us · ` +
+        `an empty span between two reads measures ${probe.pairNs.toFixed(0)} ns · ` +
+        `timed() records ${recordedNs.toFixed(0)} ns for an empty call and costs its caller ${wallNs.toFixed(0)} ns ` +
+        `(over ${N} calls, which appear below as "(calibration)")`,
+    );
+    const has = (ok: boolean): string => (ok ? "yes" : "NO");
+    const types = (globalThis.PerformanceObserver?.supportedEntryTypes ?? []) as readonly string[];
+    log(
+      `profile has: js heap ${has((performance as unknown as { memory?: unknown }).memory !== undefined)} · ` +
+        `long frames ${has(types.includes("long-animation-frame"))} · ` +
+        `event timing ${has(types.includes("event"))} · ` +
+        `pressure ${has(typeof (globalThis as unknown as { PressureObserver?: unknown }).PressureObserver === "function")} · ` +
+        `lua sampling ${profile.lua ? "ON (&lua)" : "off"} · ` +
+        `playback statistics are looked for when audio starts`,
+    );
+  }
   log("SELECT lists the scripts. The gear has the key bindings.");
 
   // --- audio -------------------------------------------------------------
@@ -3869,6 +4164,144 @@ async function main(): Promise<void> {
       },
     });
 
+    if (probe !== null) {
+      /**
+       * E9-200 — THE OSC, WATCHED FROM OUTSIDE THE HOST.
+       *
+       * Everything in or out of either wasm module goes through four
+       * properties: `sendOsc` and the reply callback, on each. Wrapping
+       * those here sees every packet whatever sent it — `register.ts`
+       * calls `sclang.sendOsc` directly and never passes `sendToLang` —
+       * and leaves `host.ts` exactly as it is when nobody is profiling.
+       */
+      type Wasm = {
+        sendOsc(b: Uint8Array): void;
+        onOsc?: (b: Uint8Array) => void;
+        onOscReply?: (b: Uint8Array) => void;
+        runCode?(code: string, silent?: boolean): void;
+      };
+      const lang = engine.sclang as Wasm;
+      const synth = engine.scsynth as Wasm;
+      const ctxNow = ctx as unknown as { playbackStats?: unknown; playoutStats?: unknown };
+      log(
+        `profile has: playback statistics ${
+          ctxNow.playbackStats !== undefined || ctxNow.playoutStats !== undefined
+            ? "yes"
+            : "NO — underruns will not be counted in this browser"
+        } · sample rate ${ctx.sampleRate} Hz`,
+      );
+
+      /** What the flood below is waiting to hear, if anything. */
+      let flood: { id: number; n: number; startedAt: number; sentAt: number } | null = null;
+      let pingId = 0;
+
+      const toLang = lang.sendOsc.bind(lang);
+      lang.sendOsc = (b: Uint8Array): void => {
+        probe.osc("to-lang", b);
+        // `/command/…` — what a script sends an engine. The next packet
+        // sclang produces is taken to be its answer.
+        if (b.length > 9 && b[1] === 0x63 && b[2] === 0x6f && b[8] === 0x2f) probe.commandSent();
+        toLang(b);
+      };
+      const toSynth = synth.sendOsc.bind(synth);
+      synth.sendOsc = (b: Uint8Array): void => {
+        probe.osc("to-server", b);
+        toSynth(b);
+      };
+      const fromSynth = synth.onOscReply;
+      synth.onOscReply = (b: Uint8Array): void => {
+        probe.osc("from-server", b);
+        fromSynth?.(b);
+      };
+      const fromLang = lang.onOsc;
+      lang.onOsc = (b: Uint8Array): void => {
+        // The two answers this probe asked for stop here. They are not
+        // traffic and the router has no use for them.
+        if (b.length > 12 && b[0] === 0x2f && b[1] === 0x6e && b[9] === 0x2f) {
+          const name = oscName(b);
+          if (name === "/norns-js/pong" || name === "/norns-js/scbench") {
+            let args: Array<number | string> = [];
+            try {
+              args = (decodeOsc(b) as { args?: Array<number | string> }).args ?? [];
+            } catch {
+              /* an answer that cannot be read is not an answer */
+            }
+            if (name === "/norns-js/scbench") {
+              const seconds = Number(args[0] ?? 0);
+              const n = Number(args[1] ?? 0);
+              log(
+                `probe sclang bench: ${n} iterations in ${(seconds * 1000).toFixed(2)} ms by sclang's own clock ` +
+                  `(${n > 0 ? ((seconds * 1e9) / n).toFixed(1) : "?"} ns each)`,
+              );
+              return;
+            }
+            const id = Number(args[0] ?? -1);
+            if (flood !== null && id === flood.id) {
+              const at = performance.now();
+              const sendMs = flood.sentAt - flood.startedAt;
+              const afterMs = at - flood.sentAt;
+              log(
+                `probe sclang flood: ${flood.n} commands sent in ${sendMs.toFixed(2)} ms ` +
+                  `(${((sendMs * 1000) / flood.n).toFixed(2)} us each on this thread), ` +
+                  `answered ${afterMs.toFixed(2)} ms after the last, ` +
+                  `${(((at - flood.startedAt) * 1000) / flood.n).toFixed(2)} us a command end to end`,
+              );
+              flood = null;
+              return;
+            }
+            probe.pong(id);
+            return;
+          }
+        }
+        probe.osc("from-lang", b);
+        fromLang?.(b);
+      };
+
+      // The answering half, defined in sclang once. An internal port, so
+      // `NornsJsOscPortOverride` leaves the address alone.
+      lang.runCode?.(
+        'OSCdef(\\njsPing, { |msg| NetAddr("127.0.0.1", 57120).sendMsg("/norns-js/pong", msg[1]) }, "/norns-js/ping");',
+        true,
+      );
+      // Four a second: enough for a histogram over a five-second level,
+      // and far below what sclang already does to itself with `/status`.
+      setInterval(() => {
+        if (globalThis.document?.hidden === true) return;
+        const id = ++pingId;
+        probe.pingSent(id);
+        toLang(encodeOsc("/norns-js/ping", [id]));
+      }, 250);
+
+      probeRun = (what, n, text) => {
+        if (what === "sclang_bench") {
+          const iterations = Math.max(1000, Math.min(2_000_000, Math.floor(n) || 200_000));
+          lang.runCode?.(
+            `{ var t = Main.elapsedTime; var x = 0; ${iterations}.do { |i| x = x + (i % 7) }; ` +
+              `NetAddr("127.0.0.1", 57120).sendMsg("/norns-js/scbench", Main.elapsedTime - t, ${iterations}) }.value;`,
+            true,
+          );
+          return;
+        }
+        if (what === "sclang_flood") {
+          // Commands as a script sends them, back to back, then one ping:
+          // how long after the last send the ping comes home says whether
+          // the interpreter kept up with this thread or fell behind it.
+          const count = Math.max(1, Math.min(20000, Math.floor(n) || 2000));
+          const address = `/command/${text === "" ? "cutoff" : text}`;
+          const packets: Uint8Array[] = [];
+          for (let i = 0; i < 50; i++) packets.push(encodeOsc(address, [800 + i]) as Uint8Array);
+          const startedAt = performance.now();
+          for (let i = 0; i < count; i++) toLang(packets[i % 50]!);
+          const sentAt = performance.now();
+          const id = ++pingId;
+          flood = { id, n: count, startedAt, sentAt };
+          toLang(encodeOsc("/norns-js/ping", [id]));
+          return;
+        }
+        log(`probe ${what}: not a probe this page knows`);
+      };
+    }
+
     // The clock, on the engine's context.
     const clock = await createWorkletClock({
       context: ctx,
@@ -3898,6 +4331,8 @@ async function main(): Promise<void> {
        * because the first is the one that explains a script that has
        * just jumped; the rest are summed and said when it settles.
        */
+      // E9-200 — only a profile asks how late each event arrived.
+      ...(probe !== null ? { onLate: (ms: number) => probe.clockLate(ms) } : {}),
       onBacklog: (dropped, gapMs) => {
         backlogDropped += dropped;
         backlogRuns++;

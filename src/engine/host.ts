@@ -6,6 +6,7 @@
 import { installCapture, captured, uncapturedAudioContext } from "./capture.js";
 import { timed } from "../norns/call-cost.js";
 import { decode, encodeMessage } from "./osc.js";
+import { routeLangPacket } from "./lang-route.js";
 import { loadClassLibrary } from "./classlib-loader.js";
 
 /** What an OSC argument can be: int32, float32 or string, plus blobs. */
@@ -67,6 +68,13 @@ export interface EngineHost {
     timeouts: number;
     timedOutDefs: number;
     dead: boolean;
+    /**
+     * Inbound messages this side READ against ones it only relayed.
+     * E9-197: on a Pixel, 318 of 327 in a note-heavy phase were `/n_go`
+     * and `/n_end`, which nothing here looks at.
+     */
+    oscRead: number;
+    oscRelayed: number;
   };
   /**
    * What the SERVER says its own load is, from `/status.reply`. E9-112.
@@ -457,15 +465,10 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   // anything else is the server's by definition, so a new norns message
   // cannot be silently swallowed — it would go to scsynth and be ignored
   // loudly rather than vanish.
-  const toMatron = (addr: string): boolean =>
-    addr.startsWith("/crone/") ||
-    addr.startsWith("/report/") ||
-    addr === "/poll/data" ||
-    addr === "/poll/value" ||
-    // Added by this port, not by norns: with the port gone, a script's own
-    // OSC needs somewhere to say where it was going. See
-    // sc-overrides/SystemOverwrites/NornsJsOscPortOverride.sc.
-    addr.startsWith("/norns-js/");
+  //
+  // The set itself, and the reading of a packet against it, are in
+  // `lang-route.ts` (E9-199), where they can be tested without a server's
+  // worth of setup.
 
   type Decoded = { address?: string; args?: OscArg[]; bundle?: Array<{ address: string }> };
 
@@ -549,6 +552,12 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     acks: 0,
     ackTotalMs: 0,
     ackMaxMs: 0,
+    get oscRead() {
+      return oscIn.read;
+    },
+    get oscRelayed() {
+      return oscIn.relayed;
+    },
     timeouts: 0,
     timedOutDefs: 0,
     /** Set once the server has stopped answering; see the timeout below. */
@@ -559,7 +568,7 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   let consecutiveTimeouts = 0;
   let sentAt = 0;
   let outstanding = 0;
-  const held: Array<{ bytes: Uint8Array; addr: string | undefined; defs: number }> = [];
+  const held: Array<{ bytes: Uint8Array; defs: number }> = [];
   let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 
   const disarm = (): void => {
@@ -603,7 +612,7 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     }, 2000);
   };
 
-  const forward = (p: { bytes: Uint8Array; addr: string | undefined; defs: number }): void => {
+  const forward = (p: { bytes: Uint8Array; defs: number }): void => {
     if (p.defs > 0 && !transport.dead) {
       // Once the server is known dead, nothing is held: waiting two seconds
       // for an answer that is never coming only slows down finding out.
@@ -624,22 +633,6 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
    */
   const pump = (): void => {
     while (outstanding === 0 && held.length > 0) forward(held.shift()!);
-  };
-
-  /** A bundle counts as whatever its first message is. */
-  const addressOf = (m: Decoded | null): string | undefined =>
-    m?.address ?? m?.bundle?.[0]?.address;
-
-  /**
-   * How many `/d_recv` acknowledgements this packet will produce.
-   *
-   * Every `/d_recv` in a bundle gets its own `/done`, wherever it sits in
-   * the bundle -- so this counts them all, not just the first message.
-   */
-  const defsIn = (m: Decoded | null): number => {
-    if (m === null) return 0;
-    if (m.address !== undefined) return m.address === "/d_recv" ? 1 : 0;
-    return (m.bundle ?? []).filter((x) => x.address === "/d_recv").length;
   };
 
   /**
@@ -668,28 +661,19 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   sclang.onOsc = (bytes: Uint8Array) => timed("osc:from-lang", () => onLangOsc(bytes));
 
   const onLangOsc = (bytes: Uint8Array): void => {
-    let msg: Decoded | null = null;
-    try {
-      msg = decode(bytes) as unknown as Decoded;
-    } catch {
-      /* not decodable here; the server will deal with it */
-    }
-    const addr = addressOf(msg);
-    if (addr && toMatron(addr)) {
-      opts.onMatron?.({ address: addr, args: msg?.args ?? [] });
+    // E9-199 — read, not decoded, unless it is one of the few packets
+    // whose contents decide something. See `lang-route.ts`.
+    const route = routeLangPacket(bytes);
+    if (route.matron !== null) {
+      opts.onMatron?.(route.matron);
       return;
     }
-    // `/sync` is never held; see above. A bundle that CONTAINS a `/sync`
-    // is not held either — `NetAddr.sync` sends the work and the `/sync`
-    // together, so holding the bundle would hold the question with it.
-    const hasSync =
-      addr === "/sync" || (msg?.bundle?.some((m) => m.address === "/sync") ?? false);
-    const defs = defsIn(msg);
-    if (outstanding > 0 && !hasSync) {
-      held.push({ bytes, addr, defs });
+    // `/sync` is never held; see above.
+    if (outstanding > 0 && !route.hasSync) {
+      held.push({ bytes, defs: route.defs });
       return;
     }
-    forward({ bytes, addr, defs });
+    forward({ bytes, defs: route.defs });
   };
 
   scsynth.onOscReply = (bytes: Uint8Array) => timed("osc:from-server", () => onServerOsc(bytes));
@@ -706,7 +690,44 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   /** `/b_getn` answers in flight, keyed by `bufnum:index`. E9-171. */
   const peekWaiting = new Map<string, (v: number[] | null) => void>();
 
+  /**
+   * E9-197 — THE ADDRESS, WITHOUT DECODING THE MESSAGE.
+   *
+   * An OSC message begins with its address as a null-padded string, so it
+   * can be read without parsing the type tag or any argument. This handler
+   * cares about exactly four addresses; on a Pixel the engine phase of the
+   * bench carried 327 inbound messages for 159 notes, and all but about
+   * nine of them were `/n_go` and `/n_end` — notifications that were fully
+   * decoded, compared against four strings, and thrown away.
+   *
+   * Reading 8 bytes instead is free and cannot change what is dispatched:
+   * everything that was decoded before is still decoded, and nothing that
+   * was not handled before is handled now.
+   */
+  const WATCHED = new Set(["/status.reply", "/b_setn", "/synced", "/done", "/fail"]);
+  const addressIs = (bytes: Uint8Array, watched: Set<string>): string | null => {
+    if (bytes.length === 0 || bytes[0] !== 0x2f) return null; // not '/'
+    let end = 1;
+    while (end < bytes.length && bytes[end] !== 0) end++;
+    if (end >= bytes.length) return null;
+    let s = "/";
+    for (let i = 1; i < end; i++) s += String.fromCharCode(bytes[i]!);
+    return watched.has(s) ? s : null;
+  };
+
+  /** Messages that only had to be relayed, and the ones we read. E9-197. */
+  const oscIn = { relayed: 0, read: 0 };
+
   const onServerOsc = (bytes: Uint8Array): void => {
+    // Nothing below reads a message this is not one of, so a notification
+    // goes straight to the relay at the end. E9-197.
+    const watched = addressIs(bytes, WATCHED);
+    if (watched === null) {
+      oscIn.relayed++;
+      timed("osc:to-sclang", () => sclang.sendOsc(bytes));
+      return;
+    }
+    oscIn.read++;
     // Read BEFORE the `/d_recv` bookkeeping below and outside its guard:
     // that branch only runs while a SynthDef is outstanding, and the
     // status poll has nothing to do with sending defs.
@@ -768,7 +789,14 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
         /* a reply we cannot read cannot be the acknowledgement */
       }
     }
-    sclang.sendOsc(bytes);
+    // SEPARATELY TIMED, because `osc:from-server` was one number over two
+    // different things: our decode, and sclang's own handling of the
+    // message inside its wasm. On a Pixel that number was 0.25 ms a
+    // message and nothing said which half it was — which decides whether
+    // the note path is ours to fix or only fixable by not sending the
+    // notifications at all. `timed` keeps SELF time, so the outer entry
+    // is now our side alone.
+    timed("osc:to-sclang", () => sclang.sendOsc(bytes));
   };
 
   // --- the boot gate (ADR-04d) -----------------------------------------

@@ -199,7 +199,11 @@ export function makeCallbacks(L: LuaState) {
       }
       pushValue(L, coroId);
       pushValue(L, value);
-      const status = lua.lua_pcall(L, 2, 0, 0);
+      // E9-200 — TIMED, like the other two ways into Lua. `call-cost.ts`
+      // says every callback goes through two `lua_pcall`s; this is the
+      // third, and it is where a sequencer does its work. A level of
+      // `_cpu` that resumed 366 coroutines reported no path for them.
+      const status = timed("clock.resume", () => lua.lua_pcall(L, 2, 0, 0));
       if (status !== lua.LUA_OK) {
         const message = lua.lua_tojsstring(L, -1);
         lua.lua_pop(L, 1);

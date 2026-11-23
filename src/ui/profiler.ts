@@ -45,6 +45,15 @@ export interface ProfileRequest {
   readonly seconds: number;
   /** Milliseconds between samples; the browser may give a coarser one. */
   readonly intervalMs: number;
+  /**
+   * Whether Lua is sampled too, from inside the interpreter (E9-200).
+   *
+   * OFF UNLESS ASKED FOR, with `&lua`. A count hook puts the VM on its
+   * slow path for every instruction, so a run with it on is a run of a
+   * slower Lua: right for finding which function is hot, wrong for
+   * reading what anything costs. `_cpu` measures the difference itself.
+   */
+  readonly lua: boolean;
 }
 
 /**
@@ -60,8 +69,18 @@ export function profileRequest(search: string): ProfileRequest | null {
   const raw = (p.get("profile") ?? "").trim();
   const seconds = raw === "" ? 30 : Number(raw);
   if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  /**
+   * E9-200 — FIVE MILLISECONDS, AND SAYABLE. It was ten, which gives a
+   * five-second phase five hundred samples and a phase that is two per
+   * cent busy ten of them. `&interval=2` asks for finer; the browser
+   * answers with what it can do — sixteen on Windows, whatever is asked
+   * — and the report prints the one it actually used.
+   */
+  const asked = Number(p.get("interval") ?? "");
+  const intervalMs = Number.isFinite(asked) && asked >= 1 && asked <= 50 ? asked : 5;
+  const lua = p.has("lua") && p.get("lua") !== "0";
   // Ten minutes is far past anything useful and well inside the buffer.
-  return { seconds: Math.min(seconds, 600), intervalMs: 10 };
+  return { seconds: Math.min(seconds, 600), intervalMs, lua };
 }
 
 /** One line of the summary: a function, and how long it was on top of the stack. */
@@ -71,7 +90,26 @@ export interface Summary {
   /** Every sample the profiler took, idle included. */
   readonly total: number;
   readonly frames: HotFrame[];
+  /** The commonest whole stacks, leaf first. E9-200. */
+  readonly stacks: HotStack[];
 }
+
+/**
+ * One stack, as far up as is worth printing.
+ *
+ * A function at 20% self says where the time is and not why it is being
+ * called. `encodeMessage` was hot in one profile because of one caller
+ * out of four, and the table of frames could not say which.
+ */
+export interface HotStack {
+  /** `leaf < caller < its caller`, at most `STACK_DEPTH` deep. */
+  readonly path: string;
+  /** Share of the busy samples that ended in exactly this. */
+  readonly pct: number;
+}
+
+/** How far up a stack is printed. Past this it is the event loop. */
+export const STACK_DEPTH = 6;
 
 export interface HotFrame {
   readonly name: string;
@@ -113,7 +151,13 @@ export function hotFrames(trace: ProfilerTrace, top = 12): HotFrame[] {
  * in the line now, first, so the percentages beneath it have something
  * to be a percentage OF.
  */
-export function summarise(trace: ProfilerTrace, top = 12, since = -Infinity): Summary {
+export function summarise(
+  trace: ProfilerTrace,
+  top = 12,
+  since = -Infinity,
+  until = Infinity,
+  topStacks = 0,
+): Summary {
   const nameOf = (frameId: number): string => {
     const f = trace.frames[frameId];
     if (!f) return "(unknown)";
@@ -126,12 +170,13 @@ export function summarise(trace: ProfilerTrace, top = 12, since = -Infinity): Su
 
   const self = new Map<string, number>();
   const total = new Map<string, number>();
+  const paths = new Map<string, number>();
   let counted = 0;
 
   let window = 0;
   for (const s of trace.samples) {
     // E9-162 — AND THE BOOT IS NOT THE SCRIPT. See `startProfile`.
-    if (s.timestamp < since) continue;
+    if (s.timestamp < since || s.timestamp >= until) continue;
     window++;
     if (s.stackId === undefined) continue; // idle: nothing was running
     counted++;
@@ -140,6 +185,8 @@ export function summarise(trace: ProfilerTrace, top = 12, since = -Infinity): Su
     // Up the stack, each frame counted once per sample.
     const seen = new Set<string>();
     let at: number | undefined = s.stackId;
+    let path = "";
+    let depth = 0;
     while (at !== undefined) {
       const node: { frameId: number; parentId?: number } | undefined = trace.stacks[at];
       if (!node) break;
@@ -148,8 +195,11 @@ export function summarise(trace: ProfilerTrace, top = 12, since = -Infinity): Su
         seen.add(n);
         total.set(n, (total.get(n) ?? 0) + 1);
       }
+      if (topStacks > 0 && depth < STACK_DEPTH) path += (depth === 0 ? "" : " < ") + n;
+      depth++;
       at = node.parentId;
     }
+    if (topStacks > 0) paths.set(path, (paths.get(path) ?? 0) + 1);
   }
 
   const frames =
@@ -163,7 +213,14 @@ export function summarise(trace: ProfilerTrace, top = 12, since = -Infinity): Su
           }))
           .sort((a, b) => b.selfPct - a.selfPct)
           .slice(0, top);
-  return { busy: counted, total: window, frames };
+  const stacks =
+    counted === 0
+      ? []
+      : [...paths]
+          .map(([path, n]) => ({ path, pct: (n / counted) * 100 }))
+          .sort((a, b) => b.pct - a.pct)
+          .slice(0, topStacks);
+  return { busy: counted, total: window, frames, stacks };
 }
 
 export interface ProfileRun {
@@ -181,6 +238,17 @@ export interface ProfileRun {
    * one ranking there is no way to tell which is which.
    */
   mark(): void;
+  /**
+   * Name a span, so the samples inside it are ranked on their own.
+   *
+   * E9-200 — `_bench` and `_cpu` run one thing at a time precisely so
+   * that each can be read apart, and the instrumented account has been
+   * reported per phase since E9-176. The sampled profile was still one
+   * table for the whole run: seven phases of a bench in a single
+   * ranking, which says what the average of seven different programs
+   * spent its time on.
+   */
+  phase(label: string, fromMs: number, toMs: number): void;
 }
 
 /**
@@ -200,6 +268,12 @@ export function startProfile(
 ): ProfileRun {
   let bootEnded: number | null = null;
   const mark = (): void => void (bootEnded = performance.now());
+  const phases: Array<{ label: string; from: number; to: number }> = [];
+  const phase = (label: string, from: number, to: number): void => {
+    // A run of `_cpu` and `_bench` is about thirty spans. Two hundred is
+    // far past that and well short of a log nobody could scroll.
+    if (phases.length < 200) phases.push({ label, from, to });
+  };
   const Ctor = (globalThis as { Profiler?: ProfilerCtor }).Profiler;
   if (typeof Ctor !== "function") {
     log(
@@ -207,7 +281,7 @@ export function startProfile(
         "Document-Policy: js-profiling header, which this page sends — so " +
         "on another browser there is nothing to do.",
     );
-    return { done: Promise.resolve(), mark };
+    return { done: Promise.resolve(), mark, phase };
   }
 
   let profiler: ProfilerLike;
@@ -221,10 +295,18 @@ export function startProfile(
     });
   } catch (err) {
     log(`profile: could not start — ${(err as Error).message}`);
-    return { done: Promise.resolve(), mark };
+    return { done: Promise.resolve(), mark, phase };
   }
 
-  log(`profile: sampling for ${req.seconds} s. Load the script you want measured now.`);
+  // What the browser GAVE, which is not always what was asked: Windows
+  // rounds to its sixteen-millisecond timer. Every "seconds" below is
+  // samples times this, so it has to be the real one.
+  const every = profiler.sampleInterval > 0 ? profiler.sampleInterval : req.intervalMs;
+  log(
+    `profile: sampling for ${req.seconds} s, one sample every ${every} ms` +
+      `${every === req.intervalMs ? "" : ` (${req.intervalMs} was asked for)`}. ` +
+      `Load the script you want measured now.`,
+  );
 
   const done = new Promise<void>((resolve) => {
     setTimeout(() => {
@@ -249,14 +331,19 @@ export function startProfile(
                   .padStart(5)}% total   ${f.name}`,
               );
             }
+            // E9-200 — and who was calling, for the stacks that recur.
+            for (const k of s.stacks) {
+              if (k.pct < 1) break;
+              log(`  ${k.pct.toFixed(1).padStart(5)}% stack  ${k.path}`);
+            }
           };
 
-          const whole = summarise(trace);
+          const whole = summarise(trace, 25, -Infinity, Infinity, 12);
           if (whole.frames.length === 0) {
             log("profile: no samples — the page was idle, or the buffer ran out.");
             return;
           }
-          report(whole, "the whole run, boot included", req.seconds);
+          report(whole, "the whole run, boot included", (whole.total * every) / 1000);
           /**
            * E9-162 — AND AGAIN WITHOUT THE BOOT, when there was one.
            *
@@ -266,10 +353,34 @@ export function startProfile(
            * like a finding and is noise.
            */
           if (bootEnded !== null) {
-            const after = summarise(trace, 12, bootEnded);
+            const after = summarise(trace, 25, bootEnded, Infinity, 12);
             if (after.total >= 100) {
-              report(after, "after the boot", (after.total * req.intervalMs) / 1000);
+              report(after, "after the boot", (after.total * every) / 1000);
             }
+          }
+          /**
+           * E9-200 — AND EACH NAMED SPAN ON ITS OWN.
+           *
+           * Eight frames and three stacks apiece, and only for a span
+           * with enough busy samples to rank: under a dozen, the order
+           * of the table is the order the dice fell in. The count is
+           * printed either way, because "this phase was idle" is a
+           * finding and a missing table is not.
+           */
+          for (const p of phases) {
+            const s = summarise(trace, 8, p.from, p.to, 3);
+            if (s.total === 0) continue;
+            // With where it was in the run, in the same seconds the log
+            // is stamped in, so a table can be found beside its mark.
+            const where = `[${p.label} · ${(p.from / 1000).toFixed(1)}-${(p.to / 1000).toFixed(1)} s]`;
+            if (s.busy < 12) {
+              log(
+                `profile: ${where} ${s.total} samples, busy in ${s.busy} ` +
+                  `(${((s.busy / s.total) * 100).toFixed(1)}%) — too few to rank.`,
+              );
+              continue;
+            }
+            report(s, where, (s.total * every) / 1000);
           }
           for (const line of account?.() ?? []) log(line);
           if (offer) {
@@ -283,5 +394,5 @@ export function startProfile(
     }, req.seconds * 1000);
   });
 
-  return { done, mark };
+  return { done, mark, phase };
 }

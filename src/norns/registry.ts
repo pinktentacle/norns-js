@@ -48,6 +48,31 @@ export class NornsRegistry {
   private readonly callCounts = new Map<string, number>();
 
   /**
+   * E9-200 — WHAT EACH FUNCTION COSTS ON THIS SIDE, when somebody asks.
+   *
+   * `timing` is false for the life of an ordinary page and the dispatcher
+   * reads it once a call. Under `?profile` it is true, and one call in
+   * eight of each function is timed into that function own slot; see
+   * `ui/probe.ts` for why one in eight and not all of them.
+   *
+   * The slot is handed to the dispatcher closure when the function is
+   * installed, so a timed call is two clock reads and three additions
+   * with no lookup — a map lookup per call would cost more than most of
+   * the functions being measured.
+   */
+  timing = false;
+  readonly slots = new Map<string, { calls: number; timed: number; ms: number; max: number }>();
+
+  slotFor(name: string): { calls: number; timed: number; ms: number; max: number } {
+    let s = this.slots.get(name);
+    if (s === undefined) {
+      s = { calls: 0, timed: 0, ms: 0, max: 0 };
+      this.slots.set(name, s);
+    }
+    return s;
+  }
+
+  /**
    * Provide a real implementation for one `_norns` function.
    *
    * Subsystems call this as they come up — screen in E2, metro in E3, engines

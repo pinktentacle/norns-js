@@ -77,7 +77,7 @@ class CroneProcessor extends AudioWorkletProcessor {
     const fine = typeof performance === "object" && typeof performance.now === "function";
     this.coarse = !fine;
     this.clock = fine ? () => performance.now() : () => Date.now();
-    this.load = { blocks: 0, total: 0, max: 0, over: 0, since: 0 };
+    this.load = { blocks: 0, total: 0, max: 0, over: 0, since: 0, hist: [0, 0, 0, 0, 0] };
     this.port.onmessage = (e) => this.onMessage(e.data);
 
     const opts = (options && options.processorOptions) || {};
@@ -360,6 +360,18 @@ class CroneProcessor extends AudioWorkletProcessor {
       // Counted, not averaged away: one block over budget is one dropout,
       // and a mean of 12% hides a max of 140%.
       if (ms > budget) L.over++;
+      // E9-197 — THE SHAPE, WHICH IS WHAT A 1 ms CLOCK CAN HONESTLY GIVE.
+      //
+      // A mean hides its tail and `over` is a verdict this clock cannot
+      // reach: a block that truly took 2.1 ms measures 3 about a tenth of
+      // the time and one that truly took 2.8 measures 2 about a fifth. A
+      // HISTOGRAM of the measured millisecond is none of those things —
+      // it is the raw counts, with no claim attached, and from it the
+      // distribution can be read rather than guessed. Five buckets
+      // because the budget is 2.67 ms, so 0-1 is comfortable, 2 is the
+      // edge and 3+ is a block that was probably late.
+      const b = ms < 1 ? 0 : ms < 2 ? 1 : ms < 3 ? 2 : ms < 4 ? 3 : 4;
+      L.hist[b]++;
       // Once a second, so the message rate is nothing next to the work.
       if (L.blocks >= sampleRate / n) {
         this.port.postMessage({
@@ -370,6 +382,7 @@ class CroneProcessor extends AudioWorkletProcessor {
           // one block. See the constructor.
           maxMs: this.coarse ? 0 : L.max,
           over: L.over,
+          hist: L.hist.slice(),
           budgetMs: budget,
           coarse: this.coarse,
         });
@@ -377,6 +390,7 @@ class CroneProcessor extends AudioWorkletProcessor {
         L.total = 0;
         L.max = 0;
         L.over = 0;
+        L.hist = [0, 0, 0, 0, 0];
       }
     }
 

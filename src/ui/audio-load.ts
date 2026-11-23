@@ -45,6 +45,19 @@ export interface AudioLoadWindow {
   /** How many `/status` replies went in. */
   scReads: number;
   /**
+   * The most synths and unit generators scsynth held at once (E9-200).
+   * A load with no count beside it cannot be divided: 30% for two voices
+   * and 30% for thirty are different problems.
+   */
+  scSynthsMax: number;
+  scUgensMax: number;
+  /**
+   * Blocks that measured 0, 1, 2, 3 and 4+ whole milliseconds, summed.
+   * E9-197 — the shape the mean hides, and the only thing a 1 ms clock
+   * can report without a verdict attached.
+   */
+  hist: number[];
+  /**
    * crone timed itself with `Date` rather than `performance.now()`,
    * because Chrome's AudioWorkletGlobalScope has no high-resolution
    * clock (E9-183). The mean survives; the worst block does not.
@@ -63,7 +76,10 @@ export function emptyAudioLoad(): AudioLoadWindow {
     scAvgMax: 0,
     scPeakMax: 0,
     scReads: 0,
+    scSynthsMax: 0,
+    scUgensMax: 0,
     coarse: false,
+    hist: [0, 0, 0, 0, 0],
   };
 }
 
@@ -75,6 +91,7 @@ export interface CroneReport {
   readonly over: number;
   readonly budgetMs: number;
   readonly coarse?: boolean;
+  readonly hist?: readonly number[];
 }
 
 /**
@@ -95,15 +112,28 @@ export function foldCrone(into: AudioLoadWindow, r: CroneReport): boolean {
   // Sticky: one coarse report in a window makes the whole window's worst
   // block untrustworthy, and the qualification has to travel with it.
   if (r.coarse === true) into.coarse = true;
+  if (r.hist !== undefined) {
+    for (let i = 0; i < into.hist.length; i++) {
+      into.hist[i] = (into.hist[i] ?? 0) + Number(r.hist[i] ?? 0);
+    }
+  }
   into.reports++;
   return true;
 }
 
 /** Fold one `/status.reply` from scsynth. */
-export function foldScsynth(into: AudioLoadWindow, avgCpu: number, peakCpu: number): boolean {
+export function foldScsynth(
+  into: AudioLoadWindow,
+  avgCpu: number,
+  peakCpu: number,
+  synths = 0,
+  ugens = 0,
+): boolean {
   if (!Number.isFinite(avgCpu) || !Number.isFinite(peakCpu)) return false;
   into.scAvgMax = Math.max(into.scAvgMax, avgCpu);
   into.scPeakMax = Math.max(into.scPeakMax, peakCpu);
+  if (Number.isFinite(synths)) into.scSynthsMax = Math.max(into.scSynthsMax, synths);
+  if (Number.isFinite(ugens)) into.scUgensMax = Math.max(into.scUgensMax, ugens);
   into.scReads++;
   return true;
 }
@@ -139,16 +169,35 @@ export function describeAudioLoad(w: AudioLoadWindow): string {
     const over = w.coarse
       ? `${w.over} over budget by a 1 ms clock, which misses some and invents others`
       : `${w.over} over budget`;
+    // E9-197 — and the shape, which is the honest half of all this. The
+    // zero bucket is left out of the printed list when it holds nearly
+    // everything, because "2998 blocks under a millisecond" is the
+    // uninteresting part of every healthy reading; what wants reading is
+    // the tail beside it.
+    const h = w.hist;
+    const counted = h.reduce((a, b) => a + b, 0);
+    // WHERE THERE IS A HISTOGRAM, IT REPLACES THE VERDICT. `over` is a
+    // judgement this clock cannot reach; the buckets are the same data
+    // with nothing claimed about it, and printing both made a line
+    // nobody would read to the end.
+    const shape =
+      counted === 0
+        ? over
+        : `blocks at 0/1/2/3/4+ ms: ${h.join("/")}` +
+          (h.slice(1).reduce((a, b) => a + b, 0) === 0 ? " — all under a millisecond" : "");
     parts.push(
       `crone ${mean.toFixed(2)} ms mean, ${worst} ` +
         `of ${w.budgetMs.toFixed(2)} ms a block${share}, ` +
-        `${w.blocks} block(s), ${over}`,
+        `${w.blocks} block(s), ${shape}`,
     );
   }
   parts.push(
     w.scReads === 0
       ? "scsynth has not answered /status"
-      : `scsynth ${w.scAvgMax.toFixed(0)}% avg, ${w.scPeakMax.toFixed(0)}% peak`,
+      : `scsynth ${w.scAvgMax.toFixed(0)}% avg, ${w.scPeakMax.toFixed(0)}% peak` +
+          (w.scSynthsMax > 0 || w.scUgensMax > 0
+            ? `, up to ${w.scSynthsMax} synth(s) and ${w.scUgensMax} ugen(s)`
+            : ""),
   );
   return parts.join(" · ");
 }

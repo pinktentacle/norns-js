@@ -13,6 +13,10 @@
 // IT REDRAWS ON PRESENT, NOT ON A FRAME. `ledLevelMap` arrives only from
 // `refresh()`, so an idle script costs nothing and a 60 fps one costs sixty
 // redraws. There is no animation loop here.
+//
+// AND ONLY A PRESENT THAT CHANGED SOMETHING (E9-199). A script refreshing
+// the picture it already showed is repainted once a second and not at all
+// in between; see `ledLevelMap`.
 
 import { alphaFor, quantise } from "./ramp.js";
 import { drawingRatio } from "../ui/dpr.js";
@@ -32,7 +36,21 @@ export interface GridViewOptions {
   /** How wide the surface currently is — `GridDevice.cols()`, rotation included. */
   readonly cols: () => number;
   readonly rows: () => number;
+  /** Milliseconds, for the repaint that bounds a skipped frame. See `ledLevelMap`. */
+  readonly now?: () => number;
 }
+
+/**
+ * E9-199 — how long an unchanged picture may go without being repainted.
+ *
+ * A present that changes nothing is not drawn (see `ledLevelMap`), and
+ * this is the bound on that: a script that keeps refreshing gets one real
+ * repaint a second whatever its content. It costs a thirtieth of what the
+ * same script cost before, and it means nothing unforeseen — a canvas the
+ * browser emptied without saying so — can leave a refreshing grid wrong
+ * for longer than a second.
+ */
+export const REPAINT_AFTER_MS = 1000;
 
 /** Pads are square, with a gap that scales with them. */
 const GAP_RATIO = 0.12;
@@ -50,6 +68,11 @@ export class GridView implements GridTransport {
   private cell = 0;
   private originX = 0;
   private originY = 0;
+  private readonly clock: () => number;
+  /** When the canvas was last really painted. E9-199. */
+  private paintedAt = -Infinity;
+  private drawnFrames = 0;
+  private skippedFrames = 0;
   /**
    * One handle on every listener this view owns.
    *
@@ -69,7 +92,27 @@ export class GridView implements GridTransport {
     if (ctx === null) throw new Error("grid view: no 2d context");
     this.ctx = ctx;
     this.levels = new Uint8Array(opts.descriptor.rows * opts.descriptor.cols);
+    this.clock = opts.now ?? (() => globalThis.performance?.now() ?? Date.now());
     this.attachPointer();
+    /**
+     * E9-199 — A CANVAS THE BROWSER EMPTIED IS REPAINTED WHEN IT SAYS SO.
+     *
+     * A 2d context can be lost — the GPU process restarting is the usual
+     * reason — and comes back blank. A script that refreshed thirty times
+     * a second used to paint over that without anyone noticing; now that
+     * an unchanged present is skipped, the event is what does it. The
+     * sprites go too: each is its own canvas and may have been lost with
+     * this one.
+     */
+    opts.canvas.addEventListener?.(
+      "contextrestored",
+      () => {
+        this.clearSprites();
+        this.dirty = true;
+        this.flush();
+      },
+      { signal: this.ac.signal },
+    );
     this.layout();
   }
 
@@ -86,13 +129,50 @@ export class GridView implements GridTransport {
   ledLevelMap(xOff: number, yOff: number, levels: Uint8Array): void {
     const w = this.opts.cols();
     const h = this.opts.rows();
+    let changed = false;
     for (let i = 0; i < 64; i++) {
       const x = xOff + (i & 7);
       const y = yOff + (i >> 3);
       if (x >= w || y >= h) continue;
-      this.levels[y * w + x] = levels[i]!;
+      const at = y * w + x;
+      // Compared AFTER the store, so it is the stored byte that decides and
+      // nothing depends on what kind of number the caller passed.
+      const before = this.levels[at];
+      this.levels[at] = levels[i]!;
+      if (this.levels[at] !== before) changed = true;
     }
-    this.draw();
+    /**
+     * E9-199 — A PRESENT THAT CHANGES NOTHING IS NOT DRAWN.
+     *
+     * `GridDevice.refresh()` sends a quad whenever a script TOUCHED it,
+     * not when it changed it, and the idiom is `g:all(0)`, draw,
+     * `g:refresh()` on a timer. Measured over eight seconds at rest:
+     * `n.kria` drew 257 frames and 257 were the frame already on the
+     * canvas; `takt` 227 of 227, `orca` 48 of 48, `foulplay` 88 of 120.
+     * Each was a clear and 128 blits to arrive at the same pixels.
+     *
+     * THIS IS NOT THE PARTIAL REPAINT. E9-163 repainted a region and
+     * shipped broken, and `drawNow` still explains why that is not coming
+     * back. This is all or nothing: either the whole-canvas paint that was
+     * always done, or no paint because it would produce what is there.
+     * What is on the canvas is a function of the levels, the held and
+     * latched keys, the intensity and the layout; every one of the other
+     * four calls `draw()` or `layout()` itself, so the levels were the
+     * only input that could arrive unchanged and still cost a frame.
+     *
+     * BOUNDED BY `REPAINT_AFTER_MS`, so the claim does not have to be
+     * perfect to be safe.
+     */
+    if (changed || this.clock() - this.paintedAt >= REPAINT_AFTER_MS) {
+      this.draw();
+      return;
+    }
+    this.skippedFrames++;
+  }
+
+  /** Presents drawn and presents skipped as identical, since the view was made. */
+  stats(): { drawn: number; skipped: number } {
+    return { drawn: this.drawnFrames, skipped: this.skippedFrames };
   }
 
   ledIntensity(level: number): void {
@@ -299,6 +379,8 @@ export class GridView implements GridTransport {
   flush(): void {
     if (!this.dirty) return;
     this.dirty = false;
+    this.paintedAt = this.clock();
+    this.drawnFrames++;
     timed("draw:grid", () => this.drawNow());
   }
 

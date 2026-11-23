@@ -145,11 +145,69 @@ describe("what a phase says it cost the audio thread", () => {
     expect(describeAudioLoad(w)).toContain("worst block not measurable");
   });
 
+  // E9-197 — the shape, which is the half a 1 ms clock can state without a
+  // verdict. A mean hides its tail and `over` is a judgement this clock
+  // cannot reach; raw counts per millisecond are neither.
+  describe("the histogram", () => {
+    it("sums across reports", () => {
+      const w = emptyAudioLoad();
+      foldCrone(w, report({ hist: [300, 60, 10, 2, 0] }));
+      foldCrone(w, report({ hist: [280, 80, 8, 1, 1] }));
+      expect(w.hist).toEqual([580, 140, 18, 3, 1]);
+    });
+
+    it("prints the buckets, and says so when there is no tail at all", () => {
+      const w = emptyAudioLoad();
+      foldCrone(w, report({ blocks: 375, hist: [375, 0, 0, 0, 0] }));
+      const said = describeAudioLoad(w);
+      expect(said).toContain("blocks at 0/1/2/3/4+ ms: 375/0/0/0/0");
+      expect(said).toContain("all under a millisecond");
+    });
+
+    it("does not claim an absent tail when there is one", () => {
+      const w = emptyAudioLoad();
+      foldCrone(w, report({ blocks: 375, hist: [300, 60, 10, 4, 1] }));
+      const said = describeAudioLoad(w);
+      expect(said).toContain("300/60/10/4/1");
+      expect(said).not.toContain("all under a millisecond");
+    });
+
+    it("says nothing about shape when no report carried one", () => {
+      // An older worklet, or a build before this existed.
+      const w = emptyAudioLoad();
+      foldCrone(w, report({ blocks: 375 }));
+      expect(describeAudioLoad(w)).not.toContain("blocks at 0/1/2");
+    });
+  });
+
   it("one silent instrument does not silence the other", () => {
     const w = emptyAudioLoad();
     foldScsynth(w, 5, 9);
     const said = describeAudioLoad(w);
     expect(said).toContain("crone has not reported");
     expect(said).toContain("scsynth 5% avg, 9% peak");
+  });
+});
+
+// E9-200 — a load with no count beside it cannot be divided. Thirty per
+// cent for two voices and thirty per cent for thirty are different
+// problems, and scsynth was already saying which in every reply.
+describe("how much scsynth was running, beside how hard", () => {
+  it("keeps the most it held at once", () => {
+    const w = emptyAudioLoad();
+    foldScsynth(w, 4, 11, 3, 40);
+    foldScsynth(w, 19, 31, 30, 420);
+    foldScsynth(w, 7, 12, 12, 170);
+    expect(w.scSynthsMax).toBe(30);
+    expect(w.scUgensMax).toBe(420);
+    expect(describeAudioLoad(w)).toContain("scsynth 19% avg, 31% peak, up to 30 synth(s) and 420 ugen(s)");
+  });
+
+  it("says nothing about counts it was never given", () => {
+    const w = emptyAudioLoad();
+    foldScsynth(w, 5, 9);
+    const said = describeAudioLoad(w);
+    expect(said).toContain("scsynth 5% avg, 9% peak");
+    expect(said).not.toContain("synth(s)");
   });
 });

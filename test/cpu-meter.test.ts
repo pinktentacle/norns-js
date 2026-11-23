@@ -212,3 +212,60 @@ describe("one task that held the thread longer than a whole window", () => {
     expect(f.meter.percent, "100 ms late over a 1000 ms window").toBe(10);
   });
 });
+
+// E9-200 — the percentage is one number a second. A profile wants every
+// tick, because a hundred ticks a little late and one tick very late are
+// the same percentage and not the same page.
+describe("each tick, to whoever is watching", () => {
+  it("reports how late every tick was, on time or not", () => {
+    const f = fake();
+    const seen: number[] = [];
+    f.meter.watch((late) => seen.push(late));
+    f.tick(20);
+    f.tick(20);
+    f.tick(65);
+    expect(seen).toEqual([0, 0, 45]);
+  });
+
+  it("never reports a tick as early", () => {
+    const f = fake();
+    const seen: number[] = [];
+    f.meter.watch((late) => seen.push(late));
+    f.tick(12);
+    expect(seen).toEqual([0]);
+  });
+
+  it("says nothing while the window is hidden, where a timer is throttled and not late", () => {
+    let hidden = true;
+    const f = fake({ hidden: () => hidden });
+    const seen: number[] = [];
+    f.meter.watch((late) => seen.push(late));
+    f.tick(1000);
+    expect(seen).toEqual([]);
+    hidden = false;
+    f.tick(20);
+    expect(seen).toEqual([0]);
+  });
+
+  it("stops telling when told to", () => {
+    const f = fake();
+    const seen: number[] = [];
+    f.meter.watch((late) => seen.push(late));
+    f.tick(20);
+    f.meter.watch(null);
+    f.tick(500);
+    expect(seen).toEqual([0]);
+  });
+
+  it("measures exactly as before with somebody watching", () => {
+    const watched = fake();
+    watched.meter.watch(() => {});
+    const alone = fake();
+    for (const f of [watched, alone]) {
+      for (let i = 0; i < 40; i++) f.tick(20);
+      for (let i = 0; i < 5; i++) f.tick(40);
+    }
+    expect(watched.meter.percent).toBe(alone.meter.percent);
+    expect(watched.meter.windows).toBe(alone.meter.windows);
+  });
+});

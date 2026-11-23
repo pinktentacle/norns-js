@@ -380,6 +380,11 @@ export const lualib = {
 };
 
 /** Which interpreter this is, for the about panel and the boot log. */
+/** Bytes of wasm memory the interpreter holds. Zero before it is up. E9-200. */
+export function luaHeapBytes(): number {
+  return M?.HEAPU8.length ?? 0;
+}
+
 export function luaVersion(): string {
   return mod().UTF8ToString(mod()._njs_version());
 }

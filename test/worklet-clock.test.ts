@@ -298,3 +298,68 @@ describe("delivery, with no animation frames", () => {
     c.destroy();
   });
 });
+
+// E9-200 — how long an event took to get here. The worklet stamps each
+// one with the audio time of the block it fired in.
+describe("how late an event reaches the page", () => {
+  const withLate = (seen: Array<[number, number]>, order: string[] = []) =>
+    createWorkletClock({
+      context: h.ctx as unknown as AudioContext,
+      onMetro: () => void order.push("metro"),
+      onClock: () => void order.push("clock"),
+      onLate: (ms, type) => {
+        order.push("late");
+        seen.push([Math.round(ms * 1000) / 1000, type]);
+      },
+    });
+
+  it("is the audio clock now minus the audio clock then", async () => {
+    vi.stubGlobal("crossOriginIsolated", false);
+    const seen: Array<[number, number]> = [];
+    const c = await withLate(seen);
+    // Fired at 100 s; the page gets to it 8 ms of audio later.
+    audioSeconds(0.008);
+    h.port.onmessage?.({ data: { t: "event", type: 1, a: 0, b: 0, c: 100 } });
+    h.port.onmessage?.({ data: { t: "event", type: 2, a: 7, b: 1.5, c: 100.004 } });
+    expect(seen).toEqual([
+      [8, 1],
+      [4, 2],
+    ]);
+    c.destroy();
+  });
+
+  it("is taken before the callback, so it is the delivery and not what Lua did next", async () => {
+    vi.stubGlobal("crossOriginIsolated", false);
+    const order: string[] = [];
+    const c = await withLate([], order);
+    h.port.onmessage?.({ data: { t: "event", type: 1, a: 0, b: 0, c: 100 } });
+    expect(order).toEqual(["late", "metro"]);
+    c.destroy();
+  });
+
+  it("says nothing for an event with no stamp, which is every one from an older worklet", async () => {
+    vi.stubGlobal("crossOriginIsolated", false);
+    const seen: Array<[number, number]> = [];
+    const order: string[] = [];
+    const c = await withLate(seen, order);
+    h.port.onmessage?.({ data: { t: "event", type: 1, a: 0, b: 0 } });
+    h.port.onmessage?.({ data: { t: "event", type: 1, a: 0, b: 0, c: 0 } });
+    expect(seen).toEqual([]);
+    expect(order, "and the tick is still delivered").toEqual(["metro", "metro"]);
+    c.destroy();
+  });
+
+  it("delivers exactly as before when nobody asked", async () => {
+    vi.stubGlobal("crossOriginIsolated", false);
+    const order: string[] = [];
+    const c = await createWorkletClock({
+      context: h.ctx as unknown as AudioContext,
+      onMetro: (i, s) => void order.push(`metro ${i} ${s}`),
+      onClock: (id, beat) => void order.push(`clock ${id} ${beat}`),
+    });
+    h.port.onmessage?.({ data: { t: "event", type: 1, a: 3, b: 9, c: 100 } });
+    h.port.onmessage?.({ data: { t: "event", type: 2, a: 7, b: 1.5, c: 100 } });
+    expect(order).toEqual(["metro 3 9", "clock 7 1.5"]);
+    c.destroy();
+  });
+});

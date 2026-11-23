@@ -15,7 +15,7 @@
 // `grid.key: core/grid.lua:230: no entry for grid 1`.
 
 import { describe, expect, it } from "vitest";
-import { GridView } from "../src/grid/view.js";
+import { GridView, REPAINT_AFTER_MS } from "../src/grid/view.js";
 import { GridDevice, type GridDescriptor } from "../src/grid/device.js";
 
 const desc: GridDescriptor = {
@@ -406,6 +406,9 @@ describe("what one draw covers", () => {
       },
     };
     canvas.getContext = (k: string) => (k === "2d" ? ctx() : null);
+    // A clock the test owns, because one of the things under test is how
+    // long an unchanged picture may go unpainted. E9-199.
+    let at = 0;
     const v = new GridView({
       canvas: canvas as unknown as HTMLCanvasElement,
       descriptor: desc,
@@ -413,6 +416,7 @@ describe("what one draw covers", () => {
       rows: () => 8,
       onKey: () => {},
       frame: () => {},
+      now: () => at,
     });
     return {
       view: v,
@@ -420,6 +424,7 @@ describe("what one draw covers", () => {
       blits: () => blits,
       clears: () => clears,
       sprites: () => made,
+      advance: (ms: number) => void (at += ms),
       reset: () => void ((blits = 0), (clears = 0)),
       present(levels: (i: number) => number) {
         for (const q of [0, 8]) {
@@ -444,15 +449,106 @@ describe("what one draw covers", () => {
     expect(c.blits()).toBe(128);
   });
 
-  // The cheap test that passing it proves nothing: a surface that has
-  // not changed is still repainted, because there is no record of what
-  // was there and deliberately so.
-  it("paints them again for a refresh that changed nothing", () => {
-    const c = counting();
-    c.present(() => 4);
-    c.reset();
-    c.present(() => 4);
-    expect(c.blits()).toBe(128);
+  // E9-199 — this used to assert the opposite: 128 blits for a refresh
+  // that changed nothing, "because there is no record of what was there
+  // and deliberately so". The record it refused was the per-cell one the
+  // partial repaint needed. What is kept now is the levels the view
+  // already held, and the only question asked of them is whether the
+  // whole picture is the one on the canvas.
+  describe("a refresh that changed nothing", () => {
+    it("is not drawn at all", () => {
+      const c = counting();
+      c.present(() => 4);
+      c.reset();
+      c.present(() => 4);
+      expect(c.clears(), "not even the clear").toBe(0);
+      expect(c.blits()).toBe(0);
+      // Both quads of the second present, counted as what they were.
+      expect(c.view.stats().skipped).toBe(2);
+    });
+
+    it("is all or nothing: one changed key repaints all 128", () => {
+      // The partial repaint shipped broken (E9-163, E9-168) and this is
+      // the assertion that it has not come back by another door.
+      const c = counting();
+      c.present(() => 4);
+      c.reset();
+      c.present((i) => (i === 37 ? 9 : 4));
+      expect(c.clears(), "one clear, of the whole surface").toBe(1);
+      expect(c.blits()).toBe(128);
+    });
+
+    it("is repainted anyway once a second has gone by", () => {
+      // The bound that makes the skip safe without having to be perfect:
+      // a canvas emptied behind the view's back is wrong for a second at
+      // most, on any script that keeps refreshing.
+      const c = counting();
+      c.present(() => 4);
+      c.advance(REPAINT_AFTER_MS - 1);
+      c.reset();
+      c.present(() => 4);
+      expect(c.blits(), "still inside the second").toBe(0);
+      c.advance(1);
+      c.present(() => 4);
+      expect(c.clears()).toBe(1);
+      expect(c.blits()).toBe(128);
+      // And the second starts again from that paint.
+      c.reset();
+      c.present(() => 4);
+      expect(c.blits()).toBe(0);
+    });
+
+    it("draws a level that went away and came back inside one frame", () => {
+      // `g:all(0)` then the same picture again is two quads that end
+      // where they started. The first one changed something, so a draw is
+      // owed, and what it paints is whatever is there by then.
+      const c = counting();
+      c.present(() => 4);
+      c.reset();
+      c.view.ledLevelMap(0, 0, new Uint8Array(64).fill(0));
+      c.view.ledLevelMap(0, 0, new Uint8Array(64).fill(4));
+      c.view.flush();
+      expect(c.clears()).toBe(1);
+      expect(c.blits()).toBe(128);
+    });
+
+    it("does not stop the intensity from repainting", () => {
+      const c = counting();
+      c.present(() => 4);
+      c.reset();
+      c.view.ledIntensity(7);
+      c.view.flush();
+      expect(c.blits(), "every sprite is wrong now, so every key is painted").toBe(128);
+    });
+
+    it("does not stop a new layout from repainting", () => {
+      const c = counting();
+      c.present(() => 4);
+      c.reset();
+      c.view.layout();
+      expect(c.blits()).toBe(128);
+    });
+
+    it("repaints, sprites and all, when the browser hands back a lost canvas", () => {
+      const c = counting();
+      c.present(() => 4);
+      const before = c.sprites();
+      c.reset();
+      c.canvas.dispatchEvent(new Event("contextrestored"));
+      expect(c.clears()).toBe(1);
+      expect(c.blits()).toBe(128);
+      // The sprite is its own canvas and may have been lost with this one.
+      expect(c.sprites() - before, "the one appearance in use, made again").toBe(1);
+    });
+
+    it("stops answering a lost canvas once it is disposed", () => {
+      const c = counting();
+      c.present(() => 4);
+      c.view.dispose();
+      c.reset();
+      c.canvas.dispatchEvent(new Event("contextrestored"));
+      expect(c.blits()).toBe(0);
+    });
   });
 
   it("still only builds one sprite per appearance", () => {

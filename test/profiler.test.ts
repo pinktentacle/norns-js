@@ -133,3 +133,89 @@ describe("what the percentages are of", () => {
     expect(hotFrames(trace)).toEqual(summarise(trace).frames);
   });
 });
+
+// E9-200 — a profile is read one phase at a time, and a hot function is
+// only half an answer without the thing that called it.
+describe("one span of a trace, and who was calling", () => {
+  const trace = {
+    resources: ["https://x/main.js"],
+    frames: [
+      { name: "tick", resourceId: 0, line: 1 },
+      { name: "redraw", resourceId: 0, line: 2 },
+      { name: "encode", resourceId: 0, line: 3 },
+      { name: "note", resourceId: 0, line: 4 },
+    ],
+    stacks: [
+      { frameId: 0 },
+      { frameId: 1, parentId: 0 },
+      { frameId: 2, parentId: 1 }, // encode < redraw < tick
+      { frameId: 3, parentId: 0 },
+      { frameId: 2, parentId: 3 }, // encode < note < tick
+    ],
+    samples: [
+      // the first phase: drawing
+      { timestamp: 0, stackId: 2 },
+      { timestamp: 10, stackId: 2 },
+      { timestamp: 20, stackId: 1 },
+      { timestamp: 30 },
+      // the second: notes
+      { timestamp: 100, stackId: 4 },
+      { timestamp: 110, stackId: 4 },
+      { timestamp: 120, stackId: 4 },
+      { timestamp: 130 },
+    ],
+  };
+
+  it("ranks only what fell inside the span", () => {
+    const first = summarise(trace, 12, 0, 100);
+    expect(first.total).toBe(4);
+    expect(first.busy).toBe(3);
+    expect(first.frames.map((f) => f.name)).toEqual(["encode main.js:3", "redraw main.js:2"]);
+    const second = summarise(trace, 12, 100, 200);
+    expect(second.busy).toBe(3);
+    expect(second.frames.map((f) => f.name)).toEqual(["encode main.js:3"]);
+  });
+
+  it("puts the end of a span outside it, so two spans never share a sample", () => {
+    expect(summarise(trace, 12, 0, 100).total + summarise(trace, 12, 100, 200).total).toBe(8);
+    expect(summarise(trace, 12, 0, 110).total).toBe(5);
+  });
+
+  it("says who was calling, which the table of frames cannot", () => {
+    // `encode` is 5 of 6 busy samples over the run. The frames say that
+    // and stop; the stacks say it has two callers and which is which.
+    const whole = summarise(trace, 12, -Infinity, Infinity, 5);
+    expect(whole.frames[0]!.name).toBe("encode main.js:3");
+    expect(whole.stacks.map((s) => s.path)).toEqual([
+      "encode main.js:3 < note main.js:4 < tick main.js:1",
+      "encode main.js:3 < redraw main.js:2 < tick main.js:1",
+      "redraw main.js:2 < tick main.js:1",
+    ]);
+    expect(whole.stacks[0]!.pct).toBeCloseTo(50, 6);
+  });
+
+  it("builds no stacks unless asked, and none for an idle span", () => {
+    expect(summarise(trace).stacks).toEqual([]);
+    expect(summarise(trace, 12, 30, 40, 5).stacks).toEqual([]);
+  });
+});
+
+describe("what else the address can ask for", () => {
+  it("samples every five milliseconds unless told otherwise", () => {
+    expect(profileRequest("?profile=90")?.intervalMs).toBe(5);
+    expect(profileRequest("?profile=90&interval=2")?.intervalMs).toBe(2);
+  });
+
+  it("ignores an interval that is not one", () => {
+    expect(profileRequest("?profile=90&interval=fast")?.intervalMs).toBe(5);
+    expect(profileRequest("?profile=90&interval=0")?.intervalMs).toBe(5);
+    expect(profileRequest("?profile=90&interval=5000")?.intervalMs).toBe(5);
+  });
+
+  it("leaves Lua unsampled unless asked, because sampling it slows it", () => {
+    expect(profileRequest("?profile=90")?.lua).toBe(false);
+    expect(profileRequest("?profile=90&lua")?.lua).toBe(true);
+    expect(profileRequest("?profile=90&lua=1")?.lua).toBe(true);
+    expect(profileRequest("?profile=90&lua=0")?.lua).toBe(false);
+  });
+});

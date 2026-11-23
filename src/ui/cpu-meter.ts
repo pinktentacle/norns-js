@@ -57,6 +57,8 @@ export interface CpuMeter {
    */
   peakSince(): number;
   stop(): void;
+  /** Be told how late each tick was, while the window is visible. E9-200. */
+  watch(fn: ((lateMs: number) => void) | null): void;
 }
 
 export interface CpuMeterOptions {
@@ -119,6 +121,7 @@ export function startCpuMeter(opts: CpuMeterOptions = {}): CpuMeter {
   const hidden = opts.hidden ?? (() => globalThis.document?.hidden === true);
   const every = opts.setInterval ?? ((f, ms) => setInterval(f, ms));
   const cancel = opts.clearInterval ?? ((id) => clearInterval(id as number));
+  let onTick: ((lateMs: number) => void) | null = null;
 
   let last = now();
   let late = 0;
@@ -142,6 +145,11 @@ export function startCpuMeter(opts: CpuMeterOptions = {}): CpuMeter {
     elapsed += gap;
     const over = gap - period - slack;
     if (over > 0) late += over;
+    // E9-200 — every tick, late or not, to whoever is drawing the shape
+    // of it. The percentage above is one number a second; a profile wants
+    // to know whether that was a hundred ticks a little late or one tick
+    // very late, because only the second is a note that arrives wrong.
+    onTick?.(Math.max(0, gap - period));
     /**
      * E9-162 — ONE TASK LONGER THAN A WINDOW IS NOT A SHARE OF ONE.
      *
@@ -197,6 +205,9 @@ export function startCpuMeter(opts: CpuMeterOptions = {}): CpuMeter {
     },
     stop(): void {
       cancel(id);
+    },
+    watch(fn: ((lateMs: number) => void) | null): void {
+      onTick = fn;
     },
   };
 }

@@ -83,6 +83,11 @@ export interface InstallResult {
  */
 export const EXTRAS: SurfaceEntry[] = [
   { name: "profile_mark", symbol: "(norns-js)", line: 0, via: "norns-js", returns: [0] },
+  // E9-200 — and a second, for the same script and the same reason: a
+  // probe that has to ask the PAGE to do something a script cannot, such
+  // as time the SuperCollider interpreter from outside it. Named by a
+  // string so that the next probe is not a third entry here.
+  { name: "profile_probe", symbol: "(norns-js)", line: 0, via: "norns-js", returns: [0] },
 ];
 
 export function installNorns(L: LuaState, registry = new NornsRegistry()): InstallResult {
@@ -93,8 +98,7 @@ export function installNorns(L: LuaState, registry = new NornsRegistry()): Insta
     const { name } = entry;
     const spec = stubFor(name);
 
-    lua.lua_pushcfunction(L, (S: LuaState) => {
-      registry.noteCall(name);
+    const answer = (S: LuaState): number => {
       // A raw implementation works the stack itself, which is the only way to
       // receive a Lua function and keep it (see RawImplementation).
       const raw = registry.rawImplementationFor(name);
@@ -107,6 +111,28 @@ export function installNorns(L: LuaState, registry = new NornsRegistry()): Insta
       }
       registry.noteStub(name, readArgs(S));
       return pushReturns(S, stubReturns(spec));
+    };
+    const slot = registry.slotFor(name);
+
+    lua.lua_pushcfunction(L, (S: LuaState) => {
+      registry.noteCall(name);
+      // E9-200 — one call in eight is timed, and only under `?profile`.
+      // See `NornsRegistry.timing`.
+      // The FIRST of every eight, not the last: a function called three
+      // times in a phase would otherwise never be timed at all, and a cost
+      // nobody measured prints as a cost of nothing.
+      if (registry.timing && (++slot.calls & 7) === 1) {
+        const t0 = performance.now();
+        try {
+          return answer(S);
+        } finally {
+          const took = performance.now() - t0;
+          slot.timed++;
+          slot.ms += took;
+          if (took > slot.max) slot.max = took;
+        }
+      }
+      return answer(S);
     });
     lua.lua_setfield(L, -2, to_luastring(name));
     installed.push(name);

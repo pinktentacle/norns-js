@@ -228,6 +228,11 @@ end
     L,
     `
 _NORNS_GC_CALLS = 0
+-- E9-200: the interpreter's own collector, kept reachable for ONE question,
+-- how big the heap is, which a profile asks and nothing else may. The
+-- stand-in below still answers every script exactly as it did.
+local njs_real_gc = collectgarbage
+_norns_js_heap_kb = function() return (njs_real_gc('count')) end
 collectgarbage = function(opt, arg)
   _NORNS_GC_CALLS = _NORNS_GC_CALLS + 1
   opt = opt or 'collect'

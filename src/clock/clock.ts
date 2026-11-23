@@ -35,6 +35,19 @@ export interface ClockEvents {
    * skipped forty steps should say so.
    */
   onBacklog?(dropped: number, gapMs: number): void;
+  /**
+   * How long a metro tick or a clock resume took to get here (E9-200).
+   *
+   * The worklet stamps each event with the audio time of the block it
+   * fired in, and this is `ctx.currentTime` minus that when it is about
+   * to be handed to Lua. It moves in steps of one block, so it is a
+   * count of blocks that went by rather than a fine delay — which is
+   * the right unit: a sequencer step delivered two blocks late is heard
+   * as five milliseconds of swing nobody asked for.
+   *
+   * Only called when given, and only `?profile` gives it.
+   */
+  onLate?(ms: number, type: number): void;
 }
 
 export interface Clock {
@@ -121,7 +134,12 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
   const beatNow = (): number =>
     beatAtStart + ((ctx.currentTime - startedAt) * state.tempo) / 60;
 
-  const dispatch = (type: number, a: number, b: number): void => {
+  const dispatch = (type: number, a: number, b: number, firedAt = 0): void => {
+    // E9-200 — BEFORE the callback, so what is measured is the delivery
+    // and not the delivery plus whatever Lua then did with it.
+    if (firedAt > 0 && opts.onLate !== undefined && type !== EV_STALL) {
+      opts.onLate((ctx.currentTime - firedAt) * 1000, type);
+    }
     if (type === EV_METRO) opts.onMetro(a, b);
     // The beat carried by EV_CLOCK is the beat the event was SCHEDULED
     // for, which is behind `ctx.currentTime` by however long delivery
@@ -163,7 +181,7 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
   const now = (): number =>
     typeof performance !== "undefined" ? performance.now() : Date.now();
   let lastDrainAt = now();
-  const batch: Array<[number, number, number]> = [];
+  const batch: Array<[number, number, number, number]> = [];
 
   const drain = (): void => {
     if (!ring) return;
@@ -171,11 +189,11 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
     const gap = at - lastDrainAt;
     lastDrainAt = at;
     if (gap <= STALL_MS) {
-      ringDrain(ring, (t, a, b) => dispatch(t, a, b));
+      ringDrain(ring, (t, a, b, c) => dispatch(t, a, b, c));
       return;
     }
     batch.length = 0;
-    ringDrain(ring, (t, a, b) => void batch.push([t, a, b]));
+    ringDrain(ring, (t, a, b, c) => void batch.push([t, a, b, c]));
     // Where each metro index last appears, so everything before it is
     // known to be superseded before anything is delivered.
     const lastOf = new Map<number, number>();
@@ -190,18 +208,18 @@ export async function createWorkletClock(opts: WorkletClockOptions): Promise<Clo
         dropped++;
         continue;
       }
-      dispatch(ev[0], ev[1], ev[2]);
+      dispatch(ev[0], ev[1], ev[2], ev[3]);
     }
     batch.length = 0;
     if (dropped > 0) opts.onBacklog?.(dropped, gap);
   };
 
   node.port.onmessage = (e: MessageEvent) => {
-    const m = e.data as { t: string; type?: number; a?: number; b?: number; beat?: number; tempo?: number };
+    const m = e.data as { t: string; type?: number; a?: number; b?: number; c?: number; beat?: number; tempo?: number };
     // A wake, because requestAnimationFrame does not run in a hidden or
     // unfocused tab and the audio thread does not stop with it.
     if (m.t === "wake") drain();
-    else if (m.t === "event") dispatch(m.type!, m.a!, m.b!);
+    else if (m.t === "event") dispatch(m.type!, m.a!, m.b!, m.c ?? 0);
     else if (m.t === "state") {
       // The worklet's own answer to a tempo or transport message this
       // side just sent, so it RE-ANCHORS the mirror rather than being
