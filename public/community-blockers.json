@@ -21,6 +21,9 @@
   "makebreakbeat": [
    "sox, from a GitHub release the browser may not fetch"
   ],
+  "moonraker": [
+   "its samples are a 95 MB GitHub release its README has you download by hand — download moonraker.zip and add it in SETTINGS > FILES > add samples"
+  ],
   "norns.online": [
    "norns.online, from a GitHub release the browser may not fetch"
   ],

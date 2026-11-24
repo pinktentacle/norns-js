@@ -29,6 +29,7 @@
 //              drawn, not when each scrolls into view.
 
 import type { CatalogEntry } from "../community/catalog.js";
+import { OWN_TAG } from "../community/own-scripts.js";
 import type { CoverStore } from "../community/covers.js";
 import type { MetaStore, ScriptMeta } from "../community/meta.js";
 import { standing, type Standing } from "../community/verdicts.js";
@@ -66,6 +67,11 @@ export interface ScriptsStoreOptions {
   readonly meta?: MetaStore;
   /** False to fetch only the pictures that are looked at. */
   readonly ahead?: () => boolean;
+  /**
+   * E9-211 — put a sample pack the person downloaded into `~/dust/audio`.
+   * Resolves true when something was written.
+   */
+  readonly addSamples?: (bytes: Uint8Array, name: string) => Promise<boolean>;
 }
 
 export interface ScriptsStore {
@@ -499,6 +505,23 @@ export function createScriptsStore(opts: ScriptsStoreOptions): ScriptsStore {
       page.append(section);
     };
 
+    // E9-213 — the scripts made for norns-js, first: they are on no chart,
+    // having no stars to rank by, and nowhere else would they be found.
+    const own = all.filter((e) => e.tags.includes(OWN_TAG));
+    if (own.length > 0) {
+      shelf(
+        "made for norns-js",
+        "see all",
+        () => {
+          tags = [OWN_TAG];
+          match = "all";
+          go("browse");
+        },
+        own,
+        "name",
+      );
+    }
+
     // What everybody has, what has just arrived, what is being worked on.
     for (const c of front.charts) {
       shelf(
@@ -834,6 +857,7 @@ export function createScriptsStore(opts: ScriptsStoreOptions): ScriptsStore {
       if (st.verdict === "note") {
         box.append(note("some of these stop a script starting; some only take a part of it away.", "st-d-small"));
       }
+      if (st.samples !== null && opts.addSamples !== undefined) box.append(samplesSteps(name, st.samples));
       parts.push(box);
     }
 
@@ -846,13 +870,71 @@ export function createScriptsStore(opts: ScriptsStoreOptions): ScriptsStore {
     }
 
     const links = h("div", "st-d-links");
-    for (const l of [link("documentation", e.documentation), link("discussion", e.discussion), link("source", e.url)]) {
+    // E9-213 — one of the scripts made for norns-js has no repository yet:
+    // its folder on this page has no index, so the link is its README.
+    const own = e.tags.includes(OWN_TAG);
+    for (const l of [
+      link("documentation", e.documentation),
+      link("discussion", e.discussion),
+      own ? link("readme", `${e.url.replace(/\/*$/, "/")}README.md`) : link("source", e.url),
+    ]) {
       if (l !== null) links.append(l);
     }
     if (links.childElementCount > 0) parts.push(links);
 
     detail.append(...parts);
     detail.scrollTop = 0;
+  };
+
+  /**
+   * E9-211 — the two things a person does that a page may not: download the
+   * pack from where its README says, and hand it over. The second is the
+   * `unzip` into `~/dust/audio`; when it lands, the script has what it
+   * needs, and its band and this box go.
+   */
+  const samplesSteps = (name: string, s: NonNullable<Standing["samples"]>): HTMLElement => {
+    const box = h("div", "st-samples");
+    // Decimal, as the note and a download manager say it.
+    const mb = s.bytes > 0 ? `${Math.round(s.bytes / 1e6)} MB` : "";
+    const one = h("div", "st-step");
+    one.append(h("span", "st-step-n", "1"));
+    const dl = h("a", "st-out", `download ${s.file}`, { href: s.url, target: "_blank", rel: "noopener noreferrer" });
+    dl.insertAdjacentHTML("beforeend", ICON.out);
+    one.append(dl, h("span", "st-d-small", mb === "" ? "from the author's release" : `${mb}, from the author's release`));
+    const two = h("div", "st-step");
+    two.append(h("span", "st-step-n", "2"));
+    const add = h("button", "st-act", undefined, { type: "button", "data-act": "get" });
+    const label = h("span", "st-act-label", "add it here");
+    add.append(label);
+    const picker = h("input", "", undefined, { type: "file", accept: ".zip,application/zip", hidden: true });
+    add.addEventListener("click", () => picker.click(), { signal });
+    picker.addEventListener(
+      "change",
+      () => {
+        const file = picker.files?.[0];
+        if (file === undefined) return;
+        add.disabled = true;
+        label.textContent = "adding…";
+        void (async () => {
+          let ok = false;
+          try {
+            ok = (await opts.addSamples?.(new Uint8Array(await file.arrayBuffer()), file.name)) === true;
+          } finally {
+            picker.value = "";
+            add.disabled = false;
+            label.textContent = ok ? "added" : "add it here";
+          }
+          if (ok && selected === name) {
+            draw();
+            drawDetail();
+          }
+        })();
+      },
+      { signal },
+    );
+    two.append(add, picker, h("span", "st-d-small", "it goes into ~/dust/audio, where its README unzips it"));
+    box.append(one, two);
+    return box;
   };
 
   // --- keeping up ----------------------------------------------------------

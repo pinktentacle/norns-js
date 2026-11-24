@@ -48,6 +48,12 @@ export interface CoverStore {
 export interface CoverStoreOptions {
   /** Where the pictures are. No trailing slash. */
   readonly base?: string;
+  /**
+   * E9-213 — where one name's picture is, when it is not on norns.community:
+   * the scripts made for norns-js carry theirs (see `own-scripts.ts`).
+   * Null means "ask norns.community as usual".
+   */
+  readonly addressOf?: (name: string) => string | null;
   readonly fetch?: (url: string, init: RequestInit) => Promise<Response>;
   /** Cache Storage, or null to do without. */
   readonly caches?: Pick<CacheStorage, "open"> | null;
@@ -154,7 +160,7 @@ export function createCoverStore(opts: CoverStoreOptions = {}): CoverStore {
   };
 
   const read = async (name: string, ticket: Ticket): Promise<string | null> => {
-    const address = coverAddress(name, base);
+    const address = opts.addressOf?.(name) ?? coverAddress(name, base);
     const store = await opened();
     try {
       const kept = await store?.match(address);

@@ -131,6 +131,8 @@ export interface SettingsPanelOptions {
     restore(bytes: Uint8Array, name: string): Promise<void>;
     /** Add ONE script: the wrapper folder stripped, rehomed under `code/`. */
     addScript(bytes: Uint8Array, name: string): Promise<void>;
+    /** E9-211 — a sample pack: the zip's own paths, under `~/dust/audio`. */
+    addSamples?(bytes: Uint8Array, name: string): Promise<void>;
     /** The same, from a URL. */
     addScriptFromUrl(url: string): Promise<void>;
     /**
@@ -655,6 +657,25 @@ export function createSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
       el("p", "sp-hint", "most sites refuse this. if it fails, download the zip and use the button above."),
     );
     filesPane.append(add);
+
+    // --- add samples (E9-211)
+    if (f.addSamples !== undefined) {
+      const addSamples = f.addSamples;
+      const samples = el("section", "sp-section");
+      samples.append(el("h2", undefined, "add samples"));
+      const row5 = el("div", "sp-row");
+      const samplesBtn = el("button", "sp-toggle", "from a zip…");
+      row5.append(samplesBtn, chooser(samplesBtn, (b, n) => addSamples(b, n)));
+      samples.append(row5);
+      samples.append(
+        el(
+          "p",
+          "sp-hint",
+          "a sample pack a script tells you to unzip in ~/dust/audio — moonraker's, for example. it goes there, folders and all.",
+        ),
+      );
+      filesPane.append(samples);
+    }
 
     expBtn.addEventListener("click", () => void busy(expBtn, "…", () => f.export(false)), { signal });
     expAllBtn.addEventListener("click", () => void busy(expAllBtn, "…", () => f.export(true)), { signal });

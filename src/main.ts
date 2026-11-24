@@ -61,7 +61,8 @@ import { createSettingsPanel } from "./ui/settings-panel.js";
 import { createMaidenPanel } from "./ui/maiden-panel.js";
 import { createVfsStore } from "./editor/store.js";
 import { createRunner } from "./editor/runner.js";
-import { installFromRepo, parseRepoUrl } from "./community/install.js";
+import { installFromRepo, ownRepo, parseRepoUrl } from "./community/install.js";
+import { createOwnScripts, isOwnUrl, ownBase, ownCover, ownName, withOwn } from "./community/own-scripts.js";
 import { CATALOGS_DIR, fetchAndStoreCatalogs } from "./community/maiden-catalogs.js";
 import { needsOf } from "./community/needs.js";
 import { installStudyEngine, studyEngineOf } from "./community/study-engines.js";
@@ -72,7 +73,8 @@ import {
   readMissingInclude,
 } from "./community/missing-include.js";
 import { declareExtensions } from "./community/extensions.js";
-import { exportTree, fetchArchive, importTree, installScript } from "./fs/transfer.js";
+import { exportTree, fetchArchive, importSamples, importTree, installScript } from "./fs/transfer.js";
+import { satisfied as satisfiedHere } from "./community/verdicts.js";
 import { makeCallbacks } from "./norns/callbacks.js";
 import { loadDustWeb } from "./fs/dust-web.js";
 import { registerFs } from "./fs/register.js";
@@ -3363,6 +3365,29 @@ async function main(): Promise<void> {
   // instead, and closes the rest from inside.
   const gearPanel = $("#settings") as HTMLElement;
   const gearToken = railPanel(() => gearPanel.hidden === false, () => gear.close());
+  /**
+   * E9-211 — a sample pack, downloaded by hand, put where its README unzips
+   * it. Said in the log the way a restore is; true when anything landed.
+   */
+  const addSamplesFrom = async (bytes: Uint8Array, name: string): Promise<boolean> => {
+    try {
+      const r = await importSamples(vfs, bytes);
+      const mb = (r.bytes / 1048576).toFixed(1);
+      log(
+        r.written === 0
+          ? `samples: ${name} had nothing in it to add`
+          : `samples: ${name} — ${r.written} files, ${mb} MB, in ~/dust/audio/${r.folders.join(", ~/dust/audio/")}`,
+      );
+      for (const x of r.refused) log(`samples: refused ${x.path} (${x.why})`);
+      return r.written > 0;
+    } catch (err) {
+      log(`samples: ${name} could not be read — ${String((err as Error)?.message ?? err)}`);
+      return false;
+    }
+  };
+  /** A folder under `~/dust` with at least one file in it. */
+  const filledUnderDust = (path: string): boolean => vfs.walk(`/home/we/dust/${path}`).length > 0;
+
   const gear = createSettingsPanel({
     button: $("#gear"),
     panel: gearPanel,
@@ -3423,6 +3448,7 @@ async function main(): Promise<void> {
       // from GitHub carries is stripped, which is the whole difference
       // from restore — and the reason the old advice to "use import"
       // produced a script outside code/ that SELECT never found.
+      addSamples: async (bytes, name) => void (await addSamplesFrom(bytes, name)),
       addScript: async (bytes, name) => {
         try {
           const r = await installScript(vfs, bytes);
@@ -3637,6 +3663,13 @@ async function main(): Promise<void> {
    */
   let liveEngines: () => readonly string[] = () => [];
   const maidenButton = $("#maiden");
+  // E9-213 — the scripts made for norns-js, served by this page from
+  // `own-scripts/`. Asked for now, so the store has them the first time it
+  // opens; see `own-scripts.ts`.
+  const OWN_BASE = ownBase(document.baseURI);
+  const ownScripts = createOwnScripts({ base: OWN_BASE, log });
+  void ownScripts.load();
+
   const maiden = createMaidenPanel({
     host: $("#maidenpanel") as HTMLElement,
     // The restart the session has earned, asked about on the way OUT of
@@ -3678,12 +3711,19 @@ async function main(): Promise<void> {
       // leaves what a refresh leaves: `~/dust/data/catalogs/base.json`
       // and `community.json`, which is where `folio` reads the library
       // from. The community catalogue is fetched once and used twice.
-      catalog: () => fetchAndStoreCatalogs(vfs, { log }),
+      // E9-213 — with the scripts made for norns-js added, for the store
+      // only: what lands in `~/dust/data/catalogs` is maiden's, unchanged.
+      catalog: async () => {
+        const [c, own] = await Promise.all([fetchAndStoreCatalogs(vfs, { log }), ownScripts.load()]);
+        return withOwn(c, own);
+      },
       // E9-209 — and what that left on disk the last time, which is what
       // the script store opens on while the network is being asked.
+      // E9-211 — a note the table carries goes once what it asked for is here.
+      satisfied: (name) => satisfiedHere(name, filledUnderDust),
       catalogKept: () => {
         const text = vfs.readText(`${CATALOGS_DIR}/community.json`);
-        return text === null ? null : parseCatalog(JSON.parse(text));
+        return text === null ? null : withOwn(parseCatalog(JSON.parse(text)), ownScripts.last());
       },
       // E9-56 — a FOLDER is not a script. This listed every directory
       // under `~/dust/code`, and an empty one is a directory: 281 of the
@@ -3714,7 +3754,10 @@ async function main(): Promise<void> {
           log(`maiden: the ${study.engine} engine is from ${study.read} — ${study.credit}`);
           return r;
         }
-        const repo = parseRepoUrl(entry.url);
+        // E9-213 — one of the scripts made for norns-js, from this page.
+        const repo = isOwnUrl(entry.url, OWN_BASE)
+          ? ownRepo(ownName(entry.url, OWN_BASE), entry.url)
+          : parseRepoUrl(entry.url);
         if (!repo) throw new Error("that entry does not point at a GitHub repository");
         return installFromRepo(vfs, repo, {
           name: entry.name.toLowerCase(),
@@ -3787,12 +3830,19 @@ async function main(): Promise<void> {
       : createScriptsStore({
           host: $("#scriptspanel") as HTMLElement,
           library: maiden.library,
-          covers: createCoverStore(),
+          // E9-213 — the scripts made for norns-js bring their own pictures.
+          covers: createCoverStore({
+            addressOf: (name) => {
+              const e = ownScripts.last().find((x) => x.name === name);
+              return e === undefined ? null : ownCover(e.url);
+            },
+          }),
           // E9-209 — stars and dates, for "popular" and "new", and the
           // pictures fetched before they are scrolled to. Both are things
           // somebody who asked their browser to spend less did not ask for.
           meta: createMetaStore({ log, saveData: spendLess }),
           ahead: () => !spendLess(),
+          addSamples: addSamplesFrom,
           run: (name) => {
             const file = mainScript(name, scriptsIn(vfs));
             if (file === null) {

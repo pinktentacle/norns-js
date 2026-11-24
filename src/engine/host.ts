@@ -8,6 +8,7 @@ import { timed } from "../norns/call-cost.js";
 import { decode, encodeMessage } from "./osc.js";
 import { routeLangPacket } from "./lang-route.js";
 import { loadClassLibrary } from "./classlib-loader.js";
+import { serialiseSend } from "./reentry.js";
 
 /** What an OSC argument can be: int32, float32 or string, plus blobs. */
 export type OscArg = number | string | Uint8Array;
@@ -75,6 +76,8 @@ export interface EngineHost {
      */
     oscRead: number;
     oscRelayed: number;
+    /** E9-212 — server sends that waited for another to return. */
+    readonly serverSendsDeferred: number;
   };
   /**
    * What the SERVER says its own load is, from `/status.reply`. E9-112.
@@ -333,6 +336,10 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   // compiled in, and was already producing an intermittent
   // `Uncaught <address>` from the worklet thread before that.
   const scsynth: ScModule = await ScSynth({ locateFile: (p: string) => `${scsynthUrl}/${p}` });
+  // E9-212 — before anything can send. A second `sendOsc` started while
+  // one is inside the server deadlocks the main thread; see reentry.ts.
+  const serverSend = serialiseSend<Uint8Array>(scsynth.sendOsc.bind(scsynth));
+  scsynth.sendOsc = serverSend;
 
   // E9-30 — STK's wavetables, into the SERVER's filesystem.
   //
@@ -557,6 +564,10 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     },
     get oscRelayed() {
       return oscIn.relayed;
+    },
+    /** E9-212 — sends that arrived inside another send and waited for it. */
+    get serverSendsDeferred() {
+      return serverSend.deferred;
     },
     timeouts: 0,
     timedOutDefs: 0,

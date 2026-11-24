@@ -9,10 +9,12 @@ import { Vfs } from "../src/fs/vfs.js";
 import {
   commonPrefix,
   exportTree,
+  importSamples,
   importTree,
   installScript,
   safeJoin,
 } from "../src/fs/transfer.js";
+import { samplesFor, satisfied, standing } from "../src/community/verdicts.js";
 import { zip } from "../src/fs/zip.js";
 
 const text = (s: string): Uint8Array => new TextEncoder().encode(s);
@@ -208,5 +210,60 @@ describe("installing a script's archive", () => {
     expect(commonPrefix(["a/x", "b/y"])).toBe("");
     expect(commonPrefix(["x"])).toBe("");
     expect(commonPrefix([])).toBe("");
+  });
+});
+
+// E9-211 — moonraker was silent on the phone: its eight banks are a sample
+// pack its README has you `unzip` in ~/dust/audio, from a release a page
+// may not fetch. The person downloads it; this is the unzip.
+describe("a sample pack, added by hand", () => {
+  // The real pack's names, as its central directory gives them: a double
+  // slash after the folder, 960 WAVs in eight numbered folders.
+  const pack = async (): Promise<Uint8Array> =>
+    zip([
+      { path: "moonraker/", bytes: new Uint8Array(0) },
+      { path: "moonraker//1/001_moonraker.wav", bytes: text("RIFF-one") },
+      { path: "moonraker//8/112_moonraker.wav", bytes: text("RIFF-two") },
+      { path: "__MACOSX/moonraker/._001_moonraker.wav", bytes: text("resource fork") },
+      { path: "moonraker/.DS_Store", bytes: text("finder") },
+      { path: "../escape.wav", bytes: text("no") },
+    ]);
+
+  it("lands where the README unzips it, folders and all", async () => {
+    const vfs = new Vfs();
+    const r = await importSamples(vfs, await pack());
+    expect(r.written).toBe(2);
+    expect(r.folders).toEqual(["moonraker"]);
+    expect(r.bytes).toBe(16);
+    expect(vfs.readText("/home/we/dust/audio/moonraker/1/001_moonraker.wav")).toBe("RIFF-one");
+    expect(vfs.readText("/home/we/dust/audio/moonraker/8/112_moonraker.wav")).toBe("RIFF-two");
+    // The folder the script scans has exactly what it should.
+    expect(vfs.list("/home/we/dust/audio/moonraker/1").map((e) => e.name)).toEqual(["001_moonraker.wav"]);
+  });
+
+  it("leaves out what a Mac adds, and refuses a path that climbs out", async () => {
+    const vfs = new Vfs();
+    const r = await importSamples(vfs, await pack());
+    expect(vfs.exists("/home/we/dust/audio/__MACOSX/moonraker/._001_moonraker.wav")).toBe(false);
+    expect(vfs.exists("/home/we/dust/audio/moonraker/.DS_Store")).toBe(false);
+    expect(r.refused.map((x) => x.path)).toEqual(["../escape.wav"]);
+    expect(vfs.exists("/home/we/dust/escape.wav")).toBe(false);
+  });
+
+  it("is what moonraker's standing waits for, and nothing else", async () => {
+    const notes = ["its samples are a 95 MB GitHub release"];
+    const vfs = new Vfs();
+    const has = (path: string): boolean => vfs.walk(`/home/we/dust/${path}`).length > 0;
+    const before = standing("moonraker", notes, has)!;
+    expect([before.verdict, before.label, before.veiled]).toEqual(["needs", "needs its samples", false]);
+    expect(before.samples).toEqual(samplesFor("moonraker"));
+    expect(before.samples?.url).toBe("https://github.com/schollz/moonraker/releases/download/samplepack1/moonraker.zip");
+    expect(satisfied("moonraker", has)).toBe(false);
+    await importSamples(vfs, await pack());
+    expect(satisfied("moonraker", has)).toBe(true);
+    expect(standing("moonraker", notes, has)).toBeNull();
+    // A script with no pack to bring is not put right by any folder.
+    expect(satisfied("tulpamancer", () => true)).toBe(false);
+    expect(standing("tulpamancer", ["reads nyse.com"], () => true)?.verdict).toBe("no");
   });
 });

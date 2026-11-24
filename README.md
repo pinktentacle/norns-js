@@ -21,6 +21,10 @@ from their authors' own repositories.
 **<https://norns-js.pages.dev/>** — nothing to install. Open it, press **+**,
 pick a script.
 
+The store also has a shelf of scripts **made for norns-js** — no12, poche,
+remous, nianfo and rainforest — served by the page itself until they are on
+norns.community.
+
 It needs a recent **Chromium** browser (Chrome, Edge, Brave, Arc) or
 **Firefox**, where it has been tried and works. Every number in this
 repository was measured on Chromium, so treat the measurements as Chromium's

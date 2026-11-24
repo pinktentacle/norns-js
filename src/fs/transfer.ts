@@ -190,6 +190,47 @@ export async function installScript(
 }
 
 /**
+ * E9-211 — a sample pack, put where its script's instructions put it.
+ *
+ * Some scripts are silent until a pack of samples is in `~/dust/audio`,
+ * and on a norns that is a line their README has you paste into maiden:
+ * `cd ~/dust/audio && wget …/moonraker.zip && unzip moonraker.zip`. The
+ * pack is a GitHub release, which a page may not fetch — but a person can
+ * download it like any file, and this is the `unzip` half: the archive's
+ * own paths, under `audio/`. Nothing is stripped, because these archives
+ * already carry the folder the script looks in (`moonraker/1/…`).
+ *
+ * What a Mac adds to a zip it made is left out; it is never a sample.
+ */
+export async function importSamples(
+  vfs: Vfs,
+  archive: Uint8Array,
+  opts: { root?: string } = {},
+): Promise<ImportResult & { folders: string[]; bytes: number }> {
+  const root = `${opts.root ?? DUST}/audio`;
+  const refused: Array<{ path: string; why: string }> = [];
+  const folders = new Set<string>();
+  let written = 0;
+  let bytes = 0;
+  for (const entry of await unzip(archive)) {
+    const parts = entry.path.replace(/\\/g, "/").split("/").filter((s) => s !== "");
+    if (parts.length === 0 || parts[0] === "__MACOSX" || parts[parts.length - 1] === ".DS_Store") continue;
+    const target = safeJoin(root, entry.path);
+    if (target === null) {
+      refused.push({ path: entry.path, why: "the path leaves the tree" });
+      continue;
+    }
+    const dir = target.slice(0, target.lastIndexOf("/"));
+    if (dir) vfs.mkdir(dir);
+    vfs.write(target, entry.bytes);
+    written++;
+    bytes += entry.bytes.length;
+    folders.add(target.slice(root.length + 1).split("/")[0]!);
+  }
+  return { written, refused, folders: [...folders].sort(), bytes };
+}
+
+/**
  * Fetch an archive, and say plainly when the web will not let us.
  *
  * MOST URLS WILL FAIL, and the reason is not a bug to be fixed here: a page

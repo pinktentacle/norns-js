@@ -1,0 +1,56 @@
+{
+  "what": "The scripts made for norns-js that the script store offers before they are on norns.community (E9-213). tools/build-own-scripts.mjs copies each from norns-scripts/<name>/ into public/own-scripts/<name>/ and writes the index the store reads. When one is published in the catalogue, take it out of this list: the catalogue's entry wins anyway.",
+  "author": "pinktentacle",
+  "scripts": [
+    {
+      "name": "no12",
+      "description": "a pocket operator rhythm machine: sixteen sounds, patterns, and the PO-12's effects",
+      "tags": [
+        "drums",
+        "sequencer",
+        "sampler"
+      ],
+      "cover": "screenshots/playing.png"
+    },
+    {
+      "name": "poche",
+      "description": "a drum machine for your pocket: sixteen synthesised sounds, sixteen steps, effects you punch in",
+      "tags": [
+        "drums",
+        "sequencer",
+        "synth"
+      ],
+      "cover": "screenshots/playing.png"
+    },
+    {
+      "name": "remous",
+      "description": "three pools of small creatures that make music as you play with them",
+      "tags": [
+        "generative",
+        "toy",
+        "grid"
+      ],
+      "cover": "screenshots/stones.png"
+    },
+    {
+      "name": "nianfo",
+      "description": "a wall of loop players inspired by the Buddha Machine: editions, pitch, effects",
+      "tags": [
+        "ambient",
+        "loops",
+        "drone"
+      ],
+      "cover": "screenshots/wall.png"
+    },
+    {
+      "name": "rainforest",
+      "description": "a rainforest, alive: rain, birds, monkeys, frogs and storms, with the forest on screen",
+      "tags": [
+        "ambient",
+        "generative",
+        "field recording"
+      ],
+      "cover": "screenshots/dawn.png"
+    }
+  ]
+}

@@ -1,0 +1,652 @@
+{
+ "files": [
+  {
+   "path": "LICENSE",
+   "size": 1236
+  },
+  {
+   "path": "README.md",
+   "size": 2275
+  },
+  {
+   "path": "img/cloud_afternoon.png",
+   "size": 885
+  },
+  {
+   "path": "img/cloud_dawn.png",
+   "size": 938
+  },
+  {
+   "path": "img/cloud_day.png",
+   "size": 863
+  },
+  {
+   "path": "img/cloud_dusk.png",
+   "size": 926
+  },
+  {
+   "path": "img/cloud_evening.png",
+   "size": 884
+  },
+  {
+   "path": "img/cloud_morning.png",
+   "size": 874
+  },
+  {
+   "path": "img/cloud_night.png",
+   "size": 823
+  },
+  {
+   "path": "img/cloud_predawn.png",
+   "size": 881
+  },
+  {
+   "path": "img/far_afternoon.png",
+   "size": 639
+  },
+  {
+   "path": "img/far_dawn.png",
+   "size": 588
+  },
+  {
+   "path": "img/far_day.png",
+   "size": 650
+  },
+  {
+   "path": "img/far_dusk.png",
+   "size": 604
+  },
+  {
+   "path": "img/far_evening.png",
+   "size": 561
+  },
+  {
+   "path": "img/far_morning.png",
+   "size": 647
+  },
+  {
+   "path": "img/far_night.png",
+   "size": 529
+  },
+  {
+   "path": "img/far_predawn.png",
+   "size": 593
+  },
+  {
+   "path": "img/mid_afternoon.png",
+   "size": 1894
+  },
+  {
+   "path": "img/mid_dawn.png",
+   "size": 1647
+  },
+  {
+   "path": "img/mid_day.png",
+   "size": 1910
+  },
+  {
+   "path": "img/mid_dusk.png",
+   "size": 1614
+  },
+  {
+   "path": "img/mid_evening.png",
+   "size": 1444
+  },
+  {
+   "path": "img/mid_morning.png",
+   "size": 1819
+  },
+  {
+   "path": "img/mid_night.png",
+   "size": 1441
+  },
+  {
+   "path": "img/mid_predawn.png",
+   "size": 1495
+  },
+  {
+   "path": "img/mist_afternoon.png",
+   "size": 196
+  },
+  {
+   "path": "img/mist_dawn.png",
+   "size": 196
+  },
+  {
+   "path": "img/mist_day.png",
+   "size": 196
+  },
+  {
+   "path": "img/mist_dusk.png",
+   "size": 196
+  },
+  {
+   "path": "img/mist_evening.png",
+   "size": 196
+  },
+  {
+   "path": "img/mist_morning.png",
+   "size": 196
+  },
+  {
+   "path": "img/mist_night.png",
+   "size": 196
+  },
+  {
+   "path": "img/mist_predawn.png",
+   "size": 196
+  },
+  {
+   "path": "img/near_afternoon.png",
+   "size": 1571
+  },
+  {
+   "path": "img/near_dawn.png",
+   "size": 1436
+  },
+  {
+   "path": "img/near_day.png",
+   "size": 1598
+  },
+  {
+   "path": "img/near_dusk.png",
+   "size": 1455
+  },
+  {
+   "path": "img/near_evening.png",
+   "size": 1358
+  },
+  {
+   "path": "img/near_morning.png",
+   "size": 1534
+  },
+  {
+   "path": "img/near_night.png",
+   "size": 1368
+  },
+  {
+   "path": "img/near_predawn.png",
+   "size": 1361
+  },
+  {
+   "path": "img/rays.png",
+   "size": 330
+  },
+  {
+   "path": "img/sky_afternoon.png",
+   "size": 240
+  },
+  {
+   "path": "img/sky_dawn.png",
+   "size": 259
+  },
+  {
+   "path": "img/sky_day.png",
+   "size": 226
+  },
+  {
+   "path": "img/sky_dusk.png",
+   "size": 255
+  },
+  {
+   "path": "img/sky_evening.png",
+   "size": 249
+  },
+  {
+   "path": "img/sky_morning.png",
+   "size": 239
+  },
+  {
+   "path": "img/sky_night.png",
+   "size": 218
+  },
+  {
+   "path": "img/sky_predawn.png",
+   "size": 242
+  },
+  {
+   "path": "img/sprites.png",
+   "size": 7096
+  },
+  {
+   "path": "lib/Engine_Rainforest.sc",
+   "size": 6734
+  },
+  {
+   "path": "lib/scene.lua",
+   "size": 3354
+  },
+  {
+   "path": "lib/sprites.lua",
+   "size": 8895
+  },
+  {
+   "path": "rainforest.lua",
+   "size": 45400
+  },
+  {
+   "path": "screenshots/dawn.png",
+   "size": 13804
+  },
+  {
+   "path": "screenshots/storm.png",
+   "size": 12637
+  },
+  {
+   "path": "sounds/birds/exotic_1.wav",
+   "size": 83832
+  },
+  {
+   "path": "sounds/birds/exotic_2.wav",
+   "size": 68398
+  },
+  {
+   "path": "sounds/birds/exotic_3.wav",
+   "size": 44142
+  },
+  {
+   "path": "sounds/birds/exotic_4.wav",
+   "size": 52522
+  },
+  {
+   "path": "sounds/birds/exotic_5.wav",
+   "size": 65310
+  },
+  {
+   "path": "sounds/birds/exotic_6.wav",
+   "size": 40614
+  },
+  {
+   "path": "sounds/birds/humm_1.wav",
+   "size": 73250
+  },
+  {
+   "path": "sounds/birds/humm_2.wav",
+   "size": 29590
+  },
+  {
+   "path": "sounds/birds/humm_3.wav",
+   "size": 77660
+  },
+  {
+   "path": "sounds/birds/humm_4.wav",
+   "size": 53844
+  },
+  {
+   "path": "sounds/birds/macaw_1.wav",
+   "size": 34000
+  },
+  {
+   "path": "sounds/birds/macaw_2.wav",
+   "size": 40614
+  },
+  {
+   "path": "sounds/birds/macaw_3.wav",
+   "size": 70162
+  },
+  {
+   "path": "sounds/birds/macaw_4.wav",
+   "size": 57372
+  },
+  {
+   "path": "sounds/birds/macaw_5.wav",
+   "size": 38852
+  },
+  {
+   "path": "sounds/birds/macaw_6.wav",
+   "size": 40174
+  },
+  {
+   "path": "sounds/birds/macaw_7.wav",
+   "size": 33118
+  },
+  {
+   "path": "sounds/birds/macaw_8.wav",
+   "size": 30472
+  },
+  {
+   "path": "sounds/birds/macaw_9.wav",
+   "size": 26502
+  },
+  {
+   "path": "sounds/birds/oropendola_1.wav",
+   "size": 77218
+  },
+  {
+   "path": "sounds/birds/oropendola_2.wav",
+   "size": 66194
+  },
+  {
+   "path": "sounds/birds/oropendola_3.wav",
+   "size": 82950
+  },
+  {
+   "path": "sounds/birds/oropendola_4.wav",
+   "size": 53404
+  },
+  {
+   "path": "sounds/birds/oropendola_5.wav",
+   "size": 29590
+  },
+  {
+   "path": "sounds/birds/oropendola_6.wav",
+   "size": 73690
+  },
+  {
+   "path": "sounds/birds/owl_1.wav",
+   "size": 72044
+  },
+  {
+   "path": "sounds/birds/owl_2.wav",
+   "size": 76844
+  },
+  {
+   "path": "sounds/birds/owl_3.wav",
+   "size": 91244
+  },
+  {
+   "path": "sounds/birds/owl_4.wav",
+   "size": 96044
+  },
+  {
+   "path": "sounds/birds/parrot_1.wav",
+   "size": 61782
+  },
+  {
+   "path": "sounds/birds/parrot_2.wav",
+   "size": 59136
+  },
+  {
+   "path": "sounds/birds/parrot_3.wav",
+   "size": 68398
+  },
+  {
+   "path": "sounds/birds/piha_1.wav",
+   "size": 85596
+  },
+  {
+   "path": "sounds/birds/piha_2.wav",
+   "size": 90888
+  },
+  {
+   "path": "sounds/birds/piha_3.wav",
+   "size": 84714
+  },
+  {
+   "path": "sounds/birds/piha_4.wav",
+   "size": 103236
+  },
+  {
+   "path": "sounds/birds/piha_5.wav",
+   "size": 87802
+  },
+  {
+   "path": "sounds/birds/piha_6.wav",
+   "size": 86920
+  },
+  {
+   "path": "sounds/birds/potoo_1.wav",
+   "size": 84044
+  },
+  {
+   "path": "sounds/birds/potoo_2.wav",
+   "size": 88844
+  },
+  {
+   "path": "sounds/birds/potoo_3.wav",
+   "size": 81646
+  },
+  {
+   "path": "sounds/birds/potoo_4.wav",
+   "size": 120044
+  },
+  {
+   "path": "sounds/birds/scream_1.wav",
+   "size": 67958
+  },
+  {
+   "path": "sounds/birds/scream_2.wav",
+   "size": 68840
+  },
+  {
+   "path": "sounds/birds/scream_3.wav",
+   "size": 54286
+  },
+  {
+   "path": "sounds/birds/scream_4.wav",
+   "size": 60900
+  },
+  {
+   "path": "sounds/birds/scream_5.wav",
+   "size": 52962
+  },
+  {
+   "path": "sounds/birds/scream_6.wav",
+   "size": 54726
+  },
+  {
+   "path": "sounds/birds/tinamou_1.wav",
+   "size": 45644
+  },
+  {
+   "path": "sounds/birds/tinamou_2.wav",
+   "size": 38444
+  },
+  {
+   "path": "sounds/birds/tinamou_3.wav",
+   "size": 38444
+  },
+  {
+   "path": "sounds/birds/tinamou_4.wav",
+   "size": 45644
+  },
+  {
+   "path": "sounds/birds/toucan_1.wav",
+   "size": 26062
+  },
+  {
+   "path": "sounds/birds/toucan_2.wav",
+   "size": 33118
+  },
+  {
+   "path": "sounds/birds/toucan_3.wav",
+   "size": 24738
+  },
+  {
+   "path": "sounds/birds/toucan_4.wav",
+   "size": 29590
+  },
+  {
+   "path": "sounds/birds/toucan_5.wav",
+   "size": 33560
+  },
+  {
+   "path": "sounds/chorus.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/cicadas.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/day.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/frogs/frog_1.wav",
+   "size": 26502
+  },
+  {
+   "path": "sounds/frogs/frog_10.wav",
+   "size": 25620
+  },
+  {
+   "path": "sounds/frogs/frog_11.wav",
+   "size": 17110
+  },
+  {
+   "path": "sounds/frogs/frog_12.wav",
+   "size": 19888
+  },
+  {
+   "path": "sounds/frogs/frog_13.wav",
+   "size": 34000
+  },
+  {
+   "path": "sounds/frogs/frog_14.wav",
+   "size": 25180
+  },
+  {
+   "path": "sounds/frogs/frog_2.wav",
+   "size": 17242
+  },
+  {
+   "path": "sounds/frogs/frog_3.wav",
+   "size": 20770
+  },
+  {
+   "path": "sounds/frogs/frog_4.wav",
+   "size": 22092
+  },
+  {
+   "path": "sounds/frogs/frog_5.wav",
+   "size": 17684
+  },
+  {
+   "path": "sounds/frogs/frog_6.wav",
+   "size": 19006
+  },
+  {
+   "path": "sounds/frogs/frog_7.wav",
+   "size": 19006
+  },
+  {
+   "path": "sounds/frogs/frog_8.wav",
+   "size": 19448
+  },
+  {
+   "path": "sounds/frogs/frog_9.wav",
+   "size": 26502
+  },
+  {
+   "path": "sounds/frogs.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/howler1.wav",
+   "size": 286694
+  },
+  {
+   "path": "sounds/howler2.wav",
+   "size": 264644
+  },
+  {
+   "path": "sounds/jaguar/jaguar_1.wav",
+   "size": 93534
+  },
+  {
+   "path": "sounds/jaguar/jaguar_2.wav",
+   "size": 89566
+  },
+  {
+   "path": "sounds/jaguar/jaguar_3.wav",
+   "size": 158362
+  },
+  {
+   "path": "sounds/jaguar/jaguar_4.wav",
+   "size": 126610
+  },
+  {
+   "path": "sounds/monkeys/spider_1.wav",
+   "size": 26018
+  },
+  {
+   "path": "sounds/monkeys/spider_2.wav",
+   "size": 36072
+  },
+  {
+   "path": "sounds/monkeys/tamarin_1.wav",
+   "size": 51154
+  },
+  {
+   "path": "sounds/monkeys/tamarin_2.wav",
+   "size": 33118
+  },
+  {
+   "path": "sounds/night.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/rain1.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/rain2.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/rain3.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/stream.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/thunder1.wav",
+   "size": 573344
+  },
+  {
+   "path": "sounds/thunder2.wav",
+   "size": 573344
+  },
+  {
+   "path": "sounds/thunder3.wav",
+   "size": 258866
+  },
+  {
+   "path": "sounds/thunder4.wav",
+   "size": 573344
+  },
+  {
+   "path": "sounds/waterfall.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/wind.wav",
+   "size": 705642
+  },
+  {
+   "path": "sounds/wood/wood_1.wav",
+   "size": 61342
+  },
+  {
+   "path": "sounds/wood/wood_2.wav",
+   "size": 105000
+  },
+  {
+   "path": "sounds/wood/wood_3.wav",
+   "size": 80306
+  },
+  {
+   "path": "sounds/wood/wood_4.wav",
+   "size": 29590
+  },
+  {
+   "path": "sounds/wood/wood_5.wav",
+   "size": 32676
+  },
+  {
+   "path": "sounds/wood/wood_6.wav",
+   "size": 35324
+  },
+  {
+   "path": "sounds/wood/wood_7.wav",
+   "size": 36646
+  },
+  {
+   "path": "sounds/wood/wood_8.wav",
+   "size": 29148
+  }
+ ]
+}

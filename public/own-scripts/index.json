@@ -1,0 +1,55 @@
+{
+  "what": "Written by tools/build-own-scripts.mjs; read by src/community/own-scripts.ts.",
+  "scripts": [
+    {
+      "name": "no12",
+      "author": "pinktentacle",
+      "description": "a pocket operator rhythm machine: sixteen sounds, patterns, and the PO-12's effects",
+      "tags": [
+        "drums",
+        "sequencer",
+        "sampler"
+      ]
+    },
+    {
+      "name": "poche",
+      "author": "pinktentacle",
+      "description": "a drum machine for your pocket: sixteen synthesised sounds, sixteen steps, effects you punch in",
+      "tags": [
+        "drums",
+        "sequencer",
+        "synth"
+      ]
+    },
+    {
+      "name": "remous",
+      "author": "pinktentacle",
+      "description": "three pools of small creatures that make music as you play with them",
+      "tags": [
+        "generative",
+        "toy",
+        "grid"
+      ]
+    },
+    {
+      "name": "nianfo",
+      "author": "pinktentacle",
+      "description": "a wall of loop players inspired by the Buddha Machine: editions, pitch, effects",
+      "tags": [
+        "ambient",
+        "loops",
+        "drone"
+      ]
+    },
+    {
+      "name": "rainforest",
+      "author": "pinktentacle",
+      "description": "a rainforest, alive: rain, birds, monkeys, frogs and storms, with the forest on screen",
+      "tags": [
+        "ambient",
+        "generative",
+        "field recording"
+      ]
+    }
+  ]
+}

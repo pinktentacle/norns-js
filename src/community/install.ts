@@ -34,6 +34,17 @@ import limits from "./limits.json";
 export interface Repo {
   readonly owner: string;
   readonly repo: string;
+  /**
+   * E9-213 — a script the page serves itself, from `own-scripts/<name>/`
+   * (see `own-scripts.ts`): its listing is `files.json` there and its
+   * files are beside it. No GitHub, no jsDelivr, no submodules.
+   */
+  readonly base?: string;
+}
+
+/** One of the scripts made for norns-js, by the folder it is served from. */
+export function ownRepo(name: string, base: string): Repo {
+  return { owner: "norns-js", repo: name, base: base.replace(/\/*$/, "/") };
 }
 
 /**
@@ -313,6 +324,15 @@ export async function listFiles(
    */
   ref?: string,
 ): Promise<{ branch: string; files: Candidate[] }> {
+  if (repo.base !== undefined) {
+    const body = (await fetchJson(`${repo.base}files.json`)) as { files?: unknown };
+    const raw = Array.isArray(body.files) ? (body.files as Array<{ path?: unknown; size?: unknown }>) : [];
+    const files = raw
+      .filter((f) => typeof f.path === "string" && f.path !== "")
+      .map((f) => ({ path: String(f.path), size: typeof f.size === "number" ? f.size : 0 }));
+    if (files.length === 0) throw new Error(`could not list ${repo.repo} (${repo.base}files.json has no files)`);
+    return { branch: "norns-js", files };
+  }
   const errors: string[] = [];
   for (const branch of ref ? [ref] : ["main", "master"]) {
     // GitHub FIRST, because jsDelivr's index can be older than jsDelivr's
@@ -551,7 +571,7 @@ async function collectSources(
   chain: readonly string[] = [],
 ): Promise<Source[]> {
   const out: Source[] = [{ repo, branch, prefix: "", files }];
-  if (depth >= 2) return out;
+  if (depth >= 2 || repo.base !== undefined) return out;
   if (!files.some((f) => f.path.replace(/^\//, "") === ".gitmodules")) return out;
 
   const getBytes = opts.fetchBytes ?? defaultBytes;
@@ -799,6 +819,10 @@ async function installOne(
       // fetched still stops the install -- a script missing one of its own
       // files is worse than one not installed -- so the way to save these
       // is to ask the other sources before giving up, not to let it pass.
+      if (s.repo.base !== undefined) {
+        urlFor.set(p, [`${s.repo.base}${bare}`]);
+        continue;
+      }
       const gh = `${s.repo.owner}/${s.repo.repo}`;
       urlFor.set(p, [
         `https://cdn.jsdelivr.net/gh/${gh}@${s.branch}/${bare}`,

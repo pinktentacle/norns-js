@@ -1,5 +1,5 @@
 {
- "what": "What happened when each script in public/community-blockers.json was installed and run here, one at a time with the engine up: the campaigns written down in docs/11-MISSING.md, sections 9, 17, 18 and 19. The blockers table says what is MISSING and is worked out from the source; this says what that cost, and is measured. A verdict counts only while the script is still in that table — one that is fixed leaves the table and its row here stops meaning anything. A script in the table and not here gets the plain 'something is missing' mark.",
+ "what": "What happened when each script in public/community-blockers.json was installed and run here, one at a time with the engine up: the campaigns written down in docs/11-MISSING.md, sections 9, 17, 18 and 19. The blockers table says what is MISSING and is worked out from the source; this says what that cost, and is measured. A verdict counts only while the script is still in that table — one that is fixed leaves the table and its row here stops meaning anything. A script in the table and not here gets the plain 'something is missing' mark. A row with `samples` is a script that needs a pack of samples a person downloads by hand: its standing goes once the folder named in `holds` has files in it, and the store offers the download and the import on its page.",
  "verdicts": {
   "gone": "it cannot be installed",
   "no": "it starts, or tries to, and cannot do what it is for",
@@ -32,6 +32,17 @@
   "makebreakbeat": {
    "verdict": "no",
    "measured": "it starts, 147 pixels lit; sox, the program that does its work, is built for the Raspberry Pi and is not here"
+  },
+  "moonraker": {
+   "verdict": "needs",
+   "label": "needs its samples",
+   "measured": "it starts and stays silent, and every turn of E1 is 'interval is empty' at line 445: its eight banks are folders of a sample pack that is not here — on a norns without the pack too",
+   "samples": {
+    "url": "https://github.com/schollz/moonraker/releases/download/samplepack1/moonraker.zip",
+    "file": "moonraker.zip",
+    "bytes": 94841930,
+    "holds": "audio/moonraker"
+   }
   },
   "norns.online": {
    "verdict": "no",

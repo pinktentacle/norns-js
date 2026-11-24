@@ -220,6 +220,17 @@ const MEASURED = {
   // the error, measured.
   "fixed-filter-banking-crisis":
     "its Fx class needs github.com/sixolet/fx; without it one SuperCollider class does not compile",
+  // E9-211 — reported from the phone: no sound, and `moonraker.lua:445:
+  // bad argument #1 to 'random' (interval is empty)` at every turn of E1.
+  // Its eight banks are scanned out of `~/dust/audio/moonraker/1..8/`, and
+  // that folder is a 95 MB GitHub release its README has you fetch by hand
+  // in maiden (`wget …/samplepack1/moonraker.zip && unzip`). Nothing in its
+  // Lua names the URL, which is why the release rule below never saw it:
+  // the only README in the catalogue whose by-hand step is a sample pack.
+  // A norns without the pack is just as silent. SETTINGS > FILES > add
+  // samples takes the zip once a person has downloaded it.
+  moonraker:
+    "its samples are a 95 MB GitHub release its README has you download by hand — download moonraker.zip and add it in SETTINGS > FILES > add samples",
 };
 for (const [script, why] of Object.entries(MEASURED)) add(script, why);
 

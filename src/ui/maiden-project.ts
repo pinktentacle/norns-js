@@ -68,6 +68,11 @@ export interface MaidenProjectOptions {
   readonly log?: (line: string) => void;
   /** E9-209 — the catalogue a previous `catalog()` left on disk, if any. */
   readonly catalogKept?: () => Catalog | null;
+  /**
+   * E9-211 — what the table says a script is missing has been brought here
+   * by hand (its sample pack is in), so the note no longer applies.
+   */
+  readonly satisfied?: (name: string) => boolean;
 }
 
 /**
@@ -341,8 +346,10 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
     return ` — ${skipped.length} left out: ${top.join(", ")}`;
   };
 
-  const blockedBy = (name: string): string[] =>
-    blockers[name] ?? blockers[name.toLowerCase()] ?? [];
+  const blockedBy = (name: string): string[] => {
+    const notes = blockers[name] ?? blockers[name.toLowerCase()] ?? [];
+    return notes.length > 0 && opts.satisfied?.(name) === true ? [] : notes;
+  };
 
   let catalog: Catalog | null = null;
   let loading = false;
