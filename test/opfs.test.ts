@@ -271,7 +271,15 @@ describe("the round trip", () => {
     const s = store();
     const vfs = new Vfs();
     const r = await restoreFromOpfs(vfs, { root: s.open });
-    expect(r).toEqual({ files: 0, tombstones: 0, placeholders: 0, references: 0, bytes: 0, ghosts: 0 });
+    expect(r).toEqual({
+      files: 0,
+      tombstones: 0,
+      placeholders: 0,
+      references: 0,
+      bytes: 0,
+      ghosts: 0,
+      dropped: [],
+    });
   });
 
   it("carries on with no OPFS at all", async () => {
@@ -561,5 +569,164 @@ describe("the other two resets", () => {
     const b = bodyOf("factoryReset");
     expect(b).toMatch(/location\?\.reload\(\)/);
     expect(b, "_norns.restart saves system.state as it goes").not.toContain("doRestart()");
+  });
+});
+
+// E9-216 — every file gone, every folder kept.
+//
+// Found on this machine for the third time: each script folder in OPFS
+// present and empty, `~/dust/data` emptied of every pset, `system.pset`
+// gone, and every directory still standing. Nothing in the mirror could
+// say what had happened. These are the ways the mirror itself could do
+// that, each shown on the fake before it was fixed.
+describe("what the mirror removes", () => {
+  const filesUnder = async (d: DirHandleLike, at = ""): Promise<string[]> => {
+    const out: string[] = [];
+    for await (const [name, h] of d.entries()) {
+      if ((h as FakeFile).getFile !== undefined) out.push(`${at}/${name}`);
+      else out.push(...(await filesUnder(h as DirHandleLike, `${at}/${name}`)));
+    }
+    return out;
+  };
+  const dirsUnder = async (d: DirHandleLike, at = ""): Promise<string[]> => {
+    const out: string[] = [];
+    for await (const [name, h] of d.entries()) {
+      if ((h as FakeFile).getFile === undefined) {
+        out.push(`${at}/${name}`);
+        out.push(...(await dirsUnder(h as DirHandleLike, `${at}/${name}`)));
+      }
+    }
+    return out;
+  };
+
+  it("does not take files this page never knew of when it removes a folder", async () => {
+    // Tab A booted first; tab B installed a script afterwards. A's picture
+    // has no such files, and A removing the folder used to take them all.
+    const s = store();
+    const b = new Vfs();
+    const mb = mirrorToOpfs(b, { root: s.open, debounceMs: 0 });
+    b.write("/home/we/dust/code/rainforest/rainforest.lua", "-- from tab B");
+    b.write("/home/we/dust/code/rainforest/sounds/rain.wav", "RIFF");
+    await mb.flush();
+    mb.stop();
+
+    const a = new Vfs(); // booted before B wrote: knows nothing of it
+    const ma = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.mkdir("/home/we/dust/code/rainforest");
+    a.remove("/home/we/dust/code/rainforest");
+    await ma.flush();
+    ma.stop();
+
+    const dust = await s.root.getDirectoryHandle("norns-dust");
+    expect(await filesUnder(dust)).toContain("/home/we/dust/code/rainforest/sounds/rain.wav");
+    expect(ma.stats.kept, "the folder kept is counted").toBe(1);
+  });
+
+  it("still removes a folder whose files it removed itself, empty subfolders and all", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    // mkdir first, as installs and `util.make_dir` do: the folder takes its
+    // place in the queue BEFORE its files, so it is processed first.
+    a.mkdir("/home/we/dust/.installing/poche/lib");
+    a.write("/home/we/dust/.installing/poche/lib/Engine_Poche.sc", "// sc");
+    a.write("/home/we/dust/.installing/poche/poche.lua", "-- lua");
+    await m.flush();
+    for (const p of a.walk("/home/we/dust/.installing/poche")) a.remove(p);
+    a.remove("/home/we/dust/.installing/poche");
+    a.remove("/home/we/dust/.installing");
+    await m.flush();
+    m.stop();
+
+    const dust = await s.root.getDirectoryHandle("norns-dust");
+    const dirs = await dirsUnder(dust);
+    expect(dirs.some((d) => d.includes(".installing")), dirs.join(" ")).toBe(false);
+  });
+
+  it("does not make a folder again to remove a file that is already gone", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.write("/home/we/dust/data/thing/one.pset", "a pset");
+    await m.flush();
+    // The folder goes first, then a removal for a file inside it arrives.
+    a.remove("/home/we/dust/data/thing/one.pset");
+    a.remove("/home/we/dust/data/thing");
+    await m.flush();
+    a.remove("/home/we/dust/data/thing/one.pset");
+    await m.flush();
+    m.stop();
+
+    const dust = await s.root.getDirectoryHandle("norns-dust");
+    expect(await dirsUnder(dust)).not.toContain("/home/we/dust/data/thing");
+  });
+
+  it("writes what it removed, and when, into a journal that outlives the page", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0, session: "load-1" });
+    a.write("/home/we/dust/data/x/a.pset", "1");
+    await m.flush();
+    a.remove("/home/we/dust/data/x/a.pset");
+    await m.flush();
+    m.stop();
+
+    const dust = await s.root.getDirectoryHandle("norns-dust");
+    const h = (await dust.getFileHandle(".removals.json")) as FakeFile;
+    const journal = JSON.parse(new TextDecoder().decode(h.data)) as Array<{ p: string; s: string }>;
+    expect(journal.map((e) => e.p)).toEqual(["/home/we/dust/data/x/a.pset"]);
+    expect(journal[0]!.s).toBe("load-1");
+
+    // And it is a sidecar, not a file of the tree.
+    const b = new Vfs();
+    await restoreFromOpfs(b, { root: s.open });
+    expect(b.exists("/.removals.json")).toBe(false);
+  });
+
+  it("says how many it removed, not how many it sampled", async () => {
+    const s = store();
+    const a = new Vfs();
+    const lines: string[] = [];
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0, log: (l) => lines.push(l) });
+    for (let i = 0; i < 12; i++) a.write(`/home/we/dust/data/x/${i}.pset`, "p");
+    await m.flush();
+    for (let i = 0; i < 12; i++) a.remove(`/home/we/dust/data/x/${i}.pset`);
+    await m.flush();
+    m.stop();
+    expect(lines.find((l) => l.startsWith("opfs: removed"))).toMatch(/^opfs: removed 12 paths/);
+  });
+
+  it("saves the boot's own tidying when it is handed over", async () => {
+    // The restore drops an empty script folder before the mirror exists;
+    // until `touch` it stayed on the disk and was dropped again every boot.
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    a.mkdir("/home/we/dust/code/ghost/lib");
+    await m.flush();
+    m.stop();
+
+    const b = new Vfs();
+    const r = await restoreFromOpfs(b, { root: s.open });
+    expect(r.dropped).toEqual(["/home/we/dust/code/ghost"]);
+    const m2 = mirrorToOpfs(b, { root: s.open, debounceMs: 0 });
+    m2.touch(r.dropped);
+    await m2.flush();
+    m2.stop();
+
+    const c = new Vfs();
+    const r2 = await restoreFromOpfs(c, { root: s.open });
+    expect(r2.ghosts, "dropped once, and not again").toBe(0);
+  });
+
+  it("stops writing the moment it is stopped, even mid-flush", async () => {
+    const s = store();
+    const a = new Vfs();
+    const m = mirrorToOpfs(a, { root: s.open, debounceMs: 0 });
+    for (let i = 0; i < 20; i++) a.write(`/home/we/dust/data/y/${i}.pset`, "p");
+    const done = m.flush();
+    m.stop();
+    await done;
+    expect(m.stats.writes).toBeLessThan(20);
   });
 });

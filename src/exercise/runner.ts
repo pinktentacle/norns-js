@@ -71,6 +71,12 @@ export interface ExerciseOptions {
   readonly listenMs?: number;
   /** Called after each script, so a long run can be watched. */
   readonly onResult?: (row: ExerciseRow) => void;
+  /**
+   * Leave the last script loaded rather than clear it. The catalogue sweep
+   * feeds a looper the audio input AFTER this has pressed its keys; cleared,
+   * the input went into an empty page and every looper measured silent.
+   */
+  readonly keep?: boolean;
 }
 
 export interface ExerciseRow {
@@ -422,10 +428,13 @@ export async function exercise(
     // held long enough for an attack and released long enough for a tail.
     // Without this the sweep reports "silent" about every synth in the set,
     // which is most of them: they are correct and they were never asked.
+    // E9-228 — and a kick and a snare first: a drum machine plays the
+    // General MIDI drum map (drum_room's 808 kit starts at note 35), and
+    // three melodic notes ask it nothing.
     let notePeak: number | null = null;
     if (ctx.note && ctx.noteOff) {
       notePeak = 0;
-      for (const n of [48, 60, 67]) {
+      for (const n of [36, 38, 48, 60, 67]) {
         ctx.note(n, 100);
         const held = performance.now() + 450;
         while (performance.now() < held) {
@@ -479,8 +488,10 @@ export async function exercise(
   }
 
   // Leave the page where it was found, not inside the last script.
-  ctx.host.run("if norns.script and norns.script.clear then pcall(norns.script.clear) end");
-  ctx.host.run("if _menu and _menu.set_mode then pcall(_menu.set_mode, true) end");
+  if (!opts.keep) {
+    ctx.host.run("if norns.script and norns.script.clear then pcall(norns.script.clear) end");
+    ctx.host.run("if _menu and _menu.set_mode then pcall(_menu.set_mode, true) end");
+  }
 
   return {
     when: new Date().toISOString(),

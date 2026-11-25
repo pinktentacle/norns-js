@@ -31,6 +31,7 @@ import { installNorns } from "../norns/install.js";
 import { NornsRegistry } from "../norns/registry.js";
 import { installVfsPrimitives, LUA_IO_PRELUDE, LUA_NET_PRELUDE } from "../fs/lua-io.js";
 import type { NetReplies } from "../fs/net-replies.js";
+import type { ShellFetch } from "../fs/shell.js";
 import { CARRIED } from "../community/off-catalogue.js";
 import { COMPAT_PRELOAD_LUA } from "./compat.js";
 import type { Vfs } from "../fs/vfs.js";
@@ -61,7 +62,7 @@ export interface HostOptions {
    */
   readonly onShellRefused?: (command: string, reason: string) => void;
   /** E9-37 — a `git clone`, `wget -O` or `curl -o` for the host to run. */
-  readonly onShellFetch?: (fetch: { kind: "repo" | "file"; url: string; dest: string }) => void;
+  readonly onShellFetch?: (fetch: ShellFetch) => void;
   /** E9-203 — answers a `curl` whose output a script reads. */
   readonly net?: NetReplies;
 }

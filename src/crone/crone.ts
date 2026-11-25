@@ -190,8 +190,10 @@ export async function startCrone(opts: CroneOptions): Promise<Crone> {
   const node = new AudioWorkletNode(opts.context, "crone", {
     // Two inputs because crone keeps adc and ext apart; see processor.js.
     numberOfInputs: 2,
-    numberOfOutputs: 1,
-    outputChannelCount: [2],
+    // Two outputs: the speakers, and (E9-222) the ADC going back to the
+    // engine, which is upstream's `crone:output_5/6` -> SuperCollider.
+    numberOfOutputs: 2,
+    outputChannelCount: [2, 2],
     processorOptions: { wasmBinary },
   });
 

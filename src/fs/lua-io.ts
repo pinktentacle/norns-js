@@ -21,7 +21,7 @@
 
 import { lua, to_luastring, readArgs, pushValue, type LuaState } from "../lua/lua.js";
 import type { Vfs } from "./vfs.js";
-import { runShell } from "./shell.js";
+import { runShell, type ShellFetch } from "./shell.js";
 import type { NetReplies } from "./net-replies.js";
 
 /** Install `_vfs_*` as globals. The Lua prelude below is written against them. */
@@ -36,7 +36,7 @@ export function installVfsPrimitives(
    * download is not. The host starts it; the script is told, through the
    * refusal beside this, that the files are not there YET.
    */
-  onShellFetch?: (fetch: { kind: "repo" | "file"; url: string; dest: string }) => void,
+  onShellFetch?: (fetch: ShellFetch) => void,
   /** E9-203 — where a `curl` whose output is being read goes to be answered. */
   net?: NetReplies,
 ): void {
@@ -127,7 +127,8 @@ export function installVfsPrimitives(
       return ["", false, net.start(cmd, r.request)] as unknown;
     }
     if (r.fetch !== undefined) onShellFetch?.(r.fetch);
-    if (!r.ok) onShellRefused?.(cmd, r.refused ?? "unsupported");
+    for (const f of r.more ?? []) onShellFetch?.(f);
+    if (!r.ok && r.failed !== true) onShellRefused?.(cmd, r.refused ?? "unsupported");
     // Two values: the output, and whether it ran. Lua's `os.execute` wants a
     // boolean and `io.popen` wants the text, and they are the same call.
     return [r.out, r.ok] as unknown;

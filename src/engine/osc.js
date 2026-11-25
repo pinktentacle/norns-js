@@ -142,12 +142,33 @@ export function decode(bytes) {
   if (o < bytes.length && bytes[o] === 0x2c /* ',' */) {
     let tags;
     [tags, o] = readString(view, bytes, o);
+    // E9-238 — every type matron's `w_handle_osc_event` hands Lua, as it
+    // hands it. Only i, f, s and d were read, and anything else ended the
+    // message with a string saying so: eterna's engine sends its waveform as
+    // an Int8Array — a BLOB — followed by the buffer it belongs to, and the
+    // script got one argument, "<unhandled tag b>", and no buffer at all.
+    // A blob is a Lua string byte for byte (lua_pushlstring), which is what a
+    // Uint8Array becomes on the way in (lua.ts).
     for (const t of tags.slice(1)) {
       if (t === "i") { args.push(view.getInt32(o, false)); o += 4; }
       else if (t === "f") { args.push(view.getFloat32(o, false)); o += 4; }
-      else if (t === "s") { const [s, no] = readString(view, bytes, o); args.push(s); o = no; }
+      else if (t === "s" || t === "S") { const [s, no] = readString(view, bytes, o); args.push(s); o = no; }
       else if (t === "d") { args.push(view.getFloat64(o, false)); o += 8; }
-      else { args.push(`<unhandled tag ${t}>`); break; }
+      else if (t === "b") {
+        const n = view.getInt32(o, false);
+        o += 4;
+        args.push(bytes.slice(o, o + n));
+        o += (n + 3) & ~3;
+      }
+      else if (t === "h") { args.push(Number(view.getBigInt64(o, false))); o += 8; }
+      else if (t === "c") { args.push(String.fromCharCode(view.getInt32(o, false) & 0xff)); o += 4; }
+      else if (t === "m") { args.push(bytes.slice(o, o + 4)); o += 4; }
+      else if (t === "t") { args.push(null); o += 8; } // matron has no case for a timetag: nil
+      else if (t === "T") args.push(true);
+      else if (t === "F") args.push(false);
+      else if (t === "N") args.push(null);
+      else if (t === "I") args.push(Infinity);
+      else { args.push(null); break; } // a size nobody knows: nil, as matron, and nothing after it
     }
   }
   return { address, args };

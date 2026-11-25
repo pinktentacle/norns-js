@@ -156,16 +156,16 @@ describe("the three places the names deliberately disagree", () => {
 });
 
 describe("arity and argument order", () => {
-  it("level_input_cut passes three, in order", () => {
+  it("level_input_cut passes three, in order, channel and voice from 0 (E9-233)", () => {
     const h = harness();
     h.call("level_input_cut", 1, 2, 0.5);
-    expect(h.commands.at(-1)).toEqual({ name: "SET_LEVEL_IN_CUT", args: [1, 2, 0.5] });
+    expect(h.commands.at(-1)).toEqual({ name: "SET_LEVEL_IN_CUT", args: [0, 1, 0.5] });
   });
 
-  it("cut_enable is (voice, value)", () => {
+  it("cut_enable is (voice, value), the voice from 0 as matron sends it", () => {
     const h = harness();
     h.call("cut_enable", 3, 1);
-    expect(h.commands.at(-1)).toEqual({ name: "SET_ENABLED_CUT", args: [3, 1] });
+    expect(h.commands.at(-1)).toEqual({ name: "SET_ENABLED_CUT", args: [2, 1] });
   });
 
   it("rev_on and rev_off are the same command with 1 and 0", () => {
@@ -198,15 +198,15 @@ describe("arity and argument order", () => {
 });
 
 describe("named parameters", () => {
-  it("cut_param forwards the name and both numbers", () => {
+  it("cut_param forwards the name and both numbers, the voice from 0", () => {
     const h = harness();
-    h.call("cut_param", "rate", 0, 1.5);
+    h.call("cut_param", "rate", 1, 1.5);
     expect(h.params.at(-1)).toEqual({ name: "rate", args: [0, 1.5] });
   });
 
-  it("cut_param_iif takes four", () => {
+  it("cut_param_iif takes four, both voices from 0", () => {
     const h = harness();
-    h.call("cut_param_iif", "voice_sync", 0, 1, 0.25);
+    h.call("cut_param_iif", "voice_sync", 1, 2, 0.25);
     expect(h.params.at(-1)).toEqual({ name: "voice_sync", args: [0, 1, 0.25] });
   });
 
@@ -243,7 +243,7 @@ describe("polls", () => {
     // ring. Returning a value here would be inventing one.
     const h = harness();
     expect(h.call("cut_query_position", 2)).toBeUndefined();
-    expect(h.posted.at(-1)).toMatchObject({ entry: "cronejs_cut_query_position", args: [2] });
+    expect(h.posted.at(-1)).toMatchObject({ entry: "cronejs_cut_query_position", args: [1] });
   });
 });
 

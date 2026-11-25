@@ -230,7 +230,7 @@ const MEASURED = {
   // A norns without the pack is just as silent. SETTINGS > FILES > add
   // samples takes the zip once a person has downloaded it.
   moonraker:
-    "its samples are a 95 MB GitHub release its README has you download by hand — download moonraker.zip and add it in SETTINGS > FILES > add samples",
+    "its samples are a 95 MB GitHub release its README has you download by hand — get it here, on this page, fetches and adds it; by hand, download moonraker.zip and add it in SETTINGS > FILES > add samples",
 };
 for (const [script, why] of Object.entries(MEASURED)) add(script, why);
 
@@ -402,13 +402,21 @@ for (const [key, v] of Object.entries(listings)) {
       names.add(file);
     }
   }
+  // E9-236 — A RELEASE IS FETCHED NOW (E9-227's relay) and an archive of
+  // samples unpacked (E9-226 unzip, E9-228 tar), so a pack of sounds or data
+  // is not missing any more: amenbreak and lorenzos-drums play. What still
+  // cannot be had is a PROGRAM — sox, sendosc, audiowaveform, a plugin
+  // build — and an archive named after one is one.
+  const DATA = /\.(zip|tar|tgz|tar\.gz|wav|flac|aiff?|json|txt|png)$/i;
+  const PROGRAM = /sox|sendosc|audiowaveform|seamless|plugin|ignore\.zip|extra\.zip|dust2dust|norns\.online/i;
+  for (const f of [...names]) if (DATA.test(f) && !PROGRAM.test(f)) names.delete(f);
   // ONE note per script. Three sentences saying the same thing about three
   // files is a row nobody finishes reading.
   if (names.size > 0) {
     const first = [...names].slice(0, 2);
     const shown = first.length === 2 ? `${first[0]} and ${first[1]}` : first[0];
     const more = names.size > 2 ? `, and ${names.size - 2} more` : "";
-    add(name, `${shown}${more}, from a GitHub release the browser may not fetch`);
+    add(name, `${shown}${more}, from a GitHub release: programs built for the Raspberry Pi, which a browser cannot run`);
   }
 }
 

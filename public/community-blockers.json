@@ -3,9 +3,6 @@
  "from": "the 355-entry monome/norns-community catalogue",
  "note": "A script listed here is missing something. Some will not start; some run with less. Absence from this list is not a promise.",
  "scripts": {
-  "amenbreak": [
-   "amenbreak.tar and amenbreak_data.tar.gz, from a GitHub release the browser may not fetch"
-  ],
   "arp_index": [
    "reads cloud.iexapis.com, which has closed and answers nobody"
   ],
@@ -15,26 +12,23 @@
   "fixed-filter-banking-crisis": [
    "its Fx class needs github.com/sixolet/fx; without it one SuperCollider class does not compile"
   ],
-  "lorenzos-drums": [
-   "lorenzos-drums.tar.gz, from a GitHub release the browser may not fetch"
-  ],
   "makebreakbeat": [
-   "sox, from a GitHub release the browser may not fetch"
+   "sox, from a GitHub release: programs built for the Raspberry Pi, which a browser cannot run"
   ],
   "moonraker": [
-   "its samples are a 95 MB GitHub release its README has you download by hand — download moonraker.zip and add it in SETTINGS > FILES > add samples"
+   "its samples are a 95 MB GitHub release its README has you download by hand — get it here, on this page, fetches and adds it; by hand, download moonraker.zip and add it in SETTINGS > FILES > add samples"
   ],
   "norns.online": [
-   "norns.online, from a GitHub release the browser may not fetch"
+   "norns.online, from a GitHub release: programs built for the Raspberry Pi, which a browser cannot run"
   ],
   "paracosms": [
-   "ignore.zip and extra.zip, and 1 more, from a GitHub release the browser may not fetch"
+   "ignore.zip and extra.zip, and 1 more, from a GitHub release: programs built for the Raspberry Pi, which a browser cannot run"
   ],
   "pirate-radio": [
-   "dust2dust, from a GitHub release the browser may not fetch"
+   "dust2dust, from a GitHub release: programs built for the Raspberry Pi, which a browser cannot run"
   ],
   "sampswap": [
-   "sox and sendosc, and 1 more, from a GitHub release the browser may not fetch"
+   "sox and sendosc, and 1 more, from a GitHub release: programs built for the Raspberry Pi, which a browser cannot run"
   ],
   "tulpamancer": [
    "reads a file from nyse.com, which does not let a page read it"
@@ -43,7 +37,7 @@
    "its repository will not list — renamed, private or gone"
   ],
   "zxcvbn": [
-   "release.tar.gz and audiowaveform.tar.gz, and 2 more, from a GitHub release the browser may not fetch"
+   "release.tar.gz and audiowaveform.tar.gz, and 2 more, from a GitHub release: programs built for the Raspberry Pi, which a browser cannot run"
   ]
  }
 }

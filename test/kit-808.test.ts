@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 // @ts-expect-error -- a build tool, plain JS, with no types of its own.
-import { kit808, KIT_README } from "../tools/kit-808.mjs";
+import { kit808, KIT_README, KIT_README_PATH } from "../tools/kit-808.mjs";
 import { parseWavHeader } from "../src/fs/wav-header.js";
 
 const kit = (): Map<string, Buffer> => kit808() as Map<string, Buffer>;
@@ -26,21 +26,20 @@ describe("the synthesised 808 kit", () => {
     expect(names.filter((n) => n.endsWith(".wav"))).toHaveLength(17);
   });
 
-  it("says in the folder that it is not the Roland samples", () => {
+  it("says beside the folder that it is not the Roland samples", () => {
     // The one claim that must survive somebody opening the directory.
-    expect(kit().get(".README.txt")?.toString("utf8")).toBe(KIT_README);
     expect(KIT_README).toContain("NOT the Roland");
+    expect(KIT_README_PATH).toBe("/home/we/dust/audio/common/.808-README.txt");
   });
 
-  // E9-130. Undotted, `bakeneko` drew it from the folder it picks at
-  // random, handed a text file to `decodeAudioData`, and its SuperCollider
-  // engine compared the resulting nil against a number — five forty-line
-  // dumps in one boot on a phone. `src/fs/shell.ts` hides dotfiles now;
-  // this is the other half, for a caller that enumerates some other way.
-  it("hides it from the scripts that list this folder for sounds", () => {
+  // E9-130, then E9-230. Undotted, `bakeneko` drew the note from the
+  // folder it picks at random, handed a text file to `decodeAudioData`,
+  // and its engine compared the resulting nil against a number. Dotted,
+  // it STILL drew it: it lists with `ls -a`. A norns' 808 folder holds
+  // the sounds and nothing else, so here it does too.
+  it("holds the sounds and nothing else", () => {
     const names = [...kit().keys()];
-    expect(names).not.toContain("README.txt");
-    expect(names.filter((n) => !n.endsWith(".wav"))).toEqual([".README.txt"]);
+    expect(names.filter((n) => !n.endsWith(".wav"))).toEqual([]);
   });
 
   it("writes WAVs the same parser the manifest uses can read", () => {

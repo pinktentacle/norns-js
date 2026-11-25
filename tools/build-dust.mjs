@@ -22,7 +22,7 @@ import fs from "node:fs";
 import { parseWavHeader } from "../src/fs/wav-header.ts";
 import path from "node:path";
 import zlib from "node:zlib";
-import { kit808 } from "./kit-808.mjs";
+import { KIT_README, KIT_README_PATH, kit808 } from "./kit-808.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -262,21 +262,17 @@ for (const category of categories) {
 // picks a file at random — died in `init` on `math.random(1, 0)`.
 //
 // The sounds are synthesised, not Roland's: see tools/kit-808.mjs for why,
-// and the `.README.txt` that travels with them says so in the folder
-// itself. DOTTED since E9-130, because bakeneko picked the undotted one at
-// random and fed a text file to decodeAudioData.
+// and `audio/common/.808-README.txt` says so BESIDE the folder. Not in it
+// (E9-230): bakeneko lists the folder with `ls -a` and picked the note at
+// random, dotted or not, and a norns' 808 folder holds only the sounds.
+// Text goes INLINE, because `io.open` is synchronous and a lazily fetched
+// file has nowhere to await. A README nobody can read is not a README.
+tree[KIT_README_PATH] = KIT_README;
 const KIT_DIR = '/home/we/dust/audio/common/808';
 let kitFiles = 0;
 let kitBytes = 0;
 for (const [name, data] of kit808()) {
   const vpath = `${KIT_DIR}/${name}`;
-  if (!name.endsWith('.wav')) {
-    // Text goes INLINE, because `io.open` is synchronous and a lazily
-    // fetched file has nowhere to await. A README nobody can read is
-    // not a README.
-    tree[vpath] = data.toString('utf8');
-    continue;
-  }
   const dest = path.join(BIN_DIR, '_stock', 'audio', 'common', '808', name);
   if (write) {
     fs.mkdirSync(path.dirname(dest), { recursive: true });

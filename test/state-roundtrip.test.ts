@@ -111,4 +111,26 @@ describe("the system state file", () => {
     ).toBeNull();
     expect(vfs.readText("/home/we/dust/data/system.state")).toContain("Infinity/Infinity.lua");
   });
+
+  it("round-trips a path with a quote in it (E9-244)", () => {
+    // The catalogue's "carter's delay" installs into a folder of that name.
+    // Upstream writes `norns.state.script = '.../carter's delay/...'`, and
+    // the next boot's `state.resume` dies on it — every setting lost.
+    expect(
+      host.run(`
+        norns.state.script = "/home/we/dust/code/carter's delay/cartersdelay.lua"
+        norns.state.name = "carter's delay"
+        midi.vports[1].name = "Bob's \\"keys\\""
+        norns.state.save_state()
+        norns.state.script = ''
+        norns.state.name = ''
+        midi.vports[1].name = 'none'
+        dofile(_path.data .. 'system.state')
+        _RT = norns.state.script .. ' | ' .. norns.state.name .. ' | ' .. midi.vports[1].name
+      `),
+    ).toBeNull();
+    expect(luaString("_RT")).toBe(`/home/we/dust/code/carter's delay/cartersdelay.lua | carter's delay | Bob's "keys"`);
+    // A value with no quote is written exactly as upstream writes it.
+    expect(vfs.readText("/home/we/dust/data/system.state")).toContain("norns.state.data = '");
+  });
 });

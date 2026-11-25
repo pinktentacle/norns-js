@@ -59,6 +59,50 @@
 		^buf;
 	}
 
+	// E9-237 — THE INSTANCE METHODS, on a Buffer that already has its number.
+	//
+	// Only `*read` and `*readChannel` were taken over, and `Ack` does neither:
+	// it allocates its eight one-frame buffers at start and loads a sample
+	// with `buffer.allocRead(path)`. That went to scsynth as a real
+	// `/b_allocRead`, which answers "scsynth compiled without libsndfile" and
+	// nothing else — while Ack printed "sample loaded into channel 0" and
+	// every trigger played an empty buffer. cyrene, foulplay, step and strides
+	// were silent for exactly this, and every other script on Ack with them.
+	//
+	// The same round trip as `*read`, into this buffer's number: the page
+	// decodes the file and allocates the buffer to its size, which is what
+	// `/b_allocRead` does. `read` into an existing buffer is upstream's
+	// `/b_read`, which KEEPS the buffer's size and fills from `bufStartFrame`;
+	// here it takes the file's size, as the class-side `read` does — a buffer
+	// that holds the sound rather than one that holds nothing.
+	allocRead { arg argpath, startFrame = 0, numFrames = -1, completionMessage;
+		path = argpath;
+		this.startFrame = startFrame;
+		Buffer.nornsJsRequest(this, argpath, startFrame, numFrames);
+	}
+
+	allocReadChannel { arg argpath, startFrame = 0, numFrames = -1, channels, completionMessage;
+		path = argpath;
+		this.startFrame = startFrame;
+		Buffer.nornsJsRequest(this, argpath, startFrame, numFrames, channels);
+	}
+
+	read { arg argpath, fileStartFrame = 0, numFrames = -1, bufStartFrame = 0, leaveOpen = false, action;
+		this.cache;
+		doOnInfo = action;
+		path = argpath;
+		this.startFrame = fileStartFrame;
+		Buffer.nornsJsRequest(this, argpath, fileStartFrame, numFrames);
+	}
+
+	readChannel { arg argpath, fileStartFrame = 0, numFrames = -1, bufStartFrame = 0, leaveOpen = false, channels, action;
+		this.cache;
+		doOnInfo = action;
+		path = argpath;
+		this.startFrame = fileStartFrame;
+		Buffer.nornsJsRequest(this, argpath, fileStartFrame, numFrames, channels);
+	}
+
 	*nornsJsRequest { arg buf, path, startFrame, numFrames, channels;
 		Buffer.nornsJsListen;
 		// `.put` and `.at` written out rather than `[]`: on a method call

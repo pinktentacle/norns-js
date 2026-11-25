@@ -42,6 +42,8 @@ interface Parsed {
   readonly prune: string[];
   readonly notEmpty: boolean;
   readonly format: string | null;
+  /** E9-248 — `-quit`: stop at the first match (grains asks if any folder is that deep). */
+  readonly quit: boolean;
 }
 
 /** Split a command line into words, keeping quoted runs together. */
@@ -87,6 +89,7 @@ function parse(argv: string[], home: string): Parsed | null {
   const prune: string[] = [];
   let notEmpty = false;
   let format: string | null = null;
+  let quit = false;
   let sawAction = false;
   /** The previous token was `-o`, so the next test joins the last group. */
   let orNext = false;
@@ -105,6 +108,10 @@ function parse(argv: string[], home: string): Parsed | null {
       continue;
     }
     if (a === "-a" || a === "-and") continue;
+    if (a === "-quit") {
+      quit = true;
+      continue;
+    }
     if (a === "-print" || a === "-print0") {
       sawAction = true;
       format ??= "%p\n";
@@ -183,6 +190,7 @@ function parse(argv: string[], home: string): Parsed | null {
     prune,
     notEmpty,
     format,
+    quit,
   };
 }
 
@@ -245,6 +253,7 @@ export function runFind(vfs: Vfs, argv: string[]): string | null {
       }
       if (!matches(p, full)) continue;
       out.push(expand(p.format, full));
+      if (p.quit) return out.join("");
     }
   }
   return out.join("");

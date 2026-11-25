@@ -118,4 +118,21 @@
 		// same process.
 		server.sendMsg("/d_recv", this.asBytes, completionMsg);
 	}
+
+	// E9-215 — `load` is the same hole by its front door. Upstream writes
+	// the def file and sends `/d_load` with its path, which scsynth cannot
+	// open, and says nothing: dronecaster built all thirty-seven drones,
+	// and the first `Synth` answered "SynthDef Apparatus not found".
+	// sampswap loads its defs the same way. The file is still written, as
+	// upstream does, and the def goes the way every other one goes.
+	load { arg server, completionMsg, dir(synthDefDir);
+		server = server ? Server.default;
+		if(metadata.trueAt(\shouldNotSend)) {
+			this.loadReconstructed(server, completionMsg);
+		} {
+			dir = dir ? synthDefDir;
+			this.writeDefFile(dir);
+			this.doSend(server, completionMsg);
+		};
+	}
 }

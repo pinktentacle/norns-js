@@ -37,6 +37,8 @@ export interface RegisterEngineOptions {
   readonly log?: (line: string) => void;
   /** Called the first time the boot gate fires, for the UI. */
   readonly onReady?: () => void;
+  /** A script asked for an engine by name (E9-222). */
+  readonly onLoadEngine?: (name: string) => void;
   /**
    * Loads sound files into scsynth's buffers. Without it, `Buffer.read`
    * answers "no loader" rather than hanging — see src/engine/buffers.ts for
@@ -50,6 +52,11 @@ export interface RegisterEngineOptions {
       frames: number,
       pick?: readonly number[],
     ): Promise<void>;
+  };
+  /** A sound file's samples into sclang, for `SoundFile.readData` (E9-251). */
+  readonly soundData?: {
+    serve(path: string, raw: string): Promise<void>;
+    release(raw: string): void;
   };
 }
 
@@ -214,6 +221,23 @@ export function registerEngine(
       return;
     }
 
+    // E9-251 — `SoundFile.readData` asked for a file's samples, or is done
+    // with them. See src/engine/sound-data.ts.
+    if (address === "/norns-js/soundfile/data") {
+      const path = String(args[0] ?? "");
+      const raw = String(args[1] ?? "");
+      if (opts.soundData === undefined) {
+        host.sendToLang("/norns-js/soundfile/ready", [raw, 0]);
+        return;
+      }
+      void opts.soundData.serve(path, raw);
+      return;
+    }
+    if (address === "/norns-js/soundfile/close") {
+      opts.soundData?.release(String(args[0] ?? ""));
+      return;
+    }
+
     if (address === "/norns-js/osc") {
       const port = Number(args[0] ?? 0);
       const path = String(args[1] ?? "");
@@ -317,6 +341,7 @@ export function registerEngine(
     loadingName = which;
     touchLoadWatchdog();
     toSclang("/engine/load/name", [which]);
+    opts.onLoadEngine?.(which);
   });
   registry.implement("free_engine", () => toSclang("/engine/free"));
   registry.implement("report_engines", () => toSclang("/report/engines"));

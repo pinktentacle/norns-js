@@ -82,6 +82,23 @@ const PLACEHOLDER_FILE = ".placeholders.json";
  */
 const REFERENCE_FILE = ".references.json";
 
+/**
+ * E9-216 — what the mirror deleted, and when, kept ON THE DISK.
+ *
+ * Every script folder on this machine lost all its files, presets
+ * included, and kept every directory — three times, and each time the log
+ * that might have said who did it went away with the page. A removal is
+ * the only thing the mirror does that cannot be undone, so the last few
+ * hundred are written here, with the session that made them. The next
+ * time files go missing this says whether this page deleted them, and
+ * which load of it, or whether something else did.
+ */
+const JOURNAL_FILE = ".removals.json";
+const JOURNAL_KEEP = 400;
+
+/** The sidecars, which live beside the tree and are not part of it. */
+const SIDECARS = new Set([TOMBSTONE_FILE, PLACEHOLDER_FILE, REFERENCE_FILE, JOURNAL_FILE]);
+
 function defaultRoot(): Promise<DirHandleLike> {
   const nav = globalThis.navigator as unknown as {
     storage?: { getDirectory?: () => Promise<DirHandleLike> };
@@ -101,6 +118,38 @@ async function dirFor(root: DirHandleLike, segments: string[]): Promise<DirHandl
   let at = root;
   for (const seg of segments) at = await at.getDirectoryHandle(seg, { create: true });
   return at;
+}
+
+/**
+ * E9-216 — the same walk, WITHOUT creating anything: null if a step is
+ * missing.
+ *
+ * The removal path used `dirFor`, so deleting a file whose folder had
+ * already gone made the folder again, empty, to delete nothing in it. A
+ * tree whose files have all been removed but whose every directory is
+ * still there is exactly what this machine's storage looked like.
+ * Something that is not there is already deleted; there is nothing to
+ * open.
+ */
+async function dirAt(root: DirHandleLike, segments: string[]): Promise<DirHandleLike | null> {
+  let at = root;
+  for (const seg of segments) {
+    try {
+      at = await at.getDirectoryHandle(seg);
+    } catch {
+      return null;
+    }
+  }
+  return at;
+}
+
+/** Does anything under this directory hold bytes? Empty folders do not. */
+async function holdsFiles(dir: DirHandleLike): Promise<boolean> {
+  for await (const [, h] of dir.entries()) {
+    if (isFileHandle(h)) return true;
+    if (await holdsFiles(h)) return true;
+  }
+  return false;
 }
 
 /**
@@ -137,7 +186,9 @@ async function pruneEmpty(
     if (stillADir("/" + segs.join("/"))) return;
     const name = segs[segs.length - 1]!;
     try {
-      const parent = await dirFor(root, segs.slice(0, -1));
+      // E9-216: found, not made — see `dirAt`.
+      const parent = await dirAt(root, segs.slice(0, -1));
+      if (parent === null) return;
       // NOT recursive: if anything is still in there, this throws and the
       // walk stops, which is the guard rather than a check that could race.
       await parent.removeEntry(name);
@@ -182,6 +233,11 @@ export interface OpfsRestore {
   readonly bytes: number;
   /** Empty `~/dust/code` folders dropped rather than restored (E9-65). */
   readonly ghosts: number;
+  /**
+   * Their paths, for the mirror to take off the disk once it runs
+   * (E9-216). Dropping one from the Vfs is not deleting it from storage.
+   */
+  readonly dropped: readonly string[];
 }
 
 /**
@@ -192,7 +248,7 @@ export interface OpfsRestore {
  */
 export async function restoreFromOpfs(vfs: Vfs, opts: OpfsOptions = {}): Promise<OpfsRestore> {
   const log = opts.log ?? (() => {});
-  const empty = { files: 0, tombstones: 0, placeholders: 0, references: 0, bytes: 0, ghosts: 0 };
+  const empty = { files: 0, tombstones: 0, placeholders: 0, references: 0, bytes: 0, ghosts: 0, dropped: [] };
   let root: DirHandleLike;
   try {
     root = await (opts.root ?? defaultRoot)();
@@ -208,12 +264,7 @@ export async function restoreFromOpfs(vfs: Vfs, opts: OpfsOptions = {}): Promise
 
   const walk = async (dir: DirHandleLike, prefix: string): Promise<void> => {
     for await (const [name, handle] of dir.entries()) {
-      if (
-        prefix === "" &&
-        (name === TOMBSTONE_FILE || name === PLACEHOLDER_FILE || name === REFERENCE_FILE)
-      ) {
-        continue;
-      }
+      if (prefix === "" && SIDECARS.has(name)) continue;
       const path = `${prefix}/${name}`;
       if (isFileHandle(handle)) {
         const { data, mtime } = await readWholeWithTime(handle);
@@ -312,8 +363,13 @@ export async function restoreFromOpfs(vfs: Vfs, opts: OpfsOptions = {}): Promise
    * instead of a folder.
    *
    * Dropped here rather than deleted from storage: the directory leaves
-   * the Vfs, so the next flush's own prune takes it out of OPFS because
-   * nothing claims it any more.
+   * the Vfs, and the paths go back to the caller.
+   *
+   * E9-216 — AND THE CALLER HANDS THEM TO THE MIRROR. This used to say
+   * "the next flush's own prune takes it out of OPFS because nothing
+   * claims it any more", and nothing ever did: the prune only runs for a
+   * removal under that folder, and the mirror does not exist yet. The
+   * same five folders were "dropped" on every boot of this machine.
    */
   const CODE = "/home/we/dust/code";
   const ghosts = vfs
@@ -336,7 +392,15 @@ export async function restoreFromOpfs(vfs: Vfs, opts: OpfsOptions = {}): Promise
         (ghosts.length > 6 ? ", …" : ""),
     );
   }
-  return { files, tombstones, placeholders, references, bytes, ghosts: ghosts.length };
+  return {
+    files,
+    tombstones,
+    placeholders,
+    references,
+    bytes,
+    ghosts: ghosts.length,
+    dropped: ghosts.map((name) => `${CODE}/${name}`),
+  };
 }
 
 /**
@@ -369,7 +433,25 @@ export interface OpfsMirror {
   /** Everything written so far has reached OPFS. For tests and for a quit. */
   flush(): Promise<void>;
   stop(): void;
-  readonly stats: { writes: number; removes: number; errors: number };
+  /**
+   * E9-216 — paths that changed while nothing was watching, saved now.
+   *
+   * The boot tidies the tree before the mirror exists — the folders the
+   * restore drops, the interrupted downloads it sweeps — and a change no
+   * watcher saw never reached the disk. "swept 11 interrupted downloads"
+   * was in every log off the Pixel for exactly that reason: the same
+   * eleven, swept from memory on every boot and never from storage.
+   */
+  touch(paths: Iterable<string>): void;
+  readonly stats: { writes: number; removes: number; errors: number; kept: number };
+}
+
+/** One line of the removal journal. `kept` marks a folder NOT removed. */
+interface JournalEntry {
+  readonly t: string;
+  readonly p: string;
+  readonly s: string;
+  readonly kept?: true;
 }
 
 /**
@@ -380,12 +462,23 @@ export interface OpfsMirror {
  * hundred OPFS transactions. One flush runs at a time, so two overlapping
  * bursts cannot interleave halfway through a file.
  */
-export function mirrorToOpfs(vfs: Vfs, opts: OpfsOptions = {}): OpfsMirror {
+export function mirrorToOpfs(
+  vfs: Vfs,
+  opts: OpfsOptions & {
+    /** Which load of the page this is, written beside each removal. */
+    readonly session?: string;
+  } = {},
+): OpfsMirror {
   const log = opts.log ?? (() => {});
   const debounce = opts.debounceMs ?? 150;
-  const stats = { writes: 0, removes: 0, errors: 0 };
+  const session = opts.session ?? new Date().toISOString();
+  const stats = { writes: 0, removes: 0, errors: 0, kept: 0 };
   /** A sample of what the last flush deleted, for the line it prints. */
   let removedPaths: string[] = [];
+  /** And how many, which the sample used to stand in for: "8" meant "8 or more". */
+  let removedCount = 0;
+  let keptPaths: string[] = [];
+  let journal: JournalEntry[] = [];
   const pending = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running: Promise<void> = Promise.resolve();
@@ -402,14 +495,31 @@ export function mirrorToOpfs(vfs: Vfs, opts: OpfsOptions = {}): OpfsMirror {
     }
   })();
 
+  const removed = (path: string): void => {
+    stats.removes++;
+    removedCount++;
+    // E9-65 — SAY HOW MANY, at the end of the flush rather than one line
+    // per file: the whole dust tree went missing twice in one session with
+    // nothing in the log to say what took it, and a mirror that deletes in
+    // silence is a mirror you cannot trust.
+    if (removedPaths.length < 8) removedPaths.push(path);
+    journal.push({ t: new Date().toISOString(), p: path, s: session });
+  };
+
   async function flushNow(): Promise<void> {
     if (pending.size === 0) return;
     const batch = [...pending];
     pending.clear();
     const root = await rootOnce;
     if (root === null) return;
+    /** Folders the Vfs no longer has, decided once their files are gone. */
+    const folders: string[] = [];
 
     for (const path of batch) {
+      // E9-216 — STOPPED MEANS NOW, not after the batch: a tab that has
+      // handed the store to another must not go on writing into it from a
+      // picture that is no longer the store's.
+      if (stopped) return;
       try {
         const segs = parts(path);
         const name = segs.pop();
@@ -434,17 +544,26 @@ export function mirrorToOpfs(vfs: Vfs, opts: OpfsOptions = {}): OpfsMirror {
           // is kept in the sidecar instead, with the tombstones and the
           // empty directories.
         } else {
-          const dir = await dirFor(root, segs);
-          await dir.removeEntry(name, { recursive: true }).catch(() => {
-            /* already gone, which is the state we wanted */
-          });
-          stats.removes++;
-          // E9-65 — SAY HOW MANY, at the end of the flush rather than one
-          // line per file: the whole dust tree went missing twice in one
-          // session with nothing in the log to say what took it, and a
-          // mirror that deletes in silence is a mirror you cannot trust.
-          // The paths go into `removedPaths`, which the summary samples.
-          if (removedPaths.length < 8) removedPaths.push(path);
+          // A REMOVAL. E9-216: found rather than made (`dirAt`), and never
+          // recursive here. A folder waits until the end of the batch: its
+          // own files are in this batch too, usually AFTER it, because a
+          // path keeps the place it first took in `pending` and a folder
+          // is often mkdir'd before anything is written into it.
+          const dir = await dirAt(root, segs);
+          if (dir === null) continue; // its folder is gone, so it is too
+          const isFolder = await dir.getDirectoryHandle(name).then(
+            () => true,
+            () => false,
+          );
+          if (isFolder) {
+            folders.push(path);
+            continue;
+          }
+          const gone = await dir.removeEntry(name).then(
+            () => true,
+            () => false, // already gone, which is the state we wanted
+          );
+          if (gone) removed(path);
           await pruneEmpty(root, segs, (d) => vfs.isDir(d));
         }
       } catch (e) {
@@ -456,24 +575,89 @@ export function mirrorToOpfs(vfs: Vfs, opts: OpfsOptions = {}): OpfsMirror {
       }
     }
 
-    // The two sidecars are rewritten whole: they are short, and a diff of a
+    /**
+     * E9-216 — A FOLDER GOES ONLY WITH WHAT THIS PAGE KNEW WAS IN IT.
+     *
+     * The removal was `removeEntry(name, { recursive: true })`: everything
+     * under the path, whether this page had ever heard of it or not. Every
+     * caller removes a folder's files one by one first, so what a
+     * recursive delete adds is exactly the files the Vfs did NOT have — a
+     * second tab's install, or a restore that stopped half way. Those are
+     * the ones that must not go. So: deepest first, after the files; empty
+     * subfolders are taken with it, and a folder that still holds a file
+     * is kept, counted, and written in the journal.
+     */
+    folders.sort((a, b) => b.length - a.length);
+    for (const path of folders) {
+      if (stopped) return;
+      try {
+        if (vfs.isDir(path) || vfs.hasOverlay(path)) continue; // back since
+        const segs = parts(path);
+        const name = segs.pop()!;
+        const parent = await dirAt(root, segs);
+        if (parent === null) continue;
+        const handle = await parent.getDirectoryHandle(name).catch(() => null);
+        if (handle === null) continue;
+        if (await holdsFiles(handle)) {
+          stats.kept++;
+          if (keptPaths.length < 8) keptPaths.push(path);
+          journal.push({ t: new Date().toISOString(), p: path, s: session, kept: true });
+          continue;
+        }
+        await parent.removeEntry(name, { recursive: true });
+        removed(path);
+        await pruneEmpty(root, segs, (d) => vfs.isDir(d));
+      } catch (e) {
+        stats.errors++;
+        if (!announced) {
+          announced = true;
+          log(`opfs: could not remove ${path} — ${(e as Error).message}. Further errors are counted.`);
+        }
+      }
+    }
+
+    // The sidecars are rewritten whole: they are short, and a diff of a
     // tombstone list is more code than the list.
     try {
       const enc = new TextEncoder();
       await writeWhole(root, TOMBSTONE_FILE, enc.encode(JSON.stringify(vfs.tombstones())));
       await writeWhole(root, PLACEHOLDER_FILE, enc.encode(JSON.stringify(vfs.placeholders())));
       await writeWhole(root, REFERENCE_FILE, enc.encode(JSON.stringify(vfs.references())));
+      if (journal.length > 0) {
+        // Appended to what is on disk, so the journal outlives the page
+        // that wrote it. Read here rather than at start: a removal is
+        // rare, and a page that never removes anything never reads it.
+        let old: JournalEntry[] = [];
+        try {
+          const h = await root.getFileHandle(JOURNAL_FILE);
+          const v: unknown = JSON.parse(new TextDecoder().decode(await readWhole(h)));
+          if (Array.isArray(v)) old = v as JournalEntry[];
+        } catch {
+          /* the first removal this origin has made */
+        }
+        const all = old.concat(journal).slice(-JOURNAL_KEEP);
+        journal = [];
+        await writeWhole(root, JOURNAL_FILE, enc.encode(JSON.stringify(all)));
+      }
       // E9-65 — what this flush deleted, once, with examples. A removal is
       // the only thing the mirror does that cannot be undone, and it is
       // the one thing it used to do without a word.
-      if (removedPaths.length > 0) {
-        const n = removedPaths.length;
+      if (removedCount > 0) {
+        const n = removedCount;
         log(
           `opfs: removed ${n} path${n === 1 ? "" : "s"} — ` +
             removedPaths.slice(0, 4).join(", ") +
             (n > 4 ? ", …" : ""),
         );
         removedPaths = [];
+        removedCount = 0;
+      }
+      if (keptPaths.length > 0) {
+        log(
+          `opfs: kept ${keptPaths.length} folder(s) holding files this page did not know of — ` +
+            keptPaths.slice(0, 4).join(", "),
+        );
+        keptPaths = [];
       }
     } catch (e) {
       stats.errors++;
@@ -513,6 +697,15 @@ export function mirrorToOpfs(vfs: Vfs, opts: OpfsOptions = {}): OpfsMirror {
       stopped = true;
       unwatch();
       if (timer !== undefined) clearTimeout(timer);
+    },
+    touch(paths) {
+      if (stopped) return;
+      let any = false;
+      for (const p of paths) {
+        pending.add(p);
+        any = true;
+      }
+      if (any) schedule();
     },
     stats,
   };

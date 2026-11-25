@@ -18,6 +18,7 @@
 // is the sclang half.
 
 import type { Vfs } from "../fs/vfs.js";
+import { stagedToDust } from "./dust-path.js";
 
 export interface BufferLoaderOptions {
   readonly vfs: Vfs;
@@ -69,7 +70,7 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
    */
   async function read(
     bufnum: number,
-    path: string,
+    asked: string,
     startFrame: number,
     numFrames: number,
     /**
@@ -82,6 +83,9 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
      */
     pick?: readonly number[],
   ): Promise<void> {
+    // E9-220 — a sample beside a script's class, asked for by the path of
+    // the staged copy the class was compiled from. See `dust-path.ts`.
+    const path = stagedToDust(asked);
     const fail = (why: string): void => {
       log(`buffer ${bufnum}: ${path}: ${why}`);
       opts.sendToLang("/norns-js/buffer/done", [bufnum, 0, 0, 0]);

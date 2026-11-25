@@ -6,7 +6,8 @@
 import { installCapture, captured, uncapturedAudioContext } from "./capture.js";
 import { timed } from "../norns/call-cost.js";
 import { decode, encodeMessage } from "./osc.js";
-import { routeLangPacket } from "./lang-route.js";
+import { onlyDefsAndSync, routeLangPacket } from "./lang-route.js";
+import { defLoadOf, mirrorDefs } from "./def-files.js";
 import { loadClassLibrary } from "./classlib-loader.js";
 import { serialiseSend } from "./reentry.js";
 
@@ -58,6 +59,11 @@ export interface EngineHostOptions {
    * NornsJsSoundFileOverride.sc.
    */
   readonly soundFiles?: ReadonlyMap<string, { frames: number; channels: number; sampleRate: number }>;
+  /**
+   * E9-219 — the server has stopped completing `/d_recv`. Said once; the
+   * page tells the user and offers a restart (see `liveness.ts`).
+   */
+  readonly onDead?: (why: string) => void;
 }
 
 export interface EngineHost {
@@ -103,6 +109,12 @@ export interface EngineHost {
   sawLine(s: string): boolean;
   until(pred: () => boolean, ms: number, what: string): Promise<boolean>;
   injectNorns(): Promise<number>;
+  /**
+   * E9-234 — the sound-file table again, after `soundFiles` changed: a WAV
+   * written or removed during the session. sclang re-reads it when the
+   * generation in `/sc/soundfiles.gen` moves on.
+   */
+  soundFilesChanged(): void;
   bootSclang(): Promise<boolean>;
   bootServerFromSclang(): Promise<{ ready: boolean; ctx: AudioContext | null }>;
   sendToServer(address: string, args?: readonly OscArg[]): void;
@@ -148,6 +160,9 @@ export interface EngineHost {
    */
   sendToLang(address: string, args?: readonly OscArg[]): void;
   runCode(code: string): void;
+  /** E9-251 — a file in SCLANG's filesystem (a sound file's samples for `readData`). */
+  writeLangFile(path: string, bytes: Uint8Array): void;
+  removeLangFile(path: string): void;
   readonly context: AudioContext | null;
 }
 
@@ -335,7 +350,28 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   // script loads. At 16 MB it aborted with OOM once sc3-plugins was
   // compiled in, and was already producing an intermittent
   // `Uncaught <address>` from the worklet thread before that.
-  const scsynth: ScModule = await ScSynth({ locateFile: (p: string) => `${scsynthUrl}/${p}` });
+  //
+  // E9-223 — NOW 512 MB, AND THE OLD 128 MB SERVER IS THE FALLBACK. 128 MB
+  // was not enough for eastwind (two 300 s stereo buffers, ~230 MB) and
+  // filled up over a session of ordinary scripts; scsynth then aborted and
+  // every later script was silent. 512 MB is reserved up front, and a
+  // device that will not give it — an old phone, a 32-bit browser — would
+  // otherwise get no server at all, which would be worse than before. So
+  // the refusal is caught and the 128 MB build, kept beside it, is loaded
+  // instead, and the log says which one is running.
+  let scsynth: ScModule;
+  try {
+    scsynth = await ScSynth({ locateFile: (p: string) => `${scsynthUrl}/${p}` });
+  } catch (err) {
+    const small = `${scsynthUrl}-small`;
+    log(
+      `scsynth: this device would not reserve the audio server's 512 MB ` +
+        `(${(err as Error)?.message ?? String(err)}) — using the 128 MB server; ` +
+        `large sample sets and long buffers may not fit in it`,
+    );
+    const { default: ScSynthSmall } = await import(/* @vite-ignore */ `${small}/scsynth.js`);
+    scsynth = await ScSynthSmall({ locateFile: (p: string) => `${small}/${p}` });
+  }
   // E9-212 — before anything can send. A second `sendOsc` started while
   // one is inside the server deadlocks the main thread; see reentry.ts.
   const serverSend = serialiseSend<Uint8Array>(scsynth.sendOsc.bind(scsynth));
@@ -501,19 +537,27 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   // comes. The queue is FIFO, so the order sclang sent in is the order the
   // server sees — all the UDP socket on hardware was ever giving us.
   //
-  // `/sync` IS EXEMPT, and that exemption is the whole difficulty. Its
-  // purpose is to answer from behind the server's queue, so holding it
-  // means `server.sync` waits for a reply to a message that is waiting on
-  // it: `Engine_MGlut` stopped dead at `context.server.sync` with both
-  // deadlines expiring. Letting it past costs nothing — it is a question,
-  // not a command, and the answer still comes after the work.
+  // `/sync` WAITS ITS TURN TOO (E9-246). It used to be let past, on the
+  // reasoning that it is a question and the answer comes after the work.
+  // It does not: the server can only answer after the work it HAS, and the
+  // work still held here had not been sent. So `server.sync` returned before
+  // its own SynthDefs left the page, and a bundle carrying a `/sync` went
+  // out ahead of everything queued — with whatever else was in it. Loading
+  // carter's delay just after boot showed both: its 48 Ndef bundles
+  // ([def, /g_new in group 1, /sync]) reached the server before the boot's
+  // own `/g_new 1 0 0`, still queued behind the CroneDefs, and failed
+  // "Group 1 not found"; then its `Synth(\mic)` beat `\mic`. The exemption
+  // was added when `server.sync` hung for another reason (its reply was
+  // filtered by a source address the wasm build does not have, fixed in
+  // the same commit, NornsJsSyncOverride). A held `/sync` is released with
+  // the def ahead of it, or by the deadline below; it cannot wait on itself.
   //
   // IT IS A COUNT, NOT A FLAG, and that distinction is worth 108 seconds.
   //
   // A flag assumes at most one `/d_recv` can be in flight, which the barrier
-  // itself normally guarantees -- except for the `/sync` exemption above. A
+  // itself normally guarantees -- except for what goes out unheld. A
   // bundle carrying several defs AND a `/sync` (which is exactly what
-  // `Server.sync` sends) goes straight through unheld, and scsynth answers
+  // `Server.sync` sends) once went straight through, and scsynth answers
   // each def with its own `/done /d_recv`. The flag was cleared by the
   // first, so the rest arrived to a barrier that was already down and were
   // dropped -- and the NEXT def then waited the full two seconds for an
@@ -579,7 +623,7 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   let consecutiveTimeouts = 0;
   let sentAt = 0;
   let outstanding = 0;
-  const held: Array<{ bytes: Uint8Array; defs: number }> = [];
+  const held: Array<{ bytes: Uint8Array; defs: number; async: boolean }> = [];
   let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 
   const disarm = (): void => {
@@ -610,6 +654,7 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
       // performance problem and is not one.
       if (consecutiveTimeouts === DEAD_AFTER) {
         transport.dead = true;
+        opts.onDead?.("it stopped completing /d_recv, so no SynthDef can load");
         log(
           "engine: the server has stopped completing /d_recv. SynthDefs will " +
             "not load, polls will not report and nothing will sound. This is " +
@@ -643,7 +688,7 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
    * and still wrong.
    */
   const pump = (): void => {
-    while (outstanding === 0 && held.length > 0) forward(held.shift()!);
+    while (held.length > 0 && (outstanding === 0 || held[0]!.async)) forward(held.shift()!);
   };
 
   /**
@@ -672,6 +717,17 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   sclang.onOsc = (bytes: Uint8Array) => timed("osc:from-lang", () => onLangOsc(bytes));
 
   const onLangOsc = (bytes: Uint8Array): void => {
+    // E9-247 — a SynthDef file the server is asked to load was written by
+    // sclang, into sclang's filesystem: it goes across first. See def-files.ts.
+    const load = defLoadOf(bytes);
+    if (load !== null && sclang.FS && scsynth.FS) {
+      try {
+        const n = mirrorDefs(sclang.FS, scsynth.FS, load);
+        if (n > 0) log(`engine: ${n} SynthDef file(s) under ${load.path} handed to the server`);
+      } catch (e) {
+        log(`engine: could not hand ${load.path} to the server: ${(e as Error).message}`);
+      }
+    }
     // E9-199 — read, not decoded, unless it is one of the few packets
     // whose contents decide something. See `lang-route.ts`.
     const route = routeLangPacket(bytes);
@@ -679,9 +735,17 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
       opts.onMatron?.(route.matron);
       return;
     }
-    // `/sync` is never held; see above.
-    if (outstanding > 0 && !route.hasSync) {
-      held.push({ bytes, defs: route.defs });
+    // E9-246 — `/sync` WAITS ITS TURN like everything else; see above.
+    if (outstanding > 0 || held.length > 0) {
+      // Defs and syncs go on into the server's own queue, which keeps their
+      // order; only what acts at once waits for them (E9-246). Behind
+      // anything already held, everything waits, so nothing is reordered.
+      const async = onlyDefsAndSync(bytes);
+      if (held.length === 0 && async) {
+        forward({ bytes, defs: route.defs });
+        return;
+      }
+      held.push({ bytes, defs: route.defs, async });
       return;
     }
     forward({ bytes, defs: route.defs });
@@ -1020,6 +1084,7 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
    * Tab-separated rather than JSON for the same reason as the UGen list:
    * sclang has no JSON parser and `split` is the whole reader.
    */
+  let soundFileGen = 0;
   function writeSoundFileTable(): number {
     const FS = sclang.FS;
     const files = opts.soundFiles;
@@ -1030,7 +1095,10 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     }
     try {
       FS.writeFile("/sc/soundfiles.txt", lines.join("\n"));
-      log(`sound files: ${lines.length} described for SoundFile.openRead`);
+      // The generation LAST, so a reader that sees it move finds the table
+      // it belongs to.
+      FS.writeFile("/sc/soundfiles.gen", String(++soundFileGen));
+      if (soundFileGen === 1) log(`sound files: ${lines.length} described for SoundFile.openRead`);
       return lines.length;
     } catch (e) {
       log(`soundfiles.txt: ${(e as Error).message}`);
@@ -1126,6 +1194,22 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
       mkdirp(path.slice(0, path.lastIndexOf("/")));
       FS.writeFile(path, body);
       n++;
+    }
+    // E9-215 — AND WHERE THE SCRIPT THINKS THEY ARE. A class can name its
+    // own files by their path on the device rather than relative to itself:
+    // dronecaster compiles every drone from
+    //
+    //     PathName("/home/we/dust/code/dronecaster/engine/drones").entries
+    //
+    // and sclang had no `/home/we/dust` at all, so the listing was empty,
+    // not one drone was built, and every `start` said "dronecaster does not
+    // know this drone" — no sound, and no error. The staged copy is linked
+    // there; nothing is written twice.
+    mkdirp("/home/we/dust");
+    try {
+      FS.symlink("/sc/SCClassLibrary/dust", "/home/we/dust/code");
+    } catch {
+      /* already linked: a second injection into the same module */
     }
     return n;
   }
@@ -1370,6 +1454,7 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     sawLine,
     until,
     injectNorns,
+    soundFilesChanged: () => void writeSoundFileTable(),
     bootSclang,
     bootServerFromSclang,
     transport,
@@ -1413,6 +1498,12 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
     sendToLang: (address, args = []) =>
       timed("osc:to-lang", () => sclang.sendOsc(encodeMessage(address, args))),
     runCode: (code: string) => sclang.runCode(code),
+    writeLangFile: (path: string, bytes: Uint8Array) => {
+      const dir = path.slice(0, path.lastIndexOf("/"));
+      if (dir !== "") sclang.FS.mkdirTree(dir);
+      sclang.FS.writeFile(path, bytes);
+    },
+    removeLangFile: (path: string) => sclang.FS.unlink(path),
     get context() {
       return captured.ctxs[0] ?? null;
     },

@@ -150,6 +150,45 @@ export interface CroneRegisterOptions {
   };
 }
 
+/**
+ * E9-233 — WHERE MATRON SUBTRACTS ONE, and which argument.
+ *
+ * Lua counts softcut's voices 1..6 and its buffers 1..2; crone counts them
+ * from 0. matron is the only translator between the two: `weaver.cc` takes
+ * one off each voice and buffer index as it reads it (`luaL_checkinteger(l,
+ * 2) - 1`), and crone's events come back 0-based for it to add the one again
+ * (`w_handle_poll_softcut_phase` pushes `idx + 1`, as callbacks.ts does here).
+ *
+ * This port added the one on the way back and never took it off on the way
+ * in. So Lua's voice 1 drove crone's SECOND voice and reported itself as
+ * voice 2; voice 6 fell off the end onto voice 5; buffers 1 and 2 were the
+ * same buffer. Most scripts sounded right, because a consistent shift is
+ * invisible — until one tracked its voice positions (piwip never saw voice 1
+ * move and stayed silent), recorded left and right into the two buffers, or
+ * used all six voices.
+ *
+ * Copied from weaver.cc, function by function: the 0-based position of each
+ * argument matron takes one off (note `cut_param_ii`, which treats its value
+ * as an index too: `softcut.buffer(voice, buffer)`).
+ */
+export const ONE_BASED: Readonly<Record<string, readonly number[]>> = {
+  cut_enable: [0],
+  level_cut: [0],
+  level_cut_cut: [0, 1],
+  pan_cut: [0],
+  level_input_cut: [0, 1],
+  cut_param: [1],
+  cut_param_ii: [1, 2],
+  cut_param_iif: [1, 2],
+  cut_buffer_clear_channel: [0],
+  cut_buffer_clear_region_channel: [0],
+  cut_buffer_copy_mono: [0, 1],
+  cut_buffer_read_mono: [4, 5],
+  cut_buffer_write_mono: [3],
+  cut_buffer_render: [0],
+  cut_query_position: [0],
+};
+
 export function registerCrone(
   registry: NornsRegistry,
   crone: Crone,
@@ -512,6 +551,13 @@ export function registerCrone(
   registry.implement("tape_loop", (l) => crone.call("cronejs_tape_play_loop", [N], [Number(l)]));
   registry.implement("tape_pause", () => crone.call("cronejs_tape_pause", [], []));
   registry.implement("tape_resume", () => crone.call("cronejs_tape_resume", [], []));
+
+  // E9-233 — last, so it wraps whatever each name was given above.
+  for (const [name, positions] of Object.entries(ONE_BASED)) {
+    const fn = registry.implementationFor(name);
+    if (fn === undefined) continue;
+    registry.implement(name, (...args) => fn(...args.map((a, i) => (positions.includes(i) ? Number(a) - 1 : a))));
+  }
 }
 
 /**

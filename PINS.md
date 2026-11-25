@@ -182,11 +182,14 @@ git -C third_party/softcut-lib apply ../../patches/softcut-lib.patch
 
 ### `supercollider`
 
-Base `0c5a96d701be`, 6 file(s) changed:
+Base `0c5a96d701be`, 9 file(s) changed:
 
 - `lang/CMakeLists.txt`
 - `platform/wasm/CMakeLists.txt`
+- `platform/wasm/sclang.pre.js`
 - `server/plugins/CMakeLists.txt`
+- `server/plugins/FFT2InterfaceTable.cpp`
+- `server/plugins/ML.cpp`
 - `server/plugins/SC_StaticPlugins.h`
 - `server/scsynth/CMakeLists.txt`
 - `server/scsynth/SC_WebAudio.cpp`

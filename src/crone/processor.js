@@ -120,6 +120,9 @@ class CroneProcessor extends AudioWorkletProcessor {
       extR: f32(M._crone_ext_right(), N),
       dacL: f32(M._crone_dac_left(), N),
       dacR: f32(M._crone_dac_right(), N),
+      // E9-222 — the ADC on its way to the engine; see worklet.cpp.
+      auxL: f32(M._crone_aux_left(), N),
+      auxR: f32(M._crone_aux_right(), N),
     };
     this.events = f32(M._crone_events_buffer(), M._crone_events_capacity() * SLOTS);
     // The tape's staging buffer, shared by both directions. Taken once for
@@ -345,6 +348,14 @@ class CroneProcessor extends AudioWorkletProcessor {
     if (out) {
       out[0].set(b.dacL.subarray(0, n));
       if (out[1]) out[1].set(b.dacR.subarray(0, n));
+    }
+    // OUTPUT 1 IS SUPERCOLLIDER'S INPUT (E9-222): the ADC, after
+    // `level_adc`, as upstream sends it over JACK. `main.ts` connects it to
+    // scsynth through one quantum of delay, which a cycle needs.
+    const toEngine = outputs[1];
+    if (toEngine && toEngine[0]) {
+      toEngine[0].set(b.auxL.subarray(0, n));
+      if (toEngine[1]) toEngine[1].set(b.auxR.subarray(0, n));
     }
 
     this.drain();

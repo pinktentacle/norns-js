@@ -236,7 +236,13 @@ const VOICES = {
   "808-HC": () => norm(mix(drop(220, 420, 405, 20, 30), burst(10, 300, 19, 2000, 7000))),
 };
 
-/** What the folder says about itself, for anybody who opens it. */
+/**
+ * What the folder says about itself, for anybody who opens it — from BESIDE
+ * it (E9-230): `audio/common/.808-README.txt`. In the folder, even dotted,
+ * `bakeneko` found it: it lists with `ls -a`, which is asking for dotfiles,
+ * and a real norns' 808 folder holds nothing but the sounds.
+ */
+export const KIT_README_PATH = "/home/we/dust/audio/common/.808-README.txt";
 export const KIT_README =
   "This is NOT the Roland TR-808 sample set.\n" +
   "\n" +
@@ -251,16 +257,14 @@ export const KIT_README =
   "the real thing, drop your own files in here; nothing depends on these\n" +
   "bytes, only on the names.\n" +
   "\n" +
-  "This file is dotted so that the scripts described above do not find it.\n" +
-  "An earlier version was called README.txt, bakeneko duly picked it at\n" +
-  "random, and SuperCollider spent forty lines explaining that a text file\n" +
-  "is not a sound.\n";
+  "This note sits BESIDE the 808 folder, not in it: bakeneko lists that\n" +
+  "folder with `ls -a` and picks any file at random, and SuperCollider then\n" +
+  "spent forty lines explaining that a text file is not a sound.\n";
 
 /** The kit, as a map of filename to bytes. Deterministic. */
 export function kit808() {
   const out = new Map();
   for (const [name, make] of Object.entries(VOICES)) out.set(`${name}.wav`, wav(make()));
-  out.set(".README.txt", Buffer.from(KIT_README, "utf8"));
   return out;
 }
 

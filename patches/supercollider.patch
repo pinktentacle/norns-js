@@ -1,5 +1,5 @@
 diff --git a/lang/CMakeLists.txt b/lang/CMakeLists.txt
-index 94bdec763320977e420105bf2000076a925f02be..958638521e647859a4628329d1fe11a8bc6fbe26 100644
+index 94bdec763320977e420105bf2000076a925f02be..81abaeb58d97618b8944821423b6cc150440fc27 100644
 --- a/lang/CMakeLists.txt
 +++ b/lang/CMakeLists.txt
 @@ -400,6 +400,23 @@ elseif(EMSCRIPTEN)
@@ -26,7 +26,7 @@ index 94bdec763320977e420105bf2000076a925f02be..958638521e647859a4628329d1fe11a8
      set_target_properties(sclang PROPERTIES LINK_FLAGS "\
          -sAUDIO_WORKLET \
          --bind \
-@@ -415,7 +432,7 @@ elseif(EMSCRIPTEN)
+@@ -415,11 +432,24 @@ elseif(EMSCRIPTEN)
          -sMODULARIZE=1 \
          -sEXPORTED_FUNCTIONS=['_webOscBindingAnchor','_main','_free','_scWasmBindingAnchor'] \
          -sPTHREAD_POOL_SIZE=${PTHREAD_POOL_SIZE} \
@@ -35,6 +35,23 @@ index 94bdec763320977e420105bf2000076a925f02be..958638521e647859a4628329d1fe11a8
          -sSTACK_SIZE=1048576 \
          -sDEFAULT_PTHREAD_STACK_SIZE=1048576 \
          -sENVIRONMENT=web,worker,node \
+     ")
++    # norns-js E9-250: a primitive that throws is a failed primitive, as
++    # upstream's `doPrimitive` makes it with its try/catch -- not the end of
++    # sclang. Without landing pads that catch was dropped and the throw
++    # aborted the whole interpreter: `File.mtime` of a missing file took
++    # every engine of the session with it. Only this file gets them, so the
++    # cost is one trampoline per primitive call (below); `-fexceptions` at
++    # link brings in the libc++abi that can catch.
++    # Not -fwasm-exceptions, which would cost nothing until a throw: it
++    # needs wasm setjmp/longjmp, and the interpreter (PyrInterpreter3,
++    # PyrMessage) is built with emscripten's; the link fails. Measured cost
++    # of this way: 0.146 -> 0.162 s on a loop of 500 000 primitive calls.
++    set_source_files_properties(LangPrimSource/PyrPrimitive.cpp PROPERTIES COMPILE_OPTIONS -fexceptions)
++    set_property(TARGET sclang APPEND_STRING PROPERTY LINK_FLAGS " -fexceptions")
+     if(WASM_DEBUG)
+         target_compile_options(libsclang PUBLIC -pthread -g)
+         target_compile_options(sclang PRIVATE -pthread -g)
 diff --git a/platform/wasm/CMakeLists.txt b/platform/wasm/CMakeLists.txt
 index c34a2c300978f6c865489407fa0ce956fda06dc3..e298c41c3063eef41f31c2b79fca7aafe5676ebd 100644
 --- a/platform/wasm/CMakeLists.txt
@@ -53,6 +70,23 @@ index c34a2c300978f6c865489407fa0ce956fda06dc3..e298c41c3063eef41f31c2b79fca7aaf
  add_custom_command(TARGET webeditor POST_BUILD
      COMMAND ${CMAKE_COMMAND} -E make_directory ${EDITOR_WASM_OUTPUT}
      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+diff --git a/platform/wasm/sclang.pre.js b/platform/wasm/sclang.pre.js
+index 27f33034ba79865d3ff513011c8599ab3eb2fa94..20872d5331e463f4514a522f861c6c1e44bdf8e9 100644
+--- a/platform/wasm/sclang.pre.js
++++ b/platform/wasm/sclang.pre.js
+@@ -49,3 +49,12 @@ Module['onIdeSend'] = function(message) {}
+ Module['onOsc'] = function(message){
+     console.log("New OSC message from sclang", message);
+ }
++
++// norns-js E9-249: HOME is /home/we, as on a norns. Emscripten's default is
++// /home/web_user, so `Platform.userHomeDir`, "~" and the Extensions folder
++// all pointed somewhere no norns script expects (grains keeps its SynthDef
++// cache under `Platform.userHomeDir ++ "/dust/data/grains/defs/"`). Set
++// before `main`, which is when SC_Filesystem first reads it.
++Module['preRun'] = [].concat(Module['preRun'] || [], function() {
++    ENV['HOME'] = '/home/we';
++});
 diff --git a/server/plugins/CMakeLists.txt b/server/plugins/CMakeLists.txt
 index e54fed7713d40ecd17e094383baa67b8c1bde745..6822177fbd2209af50f5cfa170dfe928416d8f6d 100644
 --- a/server/plugins/CMakeLists.txt
@@ -826,11 +860,51 @@ index e54fed7713d40ecd17e094383baa67b8c1bde745..6822177fbd2209af50f5cfa170dfe928
  # BelaUGens
  
  if(AUDIOAPI STREQUAL bela)
+diff --git a/server/plugins/FFT2InterfaceTable.cpp b/server/plugins/FFT2InterfaceTable.cpp
+index 5d704dc1454f4fe5a99962477c98a4f7f6f5e037..68d7ffbfc91c0a7cce9795c1add100ebbdfcd05c 100644
+--- a/server/plugins/FFT2InterfaceTable.cpp
++++ b/server/plugins/FFT2InterfaceTable.cpp
+@@ -22,7 +22,15 @@
+ 
+ #include "FFT_UGens.h"
+ 
++#ifdef STATIC_PLUGINS
++// norns-js E9-242: ONE `ft` for the FFT, PV_ThirdParty and ML groups when they
++// are linked into one binary. Each defined its own, which is a duplicate
++// symbol in a static build; all of them are assigned the same interface
++// table, so the one in FFTInterfaceTable.cpp serves them all.
++extern InterfaceTable* ft;
++#else
+ InterfaceTable* ft;
++#endif
+ 
+ // these are defined in the relevant files
+ extern void initConvolution(InterfaceTable*);
+diff --git a/server/plugins/ML.cpp b/server/plugins/ML.cpp
+index e07fe78c9dace7ab599b4cd01205990987fcd043..1d15fd637c99048b84977c505e067e1e7e67a387 100644
+--- a/server/plugins/ML.cpp
++++ b/server/plugins/ML.cpp
+@@ -23,7 +23,15 @@
+ #include "ML.h"
+ #include "FFT_UGens.h"
+ 
++#ifdef STATIC_PLUGINS
++// norns-js E9-242: ONE `ft` for the FFT, PV_ThirdParty and ML groups when they
++// are linked into one binary. Each defined its own, which is a duplicate
++// symbol in a static build; all of them are assigned the same interface
++// table, so the one in FFTInterfaceTable.cpp serves them all.
++extern InterfaceTable* ft;
++#else
+ InterfaceTable* ft;
++#endif
+ 
+ PluginLoad(ML_UGens) {
+     ft = inTable;
 diff --git a/server/plugins/SC_StaticPlugins.h b/server/plugins/SC_StaticPlugins.h
-index abaaa78fffc6c0a48e6a0993b98ae9b523afd00c..ed93335b4a8328d4198d63caa26eedd14d7871f0 100644
+index abaaa78fffc6c0a48e6a0993b98ae9b523afd00c..7ba0d7e3164f38fb37ebafb0e5b3f56a6e1b37ef 100644
 --- a/server/plugins/SC_StaticPlugins.h
 +++ b/server/plugins/SC_StaticPlugins.h
-@@ -52,9 +52,223 @@ void Test_Load(InterfaceTable* table);
+@@ -52,9 +52,230 @@ void Test_Load(InterfaceTable* table);
  void PhysicalModeling_Load(InterfaceTable* table);
  void Demand_Load(InterfaceTable* table);
  void DynNoise_Load(InterfaceTable* table);
@@ -847,6 +921,8 @@ index abaaa78fffc6c0a48e6a0993b98ae9b523afd00c..ed93335b4a8328d4198d63caa26eedd1
 +// comes back. From then on no SynthDef loads, no poll reports and nothing
 +// sounds, for the rest of the session, while the audio thread keeps
 +// running and the server keeps answering /status.
++// (E9-242: no longer -- SC_GraphDef.cpp is built with exceptions now, so
++// a missing UGen fails that one SynthDef with a message, as on a norns.)
 +//
 +// Measured: one `GbmanN` in `mi-eng/texture-c` killed the server 19 scripts
 +// into a 40-script run, and every script after it was dead on arrival.
@@ -858,6 +934,11 @@ index abaaa78fffc6c0a48e6a0993b98ae9b523afd00c..ed93335b4a8328d4198d63caa26eedd1
 +void Chaos_Load(InterfaceTable* table);
 +void DemoUGens_Load(InterfaceTable* table);
  void FFT_UGens_Load(InterfaceTable* table);
++// norns-js E9-242: compiled and linked but never registered, like the three
++// above -- Convolution, Onsets, BeatTrack, Loudness, MFCC, SpecCentroid...
++// were "not installed" here and are core UGens on a norns.
++void PV_ThirdParty_Load(InterfaceTable* table);
++void ML_UGens_Load(InterfaceTable* table);
  void iPhone_Load(InterfaceTable* table);
  
 +// norns-js: sc3-plugins, linked in because wasm has no dlopen. The names are
@@ -1054,10 +1135,12 @@ index abaaa78fffc6c0a48e6a0993b98ae9b523afd00c..ed93335b4a8328d4198d63caa26eedd1
  #    ifndef NO_LIBSNDFILE
  void DiskIO_Unload();
  #    endif
-@@ -91,6 +305,153 @@ void loadStaticPlugins(InterfaceTable* table) {
+@@ -91,6 +312,155 @@ void loadStaticPlugins(InterfaceTable* table) {
      iPhone_Load(table);
  #    endif
      FFT_UGens_Load(table);
++    PV_ThirdParty_Load(table);
++    ML_UGens_Load(table);
 +    Chaos_Load(table);
 +    DemoUGens_Load(table);
 +#    ifdef SC3_PLUGINS
@@ -1209,7 +1292,7 @@ index abaaa78fffc6c0a48e6a0993b98ae9b523afd00c..ed93335b4a8328d4198d63caa26eedd1
  
  void unloadStaticPlugins() {
 diff --git a/server/scsynth/CMakeLists.txt b/server/scsynth/CMakeLists.txt
-index 75c228c87672e3e94c40b1e72e800f55e1b78068..ab9d69e1382af6c7cfeb793a14ed550cec8b31a3 100644
+index 75c228c87672e3e94c40b1e72e800f55e1b78068..28ab97e27f277e3adb206b42587822ec51ea9fb2 100644
 --- a/server/scsynth/CMakeLists.txt
 +++ b/server/scsynth/CMakeLists.txt
 @@ -234,6 +234,55 @@ endif()
@@ -1268,7 +1351,7 @@ index 75c228c87672e3e94c40b1e72e800f55e1b78068..ab9d69e1382af6c7cfeb793a14ed550c
      # add plugin archives
      target_link_libraries(libscsynth PRIVATE ${static_plugins})
  endif()
-@@ -326,8 +375,41 @@ elseif(AUDIOAPI STREQUAL webaudio)
+@@ -326,8 +375,55 @@ elseif(AUDIOAPI STREQUAL webaudio)
          --bind -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME='ScSynth'
          --pre-js "${CMAKE_SOURCE_DIR}/platform/wasm/scsynth.pre.js"
          -sEXPORTED_FUNCTIONS=['_malloc','_free','_webOscBindingAnchor']
@@ -1289,10 +1372,24 @@ index 75c228c87672e3e94c40b1e72e800f55e1b78068..ab9d69e1382af6c7cfeb793a14ed550c
 +        #
 +        # It costs nothing elsewhere: only the files compiled with
 +        # -fexceptions -- ByteBeat.cpp, lex.cpp, parse.cpp -- get landing
-+        # pads, and scsynth's own throw on an unknown UGen still reaches
-+        # no handler and still aborts, exactly as before.
++        # pads (and SC_GraphDef.cpp since E9-242, below).
 +        -fexceptions
      )
++    # norns-js E9-242: and SC_GraphDef.cpp, so `GraphDef_Recv`'s own
++    # try/catch is there. Without landing pads the catch is dropped, and a
++    # SynthDef the server refuses ("exceeded number of interconnect
++    # buffers", "UGen not installed") kills the NRT thread instead of
++    # printing one line: every later /d_recv and /sync of the session then
++    # waits for ever (measured: downtown's engine, then nothing loads).
++    # Upstream compiles everything this way; the cost is in def loading,
++    # which never runs on the audio thread.
++    set_source_files_properties(SC_GraphDef.cpp PROPERTIES COMPILE_OPTIONS -fexceptions)
++    # E9-247: and SC_SequencedCommand.cpp, for the same reason. Its async
++    # commands that read files (/d_load, /d_loadDir, /b_allocRead...) throw
++    # on a missing file and catch it themselves, answering /fail. Without
++    # landing pads that catch is gone too: grains' cached-def `/d_loadDir`
++    # of a folder the server cannot see stopped the server for the session.
++    set_source_files_properties(SC_SequencedCommand.cpp PROPERTIES COMPILE_OPTIONS -fexceptions)
 +    # norns-js: scsynth's heap is FIXED — the memory is shared with the audio
 +    # worklet, so initial and maximum are the same and it cannot grow. The
 +    # emscripten default is 16 MB, which has to hold 2.7 MB of code and
@@ -1312,10 +1409,24 @@ index 75c228c87672e3e94c40b1e72e800f55e1b78068..ab9d69e1382af6c7cfeb793a14ed550c
          target_compile_options(scsynth PRIVATE -pthread -g)
          target_compile_options(libscsynth PRIVATE -pthread -g)
 diff --git a/server/scsynth/SC_WebAudio.cpp b/server/scsynth/SC_WebAudio.cpp
-index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..bd6eeab7f915add4156def407be6ea94ba68d7f0 100644
+index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..9eca69467b32caf7394a5c6799237fc5a28c4b4c 100644
 --- a/server/scsynth/SC_WebAudio.cpp
 +++ b/server/scsynth/SC_WebAudio.cpp
-@@ -137,6 +137,18 @@ private:
+@@ -97,8 +97,11 @@ WorldOptions toScWorld(ScWebAudioOptions* userOptions) {
+     options.mRealTime = 1;
+     options.mSharedMemoryID = 0;
+     options.mVerbosity = 0;
+-    // @todo make this user configurable?
+-    options.mMaxLogins = 4;
++    // norns-js E9-229 — ONE login, as a norns has (sclang's default `-l 1`).
++    // sclang divides every allocator by the logins the server reports, so
++    // with 4 a script had 256 of the 1024 buffers: lorenzos-drums loads 312
++    // samples and got "No more buffer numbers". Nothing else logs in here.
++    options.mMaxLogins = 1;
+     return options;
+ }
+ 
+@@ -137,6 +140,18 @@ private:
      static constexpr size_t WASM_SAMPLERATE = 48000;
      // whether mOSCbuftime has been initialized with wall-clock time
      bool mInitializedOSCTime = false;
@@ -1334,7 +1445,7 @@ index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..bd6eeab7f915add4156def407be6ea94
  };
  
  SC_AudioDriver* SC_NewAudioDriver(World* inWorld) { return new SC_WebAudioDriver(inWorld); }
-@@ -151,6 +163,8 @@ static bool scsynthProcessCallback(int numInputs, const AudioSampleFrame* inputs
+@@ -151,6 +166,8 @@ static bool scsynthProcessCallback(int numInputs, const AudioSampleFrame* inputs
  
  bool SC_WebAudioDriver::processBlock(int numInputs, const AudioSampleFrame* inputs, int numOutputs,
                                       AudioSampleFrame* outputs) {
@@ -1343,7 +1454,7 @@ index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..bd6eeab7f915add4156def407be6ea94
      World* world = mWorld;
  
      // see SC_PortAudioDriver
-@@ -215,6 +229,28 @@ bool SC_WebAudioDriver::processBlock(int numInputs, const AudioSampleFrame* inpu
+@@ -215,6 +232,28 @@ bool SC_WebAudioDriver::processBlock(int numInputs, const AudioSampleFrame* inpu
          oscTime = mOSCbuftime = nextTime;
      }
  

@@ -9,7 +9,7 @@
 # machine (E7-14), and how it gets tried without being installed.
 #
 # WHAT GOES IN THE PACKAGE IS NOT THIS CHECKOUT. `files` starts by excluding
-# everything and names the four things the shell needs, so the 300 MB of
+# everything and names the few things the shell needs, so the 300 MB of
 # node_modules and the sources of the page do not travel: the page is already
 # BUILT, and it travels as `extraResources` instead.
 #
@@ -48,6 +48,7 @@ files:
   - desktop/main.js
   - desktop/probe.js
   - tools/serve.mjs
+  - tools/gh-release.mjs
   - package.json
 
 extraResources:

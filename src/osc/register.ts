@@ -12,8 +12,16 @@ import type { OscRemote } from "./remote.js";
 export interface OscRegisterOptions {
   /** Null when no relay was configured: see `remote.ts` for why that is a state. */
   readonly remote: OscRemote | null;
+  /**
+   * E9-239 — a message for a program on THIS norns: sclang (57120),
+   * scsynth (57110) or matron itself (10111). True when it was delivered.
+   */
+  readonly local?: (port: number, path: string, args: Array<number | string>) => boolean;
   readonly log?: (line: string) => void;
 }
+
+/** The names a norns answers to as itself. */
+const LOCAL_HOST = /^(localhost|127\.0\.0\.1|::1)$/i;
 
 export function registerOsc(registry: NornsRegistry, opts: OscRegisterOptions): void {
   const log = opts.log ?? ((): void => {});
@@ -40,6 +48,12 @@ export function registerOsc(registry: NornsRegistry, opts: OscRegisterOptions): 
     const values = (Array.isArray(args) ? args : []).filter(
       (a): a is number | string => typeof a === "number" || typeof a === "string",
     );
+    // E9-239 — LOCALHOST IS NOT THE NETWORK. On a norns, `osc.send` to
+    // localhost:57120 is how a mod or an nb voice talks to its own
+    // SuperCollider half: nb_smpKit loads and triggers its samples that way.
+    // Here every send needed a relay, so those went nowhere and the voice
+    // was silent; the three programs on this "machine" are in this page.
+    if (LOCAL_HOST.test(host) && opts.local?.(p, String(path ?? ""), values)) return;
     if (!opts.remote) {
       if (!warned) {
         warned = true;

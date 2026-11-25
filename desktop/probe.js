@@ -23,6 +23,49 @@
     load: null,
   };
 
+  // `--relay` (E9-227): ask the shell's GitHub release relay for a file,
+  // and nothing else. The master is held at zero from the moment it exists,
+  // because a resumed script would otherwise play while this looks; no
+  // script is loaded, and the report is this alone.
+  if (globalThis.__PROBE_RELAY) {
+    let muting = true;
+    void (async () => {
+      while (muting) {
+        if (globalThis.__norns && globalThis.__norns.master) globalThis.__norns.master.gain.value = 0;
+        await sleep(20);
+      }
+    })();
+    const path = "/gh-release/schollz/mx.samples/releases/download/samples/cello_pad.zip";
+    const relay = { path };
+    try {
+      const r = await fetch(path);
+      const b = new Uint8Array(await r.arrayBuffer());
+      relay.status = r.status;
+      relay.marked = r.headers.get("X-Norns-Relay") === "1";
+      relay.length = r.headers.get("Content-Length");
+      relay.bytes = b.length;
+      relay.zip = b[0] === 0x50 && b[1] === 0x4b;
+    } catch (e) {
+      relay.error = String((e && e.message) || e);
+    }
+    try {
+      relay.refused = (await fetch("/gh-release/o/r/archive/main.zip")).status;
+    } catch (e) {
+      relay.refused = String((e && e.message) || e);
+    }
+    // The same file asked of github.com directly: what the relay is for.
+    try {
+      const d = await fetch("https://github.com/schollz/mx.samples/releases/download/samples/cello_pad.zip");
+      relay.direct = "answered " + d.status;
+    } catch (e) {
+      relay.direct = "refused: " + String((e && e.message) || e);
+    }
+    relay.ok = relay.status === 200 && relay.marked === true && relay.zip === true && relay.refused === 404;
+    await sleep(500);
+    muting = false;
+    return { ...out, relay };
+  }
+
   // 1. MIDI, asked the way the app asks it: sysex first, then without.
   try {
     let access = null;

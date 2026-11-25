@@ -7,9 +7,9 @@
 import type { NornsRegistry } from "../norns/registry.js";
 import { lua, lauxlib, pushValue, type LuaValue } from "../lua/lua.js";
 import { Vfs, normalise } from "./vfs.js";
-import { runShell, globToRegExp } from "./shell.js";
+import { runShell, globToRegExp, type ShellFetch } from "./shell.js";
 import type { NetReplies } from "./net-replies.js";
-import { parseWavHeader } from "./wav-header.js";
+import { parseSoundHeader } from "./wav-header.js";
 
 export interface FsOptions {
   /**
@@ -38,7 +38,7 @@ export interface FsOptions {
    * said the fetch had started, no request was ever made, and the files
    * were not there on the next run either.
    */
-  readonly onFetch?: (fetch: { kind: "repo" | "file"; url: string; dest: string }) => void;
+  readonly onFetch?: (fetch: ShellFetch) => void;
   /**
    * E9-203 — answers a `curl` whose output is being read.
    *
@@ -143,7 +143,8 @@ export function registerFs(registry: NornsRegistry, vfs: Vfs, opts: FsOptions = 
       return ["", opts.net.start(cmd, r.request)];
     }
     if (r.fetch !== undefined) opts.onFetch?.(r.fetch);
-    if (!r.ok) opts.onRefused?.(cmd, r.refused ?? "unsupported");
+    for (const f of r.more ?? []) opts.onFetch?.(f);
+    if (!r.ok && r.failed !== true) opts.onRefused?.(cmd, r.refused ?? "unsupported");
     else opts.onChanged?.();
     return [r.out];
   });
@@ -262,7 +263,8 @@ export function registerFs(registry: NornsRegistry, vfs: Vfs, opts: FsOptions = 
       // one per refused command.
       lauxlib.luaL_unref(L, lua.LUA_REGISTRYINDEX, ref);
       if (r.fetch !== undefined) opts.onFetch?.(r.fetch);
-      opts.onRefused?.(cmd, r.refused ?? "unsupported");
+      for (const f of r.more ?? []) opts.onFetch?.(f);
+      if (r.failed !== true) opts.onRefused?.(cmd, r.refused ?? "unsupported");
       lua.lua_pushboolean(L, false);
       return 1;
     }
@@ -290,7 +292,7 @@ export function registerFs(registry: NornsRegistry, vfs: Vfs, opts: FsOptions = 
     const ref = vfs.remoteAt(p);
     if (ref?.audio) return [ref.audio.channels, ref.audio.frames, ref.audio.sampleRate];
     const data = vfs.read(p);
-    const wav = data && parseWavHeader(data);
+    const wav = data && parseSoundHeader(data);
     return wav ? [wav.channels, wav.frames, wav.sampleRate] : [0, 0, 0];
   });
 

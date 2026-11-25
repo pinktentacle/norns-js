@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { encodeMessage } from "../src/engine/osc.js";
-import { routeByDecoding, routeLangPacket, toMatron } from "../src/engine/lang-route.js";
+import { onlyDefsAndSync, routeByDecoding, routeLangPacket, toMatron } from "../src/engine/lang-route.js";
 
 type Arg = number | string | Uint8Array;
 
@@ -213,6 +213,40 @@ describe("what the route says, so the comparison is not two wrongs agreeing", ()
       routeLangPacket(bundle(msg("/d_recv", [bytes(1)]), msg("/n_set", [1]), msg("/d_recv", [bytes(2)]))).defs,
     ).toBe(2);
     expect(routeLangPacket(msg("/d_recvx", [bytes(1)])).defs).toBe(0);
+  });
+
+  it("counts a /d_recv sent by number, as JITLib sends it (E9-246)", () => {
+    expect(routeLangPacket(numbered(5, [bytes(1, 2)])).defs).toBe(1);
+    expect(routeLangPacket(numbered(9, ["x", 1, 0, 1])).defs).toBe(0);
+    // An Ndef: its def, its group and a /sync, in one bundle.
+    const ndef = bundle(numbered(5, [bytes(1)]), numbered(21, [1100, 0, 1]), msg("/sync", [3]));
+    expect(routeLangPacket(ndef)).toEqual({ matron: null, hasSync: true, defs: 1 });
+    expect(routeLangPacket(bundle(bundle(numbered(5, [bytes(1)])), msg("/d_recv", [bytes(2)]))).defs).toBe(2);
+  });
+
+  it("knows what may follow a def straight into the server's own queue (E9-246)", () => {
+    for (const p of [
+      msg("/d_recv", [bytes(1)]),
+      numbered(5, [bytes(1)]),
+      msg("/sync", [4]),
+      numbered(52, [4]),
+      bundle(msg("/d_recv", [bytes(1)]), msg("/sync", [9])),
+      bundle(bundle(numbered(5, [bytes(1)])), msg("/sync", [2])),
+    ]) {
+      expect(onlyDefsAndSync(p)).toBe(true);
+    }
+    for (const p of [
+      note,
+      msg("/s_new", ["x", 1, 0, 1]),
+      msg("/synced", [1]),
+      msg("/d_recvx", [bytes(1)]),
+      bundle(numbered(5, [bytes(1)]), numbered(21, [1100, 0, 1]), msg("/sync", [3])),
+      bundle(),
+      bytes(),
+      bytes(...ascii("#bundle"), 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0),
+    ]) {
+      expect(onlyDefsAndSync(p)).toBe(false);
+    }
   });
 
   it("keeps the matron set closed", () => {

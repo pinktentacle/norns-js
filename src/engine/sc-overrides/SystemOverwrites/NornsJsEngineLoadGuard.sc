@@ -69,4 +69,52 @@
 			doneCallback.value(this);
 		};
 	}
+
+	// The other half. `Crone.setEngine` frees the old engine before loading
+	// the new one, and waits on `deinit`'s callback (`Crone.sc:108`). An
+	// engine whose `alloc` failed half-way has nils where its synths should
+	// be, so its `free` throws — carter's delay: `cutoffLFOs[i]` is nil — the
+	// routine dies before the callback, and EVERY engine loaded after it
+	// hangs, in other scripts too. Same divergence as above, same reason:
+	// `free` is tried, the error is posted, the callback runs.
+	//
+	// And ONCE. `Crone.sc` frees the engine from two routines: `/engine/free`
+	// (sent by `Script.clear`) and `setEngine` (the next script's engine).
+	// Each checks `engine.notNil`, then waits on `deinit` before setting it
+	// to nil — so the second arrives while the first is still in
+	// `server.sync`, and the same `free` runs twice: "Cannot call free on a
+	// Buffer that has been freed", buses freed twice, and an engine whose
+	// `free` is not written for it may throw. The second call does not free:
+	// it waits for the first to finish and answers then, so the two routines
+	// still resume in upstream's order (the first sets `engine = nil` before
+	// the second loads the next engine). Answered at once instead, the first
+	// could set nil AFTER the next engine had arrived, and lose it.
+	deinit { arg doneCallback;
+		var waiting = Library.at(\nornsJs, \engineFree, this);
+		if (waiting.notNil) {
+			if (waiting == \done) { doneCallback.value(this) } { waiting.add(doneCallback) };
+			^this
+		};
+		waiting = List.new;
+		Library.put(\nornsJs, \engineFree, this, waiting);
+		postln("CroneEngine.free");
+		commands.do({ arg com;
+			com.oscdef.free;
+		});
+		pollNames.do({ arg name;
+			CronePollRegistry.remove(name);
+		});
+		try {
+			this.free;
+		} { arg error;
+			if (error.notNil) {
+				("norns-js: engine " ++ this.class.name.asString
+					++ " failed to free: " ++ error.errorString).postln;
+			};
+		};
+		Crone.server.sync;
+		Library.put(\nornsJs, \engineFree, this, \done);
+		doneCallback.value(this);
+		waiting.do({ arg cb; cb.value(this) });
+	}
 }

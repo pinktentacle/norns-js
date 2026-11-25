@@ -92,18 +92,26 @@ static const float c[16] = {0,
                             0.93333333333333,
                             1};
 
-// screen.cc:37. The order IS the API: `screen.blend_mode(i)` is an index.
+// screen.cc:37. The order IS the API: `screen.blend_mode(i)` is an index,
+// and lua/core/screen.lua's BLEND_MODES names those indexes.
+//
+// E9-224 — IN UPSTREAM'S ORDER, which this was not. The four HSL operators
+// had been placed after EXCLUSION, at 14-17; upstream (and BLEND_MODES) has
+// them LAST, at 25-28, with CLEAR at 14. So every mode from 14 on was off by
+// four: `screen.blend_mode('clear')` drew with HSL_HUE, 'saturate' (24) with
+// DEST_OUT, and the HSL modes did something else again. Found by the
+// catalogue sweep reading this table against screen.cc line by line.
 static const cairo_operator_t ops[NUM_OPS] = {
     CAIRO_OPERATOR_OVER,       CAIRO_OPERATOR_XOR,        CAIRO_OPERATOR_ADD,
     CAIRO_OPERATOR_MULTIPLY,   CAIRO_OPERATOR_SCREEN,     CAIRO_OPERATOR_OVERLAY,
     CAIRO_OPERATOR_DARKEN,     CAIRO_OPERATOR_LIGHTEN,    CAIRO_OPERATOR_COLOR_DODGE,
     CAIRO_OPERATOR_COLOR_BURN, CAIRO_OPERATOR_HARD_LIGHT, CAIRO_OPERATOR_SOFT_LIGHT,
-    CAIRO_OPERATOR_DIFFERENCE, CAIRO_OPERATOR_EXCLUSION,  CAIRO_OPERATOR_HSL_HUE,
-    CAIRO_OPERATOR_HSL_SATURATION, CAIRO_OPERATOR_HSL_COLOR, CAIRO_OPERATOR_HSL_LUMINOSITY,
-    CAIRO_OPERATOR_CLEAR,      CAIRO_OPERATOR_SOURCE,     CAIRO_OPERATOR_IN,
-    CAIRO_OPERATOR_OUT,        CAIRO_OPERATOR_ATOP,       CAIRO_OPERATOR_DEST,
-    CAIRO_OPERATOR_DEST_OVER,  CAIRO_OPERATOR_DEST_IN,    CAIRO_OPERATOR_DEST_OUT,
-    CAIRO_OPERATOR_DEST_ATOP,  CAIRO_OPERATOR_SATURATE,
+    CAIRO_OPERATOR_DIFFERENCE, CAIRO_OPERATOR_EXCLUSION,  CAIRO_OPERATOR_CLEAR,
+    CAIRO_OPERATOR_SOURCE,     CAIRO_OPERATOR_IN,         CAIRO_OPERATOR_OUT,
+    CAIRO_OPERATOR_ATOP,       CAIRO_OPERATOR_DEST,       CAIRO_OPERATOR_DEST_OVER,
+    CAIRO_OPERATOR_DEST_IN,    CAIRO_OPERATOR_DEST_OUT,   CAIRO_OPERATOR_DEST_ATOP,
+    CAIRO_OPERATOR_SATURATE,   CAIRO_OPERATOR_HSL_HUE,    CAIRO_OPERATOR_HSL_SATURATION,
+    CAIRO_OPERATOR_HSL_COLOR,  CAIRO_OPERATOR_HSL_LUMINOSITY,
 };
 
 static const char *font_dir = "/fonts";

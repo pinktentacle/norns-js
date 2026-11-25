@@ -218,6 +218,16 @@ mkdir -p "$BUILD"
 # Invoking cmake directly with the toolchain file rather than through emcmake:
 # emcmake is a Python wrapper that re-execs cmake, and passing the toolchain
 # explicitly is what the SC README documents for the CLion setup anyway.
+# E9-223 — scsynth's heap is FIXED (shared with the audio worklet, so it
+# cannot grow), and every buffer a script allocates lives in it. 128 MB was
+# the old size and it was not enough: eastwind allocates two 300 s stereo
+# buffers (~115 MB each) and scsynth aborted the moment it loaded, and a
+# session of a few scripts filled it with what their engines had left
+# behind. A norns shield has 1 GB for everything; 512 MB is the server's
+# share of that. The memory is reserved up front; a device that refuses it
+# gets the old 128 MB server instead (public/scsynth-small, see host.ts).
+SCSYNTH_MEMORY="${SCSYNTH_MEMORY:-536870912}"
+
 "$CMAKE" -S "$(w "$SC")" -B "$(w "$BUILD")" -G Ninja \
   -DCMAKE_MAKE_PROGRAM="$(w "$NINJA")" \
   -DCMAKE_TOOLCHAIN_FILE="$(w "$TOOLCHAIN")" \
@@ -241,7 +251,7 @@ mkdir -p "$BUILD"
   -DEIGEN_DIR="$EIGEN" \
   -DSC_EXTRA_DIR="$SC_EXTRA" \
   -DFFTW3F_INCLUDE="$FFTW3F_INCLUDE" \
-  -DSC_WASM_INITIAL_MEMORY=134217728 \
+  -DSC_WASM_INITIAL_MEMORY="$SCSYNTH_MEMORY" \
   -DNO_AVAHI=yes \
   -DSC_ABLETON_LINK=no \
   -DNO_X11=yes \

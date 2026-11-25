@@ -72,6 +72,12 @@ export interface ScriptsStoreOptions {
    * Resolves true when something was written.
    */
   readonly addSamples?: (bytes: Uint8Array, name: string) => Promise<boolean>;
+  /**
+   * E9-227 — fetch a sample pack for the person: through the page's own
+   * server when it is a GitHub release. Null when it could not be fetched
+   * here, and the by-hand steps are what is left.
+   */
+  readonly fetchSamples?: (url: string, onProgress: (got: number, total: number | null) => void) => Promise<Uint8Array | null>;
 }
 
 export interface ScriptsStore {
@@ -896,6 +902,47 @@ export function createScriptsStore(opts: ScriptsStoreOptions): ScriptsStore {
     const box = h("div", "st-samples");
     // Decimal, as the note and a download manager say it.
     const mb = s.bytes > 0 ? `${Math.round(s.bytes / 1e6)} MB` : "";
+    // E9-227 — and when this page's server can fetch it, one button does both.
+    if (opts.fetchSamples !== undefined) {
+      const fetchSamples = opts.fetchSamples;
+      const auto = h("div", "st-step");
+      const get = h("button", "st-act", undefined, { type: "button", "data-act": "get" });
+      const getLabel = h("span", "st-act-label", "get it here");
+      get.append(getLabel);
+      const said = h("span", "st-d-small", mb === "" ? "from the author's release" : `${mb}, from the author's release`);
+      get.addEventListener(
+        "click",
+        () => {
+          get.disabled = true;
+          getLabel.textContent = "downloading…";
+          void (async () => {
+            let ok = false;
+            try {
+              const bytes = await fetchSamples(s.url, (got, total) => {
+                getLabel.textContent =
+                  total !== null ? `downloading… ${Math.floor((got * 100) / total)}%` : `downloading… ${Math.round(got / 1e6)} MB`;
+              });
+              if (bytes !== null) {
+                getLabel.textContent = "adding…";
+                ok = (await opts.addSamples?.(bytes, s.file)) === true;
+              }
+            } catch {
+              ok = false;
+            }
+            get.disabled = false;
+            getLabel.textContent = ok ? "added" : "get it here";
+            if (!ok) said.textContent = "it could not be fetched here — download it and add it by hand, below";
+            if (ok && selected === name) {
+              draw();
+              drawDetail();
+            }
+          })();
+        },
+        { signal },
+      );
+      auto.append(get, said);
+      box.append(auto, note("or by hand:", "st-d-small"));
+    }
     const one = h("div", "st-step");
     one.append(h("span", "st-step-n", "1"));
     const dl = h("a", "st-out", `download ${s.file}`, { href: s.url, target: "_blank", rel: "noopener noreferrer" });

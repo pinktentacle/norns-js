@@ -68,6 +68,10 @@ export const LUA_PATCHES: readonly LuaPatch[] = [
       '        s = s:gsub("= inf", "= math.huge")' + '\n' +
       '        s = s:gsub("= NaN", "= 0/0")' + '\n' +
       '        s = s:gsub("= %-?nan", "= 0/0")' + '\n' +
+      "        -- E9-244: a quote inside a quoted value: the folder of" + '\n' +
+      "        -- \"carter's delay\", or a MIDI device named that way." + '\n' +
+      "        local k, v = s:match(\"^([%w_%.%[%]]+ = )'(.*)'\\n$\")" + '\n' +
+      "        if k ~= nil and v:find(\"'\", 1, true) then s = k .. string.format(\"%q\", v) .. \"\\n\" end" + '\n' +
       '        out[i] = s' + '\n' +
       '      end' + '\n' +
       '      return _io.write(table.unpack(out))' + '\n' +

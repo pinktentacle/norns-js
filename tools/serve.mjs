@@ -40,6 +40,8 @@ import { createServer } from "node:http";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
+import { Readable } from "node:stream";
+import { RELAY_PREFIX, relayRelease } from "./gh-release.mjs";
 
 /**
  * Content types, because the browser refuses a module served as text/plain
@@ -187,6 +189,19 @@ const TEXT = "text/plain; charset=utf-8";
 
 const handler = (ROOT) => async (req, res) => {
   const url = new URL(req.url ?? "/", "http://localhost");
+  // E9-227 — a GitHub release file the page cannot fetch itself, fetched
+  // here and streamed through. See gh-release.mjs.
+  if (url.pathname.startsWith(RELAY_PREFIX)) {
+    const r = await relayRelease(url.pathname, {
+      fetch: (u, init) => fetch(u, init),
+      method: req.method ?? "GET",
+      site: req.headers["sec-fetch-site"] ?? null,
+    });
+    res.writeHead(r.status, Object.fromEntries(r.headers));
+    if (r.body === null) res.end();
+    else Readable.fromWeb(r.body).on("error", () => res.destroy()).pipe(res);
+    return;
+  }
   const { status, headers, body } = await respond(ROOT, url.pathname);
   res.writeHead(status, headers);
   res.end(body ?? undefined);

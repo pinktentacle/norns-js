@@ -197,6 +197,47 @@ const names = new Set();
 const skipped = [];
 let files = 0;
 
+/**
+ * E9-242 — AND A FILE THAT ONLY HAS AN `initX(InterfaceTable*)` BELONGS TO
+ * THE LOAD THAT CALLS IT. `Convolution` is defined in `Convolution.cpp`
+ * inside `initConvolution`, which `PluginLoad(PV_ThirdParty)` in
+ * `FFT2InterfaceTable.cpp` calls. With that load never called, the rule
+ * below still scanned `Convolution.cpp` — it owns no load — and the list
+ * said the server had Convolution. sclang then sent downtown's SynthDef,
+ * and the server refused it. These are the init functions called from
+ * loads nobody calls.
+ */
+const uncomment = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+function deadInits() {
+  const dead = new Set();
+  // A helper both kinds of load call (`init_SCComplex`) is not dead.
+  const live = new Set();
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== ".git") walk(full);
+        continue;
+      }
+      if (!/\.(cpp|cc|c|h|hpp)$/.test(e.name)) continue;
+      const src = uncomment(fs.readFileSync(full, "utf8"));
+      const load = PLUGIN_LOAD.exec(src);
+      if (load === null) continue;
+      const into = CALLED.has(load[1]) ? live : dead;
+      for (const m of src.matchAll(/\b(init[A-Za-z0-9_]+)\s*\(\s*inTable\s*\)/g)) into.add(m[1]);
+    }
+  };
+  for (const { dir } of SOURCES) {
+    const full = path.join(ROOT, dir);
+    if (fs.existsSync(full)) walk(full);
+  }
+  for (const name of live) dead.delete(name);
+  return dead;
+}
+const DEAD_INITS = deadInits();
+/** A DEFINITION, with its body: `void initConvolution(InterfaceTable* it) {`. */
+const DEFINES_INIT = /\bvoid\s+(init[A-Za-z0-9_]+)\s*\(\s*(?:struct\s+)?InterfaceTable\s*\*\s*[A-Za-z_]*\s*\)\s*\{/g;
+
 function scan(dir) {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
     const full = path.join(dir, e.name);
@@ -207,6 +248,9 @@ function scan(dir) {
     }
     if (!/\.(cpp|cc|c|h|hpp)$/.test(e.name)) continue;
     const src = fs.readFileSync(full, "utf8");
+    // Names in comments are not registrations: `//DefineDtorUnit(MIDelay);`
+    // put five UGens on the list that no server has (E9-242).
+    const live = uncomment(src);
     const load = PLUGIN_LOAD.exec(src);
     // SKIP a file that OWNS a load nobody calls; scan everything else.
     //
@@ -220,10 +264,15 @@ function scan(dir) {
       skipped.push(`${e.name} (${load[1]}_Load is never called)`);
       continue;
     }
+    const init = load === null ? [...live.matchAll(DEFINES_INIT)].find((m) => DEAD_INITS.has(m[1])) : undefined;
+    if (init !== undefined) {
+      skipped.push(`${e.name} (${init[1]} is called only by a load nobody calls)`);
+      continue;
+    }
     files++;
-    for (const m of src.matchAll(BARE)) names.add(m[1]);
-    for (const m of src.matchAll(STRING)) names.add(m[1]);
-    for (const m of src.matchAll(TEMPLATE)) names.add(m[1]);
+    for (const m of live.matchAll(BARE)) names.add(m[1]);
+    for (const m of live.matchAll(STRING)) names.add(m[1]);
+    for (const m of live.matchAll(TEMPLATE)) names.add(m[1]);
   }
 }
 

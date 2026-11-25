@@ -31,6 +31,17 @@ export interface ShellResult {
   /** Why it was refused, for the compatibility page. */
   readonly refused?: string;
   /**
+   * E9-228 — it RAN, and its answer is no: `test -e` on a file that is not
+   * there. Exit status 1, which is not a refusal and is not reported as one.
+   */
+  readonly failed?: true;
+  /**
+   * E9-228 — the downloads after `fetch`, when one command asked for
+   * several: a shell script that fetches two archives (amenbreak's
+   * install.sh). Each is started like `fetch`.
+   */
+  readonly more?: readonly ShellFetch[];
+  /**
    * E9-37 — a download the host can do and the shell cannot.
    *
    * `git clone`, `wget -O` and `curl -o` all mean "put what is at this URL
@@ -40,12 +51,7 @@ export interface ShellResult {
    * script that brings a new engine already lives with: it is ready next
    * time.
    */
-  readonly fetch?: {
-    /** `repo` for a GitHub repository, `file` for one URL to one path. */
-    readonly kind: "repo" | "file";
-    readonly url: string;
-    readonly dest: string;
-  };
+  readonly fetch?: ShellFetch;
   /**
    * E9-203 — a network reply the caller is asking to READ.
    *
@@ -57,6 +63,18 @@ export interface ShellResult {
    * does — there the whole of matron stops for the length of the request.
    */
   readonly request?: ShellRequest;
+}
+
+export interface ShellFetch {
+  /**
+   * `repo` for a GitHub repository, `file` for one URL to one path, and
+   * (E9-226) `unzip`: the archive at `url`, into the directory `dest`.
+   */
+  readonly kind: "repo" | "file" | "unzip";
+  readonly url: string;
+  readonly dest: string;
+  /** E9-227 — a `file` that a `&& unzip` on the same line unzips here. */
+  readonly unzipTo?: string;
 }
 
 export interface ShellRequest {
@@ -78,6 +96,23 @@ const LATER = (refused: string, fetch: NonNullable<ShellResult["fetch"]>): Shell
   refused,
   fetch,
 });
+/**
+ * E9-240 — the JACK cables the page can move, set by the page once crone is
+ * up (main.ts). Null until then, and in tests that do not ask for it: the
+ * commands are then refused, as they always were.
+ */
+export interface JackGraph {
+  has(from: string, to: string): boolean;
+  set(from: string, to: string, connected: boolean): void;
+}
+let jackGraph: JackGraph | null = null;
+export function setJackGraph(g: JackGraph | null): void {
+  jackGraph = g;
+}
+
+/** E9-228 — several downloads as `fetch` and `more`, or nothing when there are none. */
+const withFetches = (fs: readonly ShellFetch[]): Pick<ShellResult, "fetch" | "more"> =>
+  fs.length === 0 ? {} : fs.length === 1 ? { fetch: fs[0]! } : { fetch: fs[0]!, more: fs.slice(1) };
 /** Not answered here: the caller may go and get it. `ok` is false until it has. */
 const ASK = (request: ShellRequest): ShellResult => ({
   out: "",
@@ -375,7 +410,180 @@ function runPipe(text: string, stage: string): string | null {
   return null;
 }
 
+/**
+ * E9-227 — the parts of a one-line chain, split on `&&` and `;` outside
+ * quotes. Null when the line has any other operator (`||`, `|`, `&`): a
+ * chain with a branch or a pipe in it is not the plain sequence this
+ * reads, and is left to the refusals further down.
+ */
+function chainParts(cmd: string): string[] | null {
+  const parts: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      cur += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === "&" && cmd[i + 1] === "&") {
+      parts.push(cur.trim());
+      cur = "";
+      i++;
+      continue;
+    }
+    if (ch === ";") {
+      parts.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    if (ch === "|" || ch === "&") return null;
+    cur += ch;
+  }
+  if (quote !== null) return null;
+  parts.push(cur.trim());
+  return parts.filter((p) => p !== "");
+}
+
+/**
+ * E9-227 — ONE LINE THAT DOWNLOADS AN ARCHIVE AND UNZIPS IT.
+ *
+ * moonraker's README installs its sample pack with
+ *
+ *   cd ~/dust/audio && echo 'downloading...' && wget -q <release url>
+ *     && unzip moonraker.zip && rm moonraker.zip; echo 'ready …'
+ *
+ * Each half is a command this shell already hands up (E9-37, E9-226), but
+ * a line is handed up as ONE thing, and the chained `cd` refused the
+ * `echo`. So the line is read whole: `cd` says where, `echo` prints to a
+ * terminal there is none of, the download and the unzip become one fetch
+ * that is unzipped when it lands, and the `rm` of that same archive is
+ * what happens anyway (`hand-downloads.ts` never writes an archive that
+ * is waiting to be unzipped). Anything else on the line and it is not
+ * this shape: null, and the line goes on to be refused by name below.
+ */
+function downloadChain(vfs: Vfs, cmd: string, depth: number): ShellResult | null {
+  // E9-228: `tar -xzvf` is the other way the catalogue unpacks (lorenzos-drums).
+  if (!/\b(wget|curl)\s/.test(cmd) || !/\b(unzip|tar)\s/.test(cmd)) return null;
+  const parts = chainParts(cmd);
+  if (parts === null || parts.length < 2) return null;
+  let cwd: string | null = null;
+  let file: ShellFetch | null = null;
+  let unzipTo: string | null = null;
+  const removed: string[] = [];
+  for (const p of parts) {
+    if (/^echo(\s|$)/.test(p)) continue;
+    const here = (q: string): string => (cwd !== null ? `cd ${cwd} && ${q}` : q);
+    if (/^cd\s/.test(p)) {
+      const to = argsOf(p);
+      if (to.length !== 1) return null;
+      const dir = unquote(to[0]!);
+      const abs = normalise(cwd !== null && !dir.startsWith("/") && !dir.startsWith("~") ? `${cwd}/${dir}` : dir, vfs.home);
+      if (/\s/.test(abs)) return null;
+      cwd = abs;
+      continue;
+    }
+    if (/^(wget|curl)\s/.test(p)) {
+      if (file !== null) return null;
+      const r = runShell(vfs, here(p), depth + 1);
+      if (r.fetch?.kind !== "file") return null;
+      file = r.fetch;
+      continue;
+    }
+    if (/^(unzip|tar)\s/.test(p)) {
+      if (file === null || unzipTo !== null) return null;
+      const r = runShell(vfs, here(p), depth + 1);
+      if (r.fetch?.kind !== "unzip" || r.fetch.url !== file.dest) return null;
+      unzipTo = r.fetch.dest;
+      continue;
+    }
+    if (/^rm\s/.test(p)) {
+      for (const w of argsOf(p)) {
+        if (w.startsWith("-")) continue;
+        const x = unquote(w);
+        removed.push(normalise(cwd !== null && !x.startsWith("/") && !x.startsWith("~") ? `${cwd}/${x}` : x, vfs.home));
+      }
+      continue;
+    }
+    return null;
+  }
+  if (file === null || unzipTo === null) return null;
+  if (removed.some((r) => r !== file.dest)) return null;
+  return LATER(`fetching ${file.url} and unzipping it into ${unzipTo} — it will be in place next run`, {
+    kind: "file",
+    url: file.url,
+    dest: file.dest,
+    unzipTo,
+  });
+}
+
+/**
+ * E9-248 — a line of commands separated by `;`, run one after the other.
+ *
+ * TRIED ONLY WHEN THE LINE AS A WHOLE WAS REFUSED, so the lines this shell
+ * already reads whole (jack's four connections, a download chain) keep
+ * their own meaning. grains lists its samples with
+ *
+ *   nice -n 10 find … | head -n 2000 > /tmp/grains_files.txt; find … | wc -l; echo _done_
+ *
+ * and each part is a command this shell runs; together they were one
+ * unknown line. As in a shell, each part runs whatever the one before it
+ * did; a part this shell does not know refuses the line, by its own name.
+ */
 export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
+  const whole = runLine(vfs, command, depth);
+  if (whole.ok || whole.failed === true || whole.fetch || whole.request || depth >= 4) return whole;
+  const parts = sequenceParts(command);
+  if (parts === null || parts.length < 2) return whole;
+  let out = "";
+  for (const part of parts) {
+    const r = runShell(vfs, part, depth + 1);
+    if (r.fetch || r.request || r.more) return whole;
+    if (!r.ok && r.failed !== true) return r;
+    out += r.out;
+  }
+  return OK(out);
+}
+
+/** Split on `;` outside quotes, `$( )` and backticks; null if it does not close. */
+function sequenceParts(cmd: string): string[] | null {
+  const parts: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  let paren = 0;
+  for (let i = 0; i < cmd.length; i++) {
+    const ch = cmd[i]!;
+    if (ch === "\\" && quote !== "'" && i + 1 < cmd.length) {
+      cur += ch + cmd[++i]!;
+      continue;
+    }
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      cur += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") quote = ch;
+    else if (ch === "$" && cmd[i + 1] === "(") paren++;
+    else if (ch === ")" && paren > 0) paren--;
+    else if (ch === ";" && paren === 0) {
+      parts.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  if (quote !== null || paren !== 0) return null;
+  parts.push(cur.trim());
+  return parts.filter((x) => x !== "");
+}
+
+function runLine(vfs: Vfs, command: string, depth: number): ShellResult {
   /**
    * E9-148 — A STDERR REDIRECT IS NOT PART OF THE COMMAND.
    *
@@ -386,6 +594,17 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
    * dropping it is the whole of the right answer.
    */
   const cmd = command.trim().replace(/\s*2>\s*(?:\/dev\/null|&1)\s*$/, "").trim();
+
+  // --- `nice` only changes a priority (E9-248) ---------------------------
+  //
+  // grains lists its samples with `nice -n 10 find '/home/we/dust/audio/' …`
+  // and the whole line was refused for the first word, so "load random"
+  // found nothing. There is no scheduler to be nice to here; the command
+  // it wraps is the whole of the meaning.
+  {
+    const nice = /^nice(?:\s+-n\s*[+-]?\d+|\s+-[+-]?\d+)?\s+(\S[\s\S]*)$/.exec(cmd);
+    if (nice !== null && depth < 4) return runShell(vfs, nice[1]!, depth + 1);
+  }
 
   // --- nothing writes into Extensions ------------------------------------
   //
@@ -422,6 +641,74 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
             "make a script believe in one that is not",
         );
       }
+    }
+  }
+
+  // --- jack_connect / jack_disconnect (E9-240) ----------------------------
+  //
+  // The cables into SuperCollider's inputs are the one part of the JACK
+  // graph this build has (src/crone/jack.ts); a line made only of
+  // `jack_connect A B` and `jack_disconnect A B` — splnkr sends four at once,
+  // joined by `;` — moves them. A port the build has no cable for refuses
+  // the whole line, naming it.
+  if (/\bjack_(dis)?connect\s/.test(cmd) && jackGraph !== null) {
+    const parts = chainParts(cmd);
+    if (parts !== null && parts.every((p) => /^(jack_(dis)?connect|echo)(\s|$)/.test(p))) {
+      const moves: Array<[boolean, string, string]> = [];
+      for (const p of parts) {
+        if (p.startsWith("echo")) continue;
+        const ws = words(p).map(unquote);
+        if (ws.length !== 3) return NO(`${ws[0]} takes two ports`);
+        moves.push([ws[0] === "jack_connect", ws[1]!, ws[2]!]);
+      }
+      const graph = jackGraph;
+      const missing = moves.find(([, a, b]) => !graph.has(a, b));
+      if (missing !== undefined) return NO(`jack: no cable from ${missing[1]} to ${missing[2]} in this build`);
+      for (const [on, a, b] of moves) graph.set(a, b, on);
+      return OK("");
+    }
+  }
+
+  // --- one line that downloads and unzips (E9-227) ----------------------
+  {
+    const chained = downloadChain(vfs, cmd, depth);
+    if (chained !== null) return chained;
+  }
+
+  // --- test (E9-228) ------------------------------------------------------
+  //
+  // amenbreak asks whether a UGen is installed with
+  //
+  //   test -n "$(find …/Extensions/ -name ignore -prune -o -name AnalogTape_scsynth.so -print)"
+  //
+  // and `test` was refused whole, so the answer was always no — and the
+  // script went on to "install" PortedPlugins with `sudo rsync`, which can
+  // never happen here, although AnalogTape is compiled in and declared on
+  // disk (community/extensions.ts). The inner command is one this shell
+  // already runs; `test` only asks whether it printed anything. A file test
+  // (`-e`, `-f`, `-d`) is a look at the tree. A no is exit status 1, not a
+  // refusal.
+  {
+    const t = /^test\s+(-[nzefd])\s+(.+)$/.exec(cmd);
+    if (t !== null && depth < 4) {
+      const flag = t[1]!;
+      const arg = t[2]!.trim();
+      const answer = (yes: boolean): ShellResult => (yes ? OK("") : { out: "", ok: false, failed: true });
+      if (flag === "-n" || flag === "-z") {
+        const sub = /^"\$\((.*)\)"$/.exec(arg) ?? /^\$\((.*)\)$/.exec(arg);
+        let value = unquote(arg);
+        if (sub !== null) {
+          const r = runShell(vfs, sub[1]!, depth + 1);
+          // A command this shell cannot run cannot be tested either: that
+          // is still a refusal, and it names the inner command.
+          if (!r.ok && r.failed !== true && r.out === "") return NO(`test: ${r.refused ?? "could not run"}`);
+          value = r.out.trim();
+        }
+        return answer(flag === "-n" ? value !== "" : value === "");
+      }
+      const p = normalise(unquote(arg), vfs.home);
+      const isDir = vfs.isDir(p);
+      return answer(flag === "-d" ? isDir : flag === "-f" ? vfs.exists(p) && !isDir : isDir || vfs.exists(p));
     }
   }
 
@@ -561,7 +848,9 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
     // falls through to the fetch block below instead of being refused
     // here as "cd ... wget".
     if (!/^ls\b/.test(rest)) {
-      if (!/^(wget|curl|git)\b/.test(rest)) {
+      // E9-226: and `cd <dir> && unzip x.zip`, which unzips into it
+      // (E9-228: or `tar -xf`).
+      if (!/^(wget|curl|git|unzip|tar)\b/.test(rest)) {
         return NO(`unsupported shell command: cd ... ${rest.split(/\s+/)[0]}`);
       }
     } else {
@@ -984,6 +1273,104 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
     const body = chain ? chain[2]!.trim() : cmd;
     const cwd = chain ? unquote(chain[1]!) : null;
 
+    // E9-226 — `unzip <zip> [-d <dir>]`, the other half of a download.
+    //
+    // mx.samples fetches an instrument with `curl -o …/download.zip` and
+    // then unzips it into the folder it lists; moonraker's README does the
+    // same with `wget` and `unzip`. Unzipping needs the archive's bytes,
+    // which may not be here yet (the curl is still running, or waiting for
+    // a person: see hand-downloads.ts), and inflating them is
+    // asynchronous — so, like a download, it is handed up and this run is
+    // told it is not done. `-o`, `-q`, `-n` and friends only say how loud
+    // or how careful to be; the archive and `-d` are what matter.
+    if (/^unzip\s/.test(body)) {
+      const ws = words(body).slice(1).map(unquote);
+      let dir: string | null = null;
+      let zip: string | null = null;
+      for (let i = 0; i < ws.length; i++) {
+        const w = ws[i]!;
+        if (w === "-d") {
+          dir = ws[++i] ?? null;
+          continue;
+        }
+        if (w.startsWith("-")) continue;
+        if (zip === null) zip = w;
+      }
+      if (zip === null) return NO("unzip with no archive");
+      const at = (p: string): string =>
+        normalise(cwd !== null && !p.startsWith("/") && !p.startsWith("~") ? `${cwd}/${p}` : p, vfs.home);
+      const target = dir !== null ? at(dir) : cwd !== null ? normalise(cwd, vfs.home) : null;
+      if (target === null) return NO("unzip with no destination: nothing says where it would land");
+      return LATER(`unzipping ${zip} — it will be in place next run`, {
+        kind: "unzip",
+        url: at(zip),
+        dest: target,
+      });
+    }
+
+    // E9-228 — `tar -x[z]vf <archive> [-C <dir>]`, handed up like unzip
+    // (fs/unpack.ts reads zip, tar and tar.gz alike, by their bytes).
+    // lorenzos-drums unpacks its samples this way and amenbreak twice.
+    // Only EXTRACTING: a `c` makes an archive and a `t` lists one, and
+    // neither is a download's other half.
+    if (/^tar\s/.test(body)) {
+      const ws = words(body).slice(1).map(unquote);
+      let dir: string | null = null;
+      let archive: string | null = null;
+      let extract = false;
+      let other = false;
+      let wantsFile = false;
+      for (let i = 0; i < ws.length; i++) {
+        const w = ws[i]!;
+        if (w === "-C" || w === "--directory") {
+          dir = ws[++i] ?? null;
+          continue;
+        }
+        if (w.startsWith("--directory=")) {
+          dir = w.slice("--directory=".length);
+          continue;
+        }
+        if (w === "--extract" || w === "--get") {
+          extract = true;
+          continue;
+        }
+        if (w.startsWith("--file=")) {
+          archive = w.slice("--file=".length);
+          continue;
+        }
+        if (w === "--file") {
+          archive = ws[++i] ?? null;
+          continue;
+        }
+        if (w.startsWith("--")) continue;
+        // `-xzvf`, or the old dashless `xzf` as the first word.
+        const bundle = w.startsWith("-") ? w.slice(1) : i === 0 ? w : null;
+        if (bundle !== null && /^[a-zA-Z]+$/.test(bundle)) {
+          if (/[xX]/.test(bundle)) extract = true;
+          if (/[ctrudA]/.test(bundle)) other = true;
+          if (bundle.includes("f")) wantsFile = true;
+          continue;
+        }
+        if (wantsFile && archive === null) {
+          archive = w;
+          wantsFile = false;
+          continue;
+        }
+        if (archive === null) archive = w;
+      }
+      if (!extract || other) return NO("tar that does not extract: only unpacking an archive can be done here");
+      if (archive === null) return NO("tar with no archive");
+      const at = (p: string): string =>
+        normalise(cwd !== null && !p.startsWith("/") && !p.startsWith("~") ? `${cwd}/${p}` : p, vfs.home);
+      const target = dir !== null ? at(dir) : cwd !== null ? normalise(cwd, vfs.home) : null;
+      if (target === null) return NO("tar with no destination: nothing says where it would land");
+      return LATER(`unpacking ${archive} — it will be in place next run`, {
+        kind: "unzip",
+        url: at(archive),
+        dest: target,
+      });
+    }
+
     if (/^git\s+clone\s/.test(body)) {
       const args = words(body)
         .slice(2)
@@ -1114,6 +1501,7 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
      * rather than a second notion of a working directory.
      */
     let cwd = "";
+    const fetches: ShellFetch[] = [];
     for (const raw of text.split("\n")) {
       line++;
       const one = raw.trim();
@@ -1137,14 +1525,48 @@ export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
         if (again.ok || again.fetch !== undefined) r = again;
       }
       out += r.out;
+      // E9-228 — A DOWNLOAD DOES NOT STOP THE SCRIPT. It is not done yet,
+      // but it is started, and the lines after it are usually its other
+      // half: amenbreak's install.sh is `wget a.tar`, `tar -xvf a.tar`,
+      // `rm a.tar`, then the same again for a second archive. Stopping at
+      // the first wget fetched one archive and never opened it. So a
+      // download is collected and the script goes on; an unpack of an
+      // archive that is still on its way becomes where that download is
+      // unpacked; and the `rm` of it is what happens anyway — the archive
+      // is never written (hand-downloads.ts).
+      if (r.fetch !== undefined && r.fetch.kind !== "repo") {
+        const f = r.fetch;
+        if (f.kind === "file") {
+          fetches.push(f);
+          continue;
+        }
+        const waiting = fetches.findIndex((x) => x.kind === "file" && x.dest === f.url && x.unzipTo === undefined);
+        if (waiting >= 0) {
+          fetches[waiting] = { ...fetches[waiting]!, unzipTo: f.dest };
+          continue;
+        }
+        fetches.push(f);
+        continue;
+      }
+      if (!r.ok && /^rm\s/.test(one) && fetches.length > 0) continue;
+      // A no (`test` false) is an exit status; bash without `set -e` goes on.
+      if (!r.ok && r.failed === true) continue;
       if (!r.ok) {
         return {
           out,
           ok: false,
           refused: `${path}:${line}: ${r.refused ?? "could not run"} — ${one.slice(0, 80)}`,
-          ...(r.fetch !== undefined ? { fetch: r.fetch } : {}),
+          ...withFetches(r.fetch !== undefined ? [...fetches, r.fetch] : fetches),
         };
       }
+    }
+    if (fetches.length > 0) {
+      return {
+        out,
+        ok: false,
+        refused: `${path}: fetching ${fetches.filter((f) => f.kind === "file").length} file(s) — in place next run`,
+        ...withFetches(fetches),
+      };
     }
     return OK(out);
   }

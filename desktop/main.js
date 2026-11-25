@@ -42,6 +42,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { respond } from "../tools/serve.mjs";
+import { RELAY_PREFIX, relayRelease } from "../tools/gh-release.mjs";
 
 const HERE = import.meta.dirname;
 const ROOT = resolve(HERE, "..");
@@ -132,6 +133,8 @@ const TONE = process.argv.includes("--tone");
 const SOFTCUT = process.argv.includes("--softcut");
 /** Fill a buffer in scsynth with a constant and read it back. See probe.js. */
 const BUFFERS = process.argv.includes("--buffers");
+/** Ask the GitHub release relay for one file and report only that (E9-227). See probe.js. */
+const RELAY = process.argv.includes("--relay");
 /**
  * Queue several scripts through the real panel: `--install a,b,c`.
  *
@@ -590,6 +593,18 @@ async function main() {
     // different origin with a different store, and answering it would be
     // quietly handing out a second instrument.
     if (url.host !== "app") return new Response("forbidden", { status: 403 });
+    // E9-227 — a GitHub release file the page cannot fetch itself (no CORS
+    // on github.com's answer), fetched here through Chromium's own network
+    // stack, so a proxy the machine is set up for is used. The CSP's
+    // `connect-src` does not have to name GitHub: to the page this is its
+    // own origin. See tools/gh-release.mjs.
+    if (url.pathname.startsWith(RELAY_PREFIX)) {
+      return relayRelease(url.pathname, {
+        fetch: (u, init) => net.fetch(u, init),
+        method: request.method,
+        site: request.headers.get("sec-fetch-site"),
+      });
+    }
     const { status, headers, body } = await respond(PAYLOAD, url.pathname);
     if (status === 301) return Response.redirect(`${ORIGIN}${headers.Location}`, 301);
     return new Response(body, { status, headers });
@@ -690,6 +705,7 @@ async function main() {
   if (TONE) probe = "globalThis.__PROBE_TONE = true;\n" + probe;
   if (SOFTCUT) probe = "globalThis.__PROBE_SOFTCUT = true;\n" + probe;
   if (BUFFERS) probe = "globalThis.__PROBE_BUFFERS = true;\n" + probe;
+  if (RELAY) probe = "globalThis.__PROBE_RELAY = true;\n" + probe;
   if (INSTALL !== null) {
     probe = `globalThis.__PROBE_INSTALL = ${JSON.stringify(INSTALL)};\n` + probe;
   }
@@ -699,6 +715,17 @@ async function main() {
     report = await win.webContents.executeJavaScript(probe, true);
   } catch (e) {
     report = { fatal: String(e?.message ?? e) };
+  }
+  if (RELAY) {
+    const r = report.relay ?? { error: report.fatal ?? "no report" };
+    line("");
+    line(`  RELAY                   ${r.ok ? "works" : "BROKEN"} — ${r.path}`);
+    line(`                          status ${r.status}, marked ${r.marked}, ${r.bytes} bytes (Content-Length ${r.length}), zip ${r.zip}${r.error ? ", error " + r.error : ""}`);
+    line(`                          a path that is not a release: ${r.refused}`);
+    line(`                          the same file from github.com directly: ${r.direct}`);
+    line("");
+    app.exit(r.ok ? 0 : 1);
+    return;
   }
   // E9-208 — the script store, opened the way its button opens it. What
   // this application could break and a browser could not: the pictures are

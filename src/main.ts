@@ -79,14 +79,23 @@ import { makeCallbacks } from "./norns/callbacks.js";
 import { loadDustWeb } from "./fs/dust-web.js";
 import { registerFs } from "./fs/register.js";
 import { createNetReplies } from "./fs/net-replies.js";
-import { restoreFromOpfs, mirrorToOpfs, wipeOpfs } from "./fs/opfs.js";
+import { restoreFromOpfs, mirrorToOpfs, wipeOpfs, type OpfsMirror } from "./fs/opfs.js";
+import { claimStorage } from "./fs/storage-lock.js";
+import { createKeepStorage } from "./fs/keep-storage.js";
+import { createLiveness } from "./engine/liveness.js";
+import { createHandDownloads, type HandDownload } from "./fs/hand-downloads.js";
+import { unpack as unpackArchive } from "./fs/unpack.js";
+import { fetchFile, quarters } from "./fs/release-relay.js";
+import { setJackGraph, type ShellFetch } from "./fs/shell.js";
+import { jackRoute } from "./crone/jack.js";
+import { engineReadsInput } from "./engine/input-use.js";
 import { GridManager } from "./grid/manager.js";
 import { registerGrid } from "./grid/register.js";
 import { GridView } from "./grid/view.js";
 import { MidiManager } from "./midi/manager.js";
 import { registerMidi } from "./midi/register.js";
 import { startWebMidi } from "./midi/web.js";
-import { createVirtualMidiPort, type VirtualMidiPort } from "./midi/virtual.js";
+import { createNornsVirtualPort, createVirtualMidiPort, type VirtualMidiPort } from "./midi/virtual.js";
 import { createKeyboardMidiPort, type KeyboardMidiPort } from "./midi/keyboard.js";
 import { createKeyboardView, type KeyboardView } from "./ui/keyboard-view.js";
 import { createFadersMidiPort, FADERS_MIDI_NAME, type FadersMidiPort } from "./midi/faders.js";
@@ -121,7 +130,10 @@ import { createEngineHost } from "./engine/host.js";
 import { repairScSource } from "./engine/sc-source.js";
 import { registerEngine } from "./engine/register.js";
 import { createBufferLoader } from "./engine/buffers.js";
-import { parseWavHeader } from "./fs/wav-header.js";
+import { createSoundData } from "./engine/sound-data.js";
+import { parseSoundHeader } from "./fs/wav-header.js";
+/** E9-235 — the formats whose header `parseSoundHeader` reads: WAV, FLAC, AIFF. */
+const SOUND_FILE = /\.(wav|flac|aiff?)$/i;
 import { registerClock } from "./clock/register.js";
 import { startCrone } from "./crone/crone.js";
 import {
@@ -184,6 +196,8 @@ const rawLog = createLog(logEl);
 let scriptIsLoaded = false;
 /** Whether this script has already been told its input is off. E9-173. */
 let saidInputIsOff = false;
+/** The loaded engine reads the audio input somewhere in its classes. E9-222. */
+let engineHearsInput = false;
 /** How many `# script clear` have gone by, and who wants to hear the next. E9-202. */
 let scriptClears = 0;
 let onScriptClear: (() => void) | null = null;
@@ -194,6 +208,8 @@ const log = (line: string): void => {
     // A new script gets its own warning: the last one having been told
     // says nothing about this one.
     saidInputIsOff = false;
+    engineHearsInput = false;
+    document.getElementById("input-notice")?.remove();
     scriptClears++;
     onScriptClear?.();
   }
@@ -232,6 +248,171 @@ function withStallTimeout(signal?: AbortSignal): AbortSignal {
   const any = (AbortSignal as { any?: (s: AbortSignal[]) => AbortSignal }).any;
   return any ? any([signal, timeout]) : signal;
 }
+
+/**
+ * E9-216 — which load of the page this is: when it started, and which
+ * build. Written beside every removal in the storage journal, so a file
+ * that went missing can be traced to the page that deleted it.
+ */
+/**
+ * E9-216 — said on the screen of a tab that has handed the store to
+ * another: it still plays, and nothing it does is kept.
+ */
+function showStorageNotice(): void {
+  if (document.getElementById("storage-notice") !== null) return;
+  const el = document.createElement("div");
+  el.id = "storage-notice";
+  el.setAttribute("role", "status");
+  el.textContent =
+    "norns-js is open in another tab. This tab no longer saves anything — reload it to use it here.";
+  el.style.cssText =
+    "position:fixed;left:0;right:0;top:0;z-index:1000;padding:8px 12px;" +
+    "background:#3a2a00;color:#ffd27a;font:13px/1.4 system-ui,sans-serif;text-align:center";
+  document.body.appendChild(el);
+}
+
+/**
+ * E9-219 — said on the page when the audio server has died, with the one
+ * thing that brings it back. Above everything, and not dismissable: the
+ * page makes no sound until it is pressed, and that must not be missed.
+ */
+/**
+ * E9-222 — said on the page when a script listens to an input that is off,
+ * with the switch beside it. Dismissable, and gone with the script: it is
+ * advice about this instrument, not an alarm.
+ */
+function showInputNotice(text: string, turnOn: () => Promise<boolean>): void {
+  document.getElementById("input-notice")?.remove();
+  const el = document.createElement("div");
+  el.id = "input-notice";
+  el.setAttribute("role", "status");
+  el.style.cssText =
+    "position:fixed;left:0;right:0;top:0;z-index:999;padding:8px 12px;display:flex;gap:10px;" +
+    "align-items:center;justify-content:center;flex-wrap:wrap;background:#3a2a00;color:#ffd27a;" +
+    "font:13px/1.4 system-ui,sans-serif;text-align:center";
+  const words = document.createElement("span");
+  words.textContent = text;
+  const on = document.createElement("button");
+  on.type = "button";
+  on.textContent = "turn the input on";
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "×";
+  close.setAttribute("aria-label", "dismiss");
+  for (const b of [on, close]) {
+    b.style.cssText =
+      "font:inherit;padding:3px 10px;border-radius:4px;border:1px solid #ffd27a;" +
+      "background:transparent;color:#ffd27a;cursor:pointer";
+  }
+  on.addEventListener("click", () => {
+    on.disabled = true;
+    void turnOn().then((ok) => {
+      if (ok) el.remove();
+      else on.disabled = false;
+    });
+  });
+  close.addEventListener("click", () => el.remove());
+  el.append(words, on, close);
+  document.body.appendChild(el);
+}
+
+/**
+ * E9-226 — a file a script downloads that the page cannot fetch: the link
+ * to get it by hand, and a button that takes it and puts it (or its
+ * unzipped contents) where the script asked. One notice per download.
+ */
+function showHandDownloadNotice(d: HandDownload, provide: (bytes: Uint8Array) => Promise<number>): void {
+  const id = `hand-${d.dest.replace(/[^a-z0-9]/gi, "-")}`;
+  if (document.getElementById(id) !== null) return;
+  const name = d.url.split("?")[0]!.split("/").pop() ?? "the file";
+  const where = d.unzipTo ?? d.dest;
+  const el = document.createElement("div");
+  el.id = id;
+  el.setAttribute("role", "status");
+  el.style.cssText =
+    "position:fixed;left:0;right:0;bottom:0;z-index:999;padding:8px 12px;display:flex;gap:10px;" +
+    "align-items:center;justify-content:center;flex-wrap:wrap;background:#102a3a;color:#bfe6ff;" +
+    "font:13px/1.4 system-ui,sans-serif;text-align:center";
+  const words = document.createElement("span");
+  words.textContent =
+    `A script wants ${name}, and a page cannot download it from ${new URL(d.url).host}. ` +
+    `Download it, then add it: it goes into ${where.replace("/home/we/dust/", "~/dust/")}.`;
+  const style =
+    "font:inherit;padding:3px 10px;border-radius:4px;border:1px solid #bfe6ff;" +
+    "background:transparent;color:#bfe6ff;cursor:pointer;text-decoration:none";
+  const get = document.createElement("a");
+  get.href = d.url;
+  get.target = "_blank";
+  get.rel = "noopener";
+  get.textContent = "download";
+  get.style.cssText = style;
+  const add = document.createElement("button");
+  add.type = "button";
+  add.textContent = "add the file";
+  add.style.cssText = style;
+  const pick = document.createElement("input");
+  pick.type = "file";
+  pick.hidden = true;
+  add.addEventListener("click", () => pick.click());
+  pick.addEventListener("change", () => {
+    const file = pick.files?.[0];
+    if (!file) return;
+    add.disabled = true;
+    add.textContent = "adding…";
+    void file
+      .arrayBuffer()
+      .then((buf) => provide(new Uint8Array(buf)))
+      .then((n) => {
+        words.textContent = `${n} file(s) in ${where.replace("/home/we/dust/", "~/dust/")}. Open the script again to see them.`;
+        add.remove();
+        get.remove();
+        setTimeout(() => el.remove(), 8000);
+      })
+      .catch((e) => {
+        words.textContent = `That file could not be added: ${(e as Error).message}`;
+        add.disabled = false;
+        add.textContent = "add the file";
+      });
+  });
+  const close = document.createElement("button");
+  close.type = "button";
+  close.textContent = "×";
+  close.setAttribute("aria-label", "dismiss");
+  close.style.cssText = style;
+  close.addEventListener("click", () => el.remove());
+  el.append(words, get, add, close, pick);
+  document.body.appendChild(el);
+}
+
+function showServerDeadNotice(restart: () => void): void {
+  if (document.getElementById("server-dead-notice") !== null) return;
+  const el = document.createElement("div");
+  el.id = "server-dead-notice";
+  el.setAttribute("role", "alert");
+  el.style.cssText =
+    "position:fixed;left:0;right:0;top:0;z-index:1001;padding:10px 12px;display:flex;gap:12px;" +
+    "align-items:center;justify-content:center;flex-wrap:wrap;background:#4a0d0d;color:#ffd0d0;" +
+    "font:14px/1.4 system-ui,sans-serif;text-align:center";
+  const text = document.createElement("span");
+  text.textContent =
+    "The audio server has stopped — nothing will sound until norns-js restarts. " +
+    "It comes back with no script loaded.";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "restart";
+  button.style.cssText =
+    "font:inherit;padding:4px 14px;border-radius:4px;border:1px solid #ffd0d0;" +
+    "background:#ffd0d0;color:#4a0d0d;cursor:pointer";
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    button.textContent = "restarting…";
+    restart();
+  });
+  el.append(text, button);
+  document.body.appendChild(el);
+}
+
+const BOOTED_AT = `${new Date().toISOString()} ${typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev"}`;
 
 async function main(): Promise<void> {
   let dirty = true;
@@ -411,8 +592,44 @@ async function main(): Promise<void> {
     );
   }
 
+  /**
+   * E9-216 — ONE TAB SAVES AT A TIME, and the store is read only once this
+   * one is it. A tab already open is asked to save what it has and stop
+   * first, so the restore below reads everything that tab wrote. See
+   * `fs/storage-lock.ts` for why two tabs saving at once loses files.
+   */
+  let mirrorRef: OpfsMirror | null = null;
+  let saving = true;
+  const stopSaving = (line: string): void => {
+    if (!saving) return;
+    saving = false;
+    mirrorRef?.stop();
+    log(line);
+    showStorageNotice();
+  };
+  const claim = await claimStorage({
+    onYield: async () => {
+      if (mirrorRef !== null) await mirrorRef.flush();
+      stopSaving("storage: norns-js was opened in another tab — this one saved what it had and no longer saves");
+    },
+    onLost: () => stopSaving("storage: another tab took over saving — this one no longer saves"),
+    onAsk: () => log("storage: norns-js is open in another tab — asking it to save and hand over…"),
+  });
+  if (claim === "handed-over") log("storage: norns-js was open in another tab; it saved its files and handed over");
+  else if (claim === "taken") log("storage: another norns-js tab did not answer, so this one took over saving");
+
   log("restoring saved files…");
-  await restoreFromOpfs(vfs, { log: (l) => log(l) });
+  const restored = await restoreFromOpfs(vfs, { log: (l) => log(l) });
+  /**
+   * E9-216 — WHAT THE BOOT TIDIES BEFORE THE MIRROR EXISTS, for the mirror.
+   *
+   * The empty folders the restore drops, the interrupted downloads swept
+   * below, the bench scripts taken away: all of them changed the Vfs while
+   * nothing was watching, so none of them ever reached the disk, and every
+   * boot found the same ones and tidied them again. Handed over once the
+   * mirror runs.
+   */
+  const tidiedAtBoot: string[] = [...restored.dropped];
 
   /**
    * E9-137 — SAY HOW MUCH ROOM THERE IS, AND WHETHER IT IS KEPT.
@@ -449,6 +666,8 @@ async function main(): Promise<void> {
   } catch {
     // See above: no line rather than no boot.
   }
+  // E9-217 — and asked for, once, by the first install: see keep-storage.ts.
+  const keepStorage = createKeepStorage({ log: (l) => log(l) });
 
   // E9-33 — what the server has, said where thirteen scripts look for it.
   //
@@ -478,9 +697,16 @@ async function main(): Promise<void> {
   // the boot is the right place and "delete it" is the right answer.
   const stale = vfs.list("/home/we/dust/.installing").map((e) => e.name);
   if (stale.length > 0) {
-    for (const p of vfs.walk("/home/we/dust/.installing")) vfs.remove(p);
-    for (const name of stale) vfs.remove(`/home/we/dust/.installing/${name}`);
+    for (const p of vfs.walk("/home/we/dust/.installing")) {
+      vfs.remove(p);
+      tidiedAtBoot.push(p);
+    }
+    for (const name of stale) {
+      vfs.remove(`/home/we/dust/.installing/${name}`);
+      tidiedAtBoot.push(`/home/we/dust/.installing/${name}`);
+    }
     vfs.remove("/home/we/dust/.installing");
+    tidiedAtBoot.push("/home/we/dust/.installing");
     log(`swept ${stale.length} interrupted download${stale.length === 1 ? "" : "s"}: ${stale.join(", ")}`);
   }
   /**
@@ -524,12 +750,20 @@ async function main(): Promise<void> {
   } else {
     for (const dir of [BENCH_DIR, CPU_DIR]) {
       if (vfs.walk(dir).length === 0) continue;
-      for (const p of vfs.walk(dir)) vfs.remove(p);
+      for (const p of vfs.walk(dir)) {
+        vfs.remove(p);
+        tidiedAtBoot.push(p);
+      }
       vfs.remove(dir);
+      tidiedAtBoot.push(dir);
     }
   }
 
-  const mirror = mirrorToOpfs(vfs, { log: (l) => log(l) });
+  const mirror = mirrorToOpfs(vfs, { log: (l) => log(l), session: BOOTED_AT });
+  mirrorRef = mirror;
+  // A newer tab may have asked for the store while this one was booting.
+  if (saving) mirror.touch(tidiedAtBoot);
+  else mirror.stop();
   // A tab being closed is the common case for losing the last write, and
   // `visibilitychange` is the event that actually fires on mobile. The flush
   // is not awaited — nothing can await during a teardown — but starting it
@@ -647,8 +881,25 @@ async function main(): Promise<void> {
     secure: () => globalThis.location?.protocol === "https:",
     refusedByPolicy: (host) => refusedHosts.has(host),
   });
-  const startFetch = (f: { kind: "repo" | "file"; url: string; dest: string }): void => {
+  /**
+   * E9-226 — what a page cannot download, the person can: see
+   * fs/hand-downloads.ts. Asked for on the page, with the link and a
+   * button that takes the file.
+   */
+  const handDownloads = createHandDownloads({
+    vfs,
+    // E9-228 — zip, tar or tar.gz, told apart by their bytes.
+    unzip: (bytes) => unpackArchive(bytes),
+    log: (l) => log(l),
+    onAsk: (d) => showHandDownloadNotice(d, (bytes) => handDownloads.provide(d.dest, bytes)),
+  });
+  const startFetch = (f: ShellFetch): void => {
     void (async () => {
+      if (f.kind === "unzip") {
+        await handDownloads.unzip(f.url, f.dest).catch((e) => log(`unzip: ${f.url} failed — ${(e as Error).message}`));
+        return;
+      }
+      if (f.kind === "file") handDownloads.started(f.url, f.dest, f.unzipTo);
       try {
         if (f.kind === "repo") {
           const repo = parseRepoUrl(f.url);
@@ -657,20 +908,29 @@ async function main(): Promise<void> {
             return;
           }
           const name = f.dest.split("/").filter(Boolean).pop() ?? repo.repo;
+          keepStorage();
           const r = await installFromRepo(vfs, repo, { name, commit: () => mirror.flush() });
           log(`fetch: ${repo.owner}/${repo.repo} → ${f.dest} (${r.files} files)`);
         } else {
-          const res = await fetch(f.url);
-          if (!res.ok) {
-            log(`fetch: ${f.url} answered ${res.status}`);
+          // E9-227 — a GitHub release file goes through this page's own
+          // server, which can fetch what the page may not (fs/release-relay.ts).
+          keepStorage();
+          const name = f.dest.split("/").pop() ?? f.url;
+          const got = await fetchFile(f.url, { fetch: (u) => fetch(u), onProgress: quarters(log, name) });
+          const via = got.relayed ? ", through this page's server" : "";
+          if (!got.ok) {
+            log(`fetch: ${f.url} answered ${got.status}${via}`);
+            handDownloads.failed(f.dest, `it answered ${got.status}`);
             return;
           }
-          const bytes = new Uint8Array(await res.arrayBuffer());
-          vfs.write(f.dest, bytes);
-          log(`fetch: ${f.url} → ${f.dest} (${(bytes.length / 1024).toFixed(0)} KB)`);
+          log(`fetch: ${f.url} → ${f.dest} (${(got.bytes.length / 1024).toFixed(0)} KB${via})`);
+          await handDownloads.fetched(f.dest, got.bytes);
         }
       } catch (e) {
         log(`fetch: ${f.url} failed — ${(e as Error).message}`);
+        // A TypeError here is the browser refusing a cross-origin reply —
+        // GitHub's release downloads, for one. A person can still get it.
+        if (f.kind === "file") handDownloads.failed(f.dest, (e as Error).message);
       }
     })();
   };
@@ -851,7 +1111,32 @@ async function main(): Promise<void> {
           log: (l) => log(l),
         })
       : null;
-  registerOsc(host.registry, { remote: oscRemote, log: (l) => log(l) });
+  registerOsc(host.registry, {
+    remote: oscRemote,
+    // E9-239 — the programs on this norns are in this page: sclang and
+    // scsynth through the engine host, matron by its own osc.event (later,
+    // not inside the send — a script sending to itself on hardware hears
+    // it on the next pass of the event loop too).
+    local: (port, path, args) => {
+      if (port === 57120 && scEngine !== null) {
+        scEngine.sendToLang(path, args);
+        return true;
+      }
+      if (port === 57110 && scEngine !== null) {
+        scEngine.sendToServer(path, args);
+        return true;
+      }
+      if (port === 10111) {
+        setTimeout(() => {
+          cbLater()?.oscEvent(path, [...args], ["127.0.0.1", "10111"]);
+          dirtyFlag();
+        }, 0);
+        return true;
+      }
+      return false;
+    },
+    log: (l) => log(l),
+  });
 
   const err = boot(host, loadConfigWeb());
   if (err) {
@@ -1461,6 +1746,28 @@ async function main(): Promise<void> {
     }
   };
 
+  /**
+   * E9-222 — A SCRIPT THAT LISTENS TO AN INPUT THAT IS OFF, said where it
+   * can be seen. E9-173 put it in the log, which on a phone nobody has
+   * open; leslie was reported silent with the answer sitting there. Once
+   * per script, with a button that turns the input on (the browser then
+   * asks for the microphone, as the gear's switch does).
+   */
+  const inputHint = (what: string, note: string): void => {
+    if (settings.audioInOn || saidInputIsOff) return;
+    saidInputIsOff = true;
+    log(
+      `audio: this script ${what}, and the input is off — ${note}. It stays silent until ` +
+        `the input is on (the button at the top, or the gear; the browser will ask for a microphone).`,
+    );
+    showInputNotice(`This script ${what}, and the input is off — ${note}.`, async () => {
+      settings.setAudio({ inOn: true });
+      await applyInputDevice();
+      if (settings.audioInOn) log("audio in: on");
+      return settings.audioInOn;
+    });
+  };
+
   // --- input -------------------------------------------------------------
   //
   // Named, because a Steam Deck's gamepad arrives through the frame loop
@@ -1740,6 +2047,11 @@ async function main(): Promise<void> {
     if (vuQuietSince === 0) vuQuietSince = now;
     if (vuWindow.outMax > 0) vuQuietSince = now;
     const verdict = judgeVu(vuWindow, scriptIsLoaded, now - vuQuietSince);
+    // E9-222 — a silent script whose engine can hear the input, with the
+    // input off: that is the likeliest reason, and it is said on the page.
+    if (verdict?.kind === "nothing-arrives" && engineHearsInput) {
+      inputHint("has an engine that listens to the audio input", "an effect makes no sound of its own");
+    }
     vuLast = vuWindow;
     vuWindow = emptyVu();
     if (verdict === null) {
@@ -1873,6 +2185,36 @@ async function main(): Promise<void> {
    * first draft of this did. Measured by the page failing to start.
    */
   let pollServer: () => void = () => {};
+
+  /**
+   * E9-219 — A DEAD SERVER IS SAID ON THE PAGE, with a restart beside it.
+   *
+   * See `engine/liveness.ts`. The probe is set once the server is up, the
+   * same way `pollServer` is, and asked only while the audio is running in
+   * a visible page: a suspended context answers nothing and is not dead.
+   *
+   * THE RESTART IS NORNS' OWN, and it comes back with NO script. Coming
+   * back INTO the script would be friendlier and is exactly wrong when the
+   * script is what killed the server: it would kill it again on every
+   * restart, for ever. Nothing restarts by itself, for the same reason.
+   */
+  let probeServer: () => Promise<boolean> = () => Promise.resolve(true);
+  let serverUp = false;
+  const liveness = createLiveness({
+    probe: () => probeServer(),
+    active: () =>
+      serverUp && audioContext?.state === "running" && globalThis.document?.hidden !== true,
+    onDead: (why) => {
+      log(`audio: the server has stopped — ${why}. Nothing will sound until norns-js restarts.`);
+      showServerDeadNotice(() => {
+        log("audio: restarting after the server stopped");
+        doRestart();
+        // If Lua cannot run the restart either, the page goes anyway. No
+        // clean shutdown is recorded, so it comes back with no script.
+        setTimeout(() => void mirror.flush().finally(() => globalThis.location?.reload()), 3000);
+      });
+    },
+  });
 
   let freeMb = 0;
   const pollStat = (): void => {
@@ -2021,6 +2363,8 @@ async function main(): Promise<void> {
     // The answer lands in `engine.status` and is read by
     // `audio_get_cpu_load`.
     pollServer();
+    // E9-219 — and every few seconds, whether it still answers at all.
+    liveness.tick(performance.now());
   };
   pollStat();
   setInterval(pollStat, 1000);
@@ -3370,6 +3714,7 @@ async function main(): Promise<void> {
    * it. Said in the log the way a restore is; true when anything landed.
    */
   const addSamplesFrom = async (bytes: Uint8Array, name: string): Promise<boolean> => {
+    keepStorage();
     try {
       const r = await importSamples(vfs, bytes);
       const mb = (r.bytes / 1048576).toFixed(1);
@@ -3450,6 +3795,7 @@ async function main(): Promise<void> {
       // produced a script outside code/ that SELECT never found.
       addSamples: async (bytes, name) => void (await addSamplesFrom(bytes, name)),
       addScript: async (bytes, name) => {
+        keepStorage();
         try {
           const r = await installScript(vfs, bytes);
           log(`add: ${name} — ${r.name}, ${r.files} files, in code/${r.name}`);
@@ -3459,6 +3805,7 @@ async function main(): Promise<void> {
         }
       },
       addScriptFromUrl: async (url) => {
+        keepStorage();
         try {
           const archive = await fetchArchive(url);
           const r = await installScript(vfs, archive);
@@ -3742,6 +4089,8 @@ async function main(): Promise<void> {
           .filter((e) => e.isDir && vfs.walk(`/home/we/dust/code/${e.name}`).length > 0)
           .map((e) => e.name),
       install: async (entry, signal, onProgress) => {
+        // E9-217 — first, while the press of "get" still counts as one.
+        keepStorage();
         // E9-203 — an engine that comes from one of monome's studies and
         // not from a repository. Two listings off one page.
         const study = studyEngineOf(entry.url);
@@ -3772,6 +4121,7 @@ async function main(): Promise<void> {
         });
       },
       installUrl: async (url, signal, onProgress) => {
+        keepStorage();
         const repo = parseRepoUrl(url);
         if (!repo) throw new Error("that is not a GitHub repository url");
         return installFromRepo(vfs, repo, {
@@ -3843,6 +4193,22 @@ async function main(): Promise<void> {
           meta: createMetaStore({ log, saveData: spendLess }),
           ahead: () => !spendLess(),
           addSamples: addSamplesFrom,
+          // E9-227 — a pack on a GitHub release, fetched by this page's server.
+          fetchSamples: async (url, onProgress) => {
+            keepStorage();
+            try {
+              const got = await fetchFile(url, { fetch: (u) => fetch(u), onProgress });
+              log(
+                got.ok
+                  ? `samples: fetched ${url} (${(got.bytes.length / 1048576).toFixed(1)} MB${got.relayed ? ", through this page's server" : ""})`
+                  : `samples: ${url} answered ${got.status}`,
+              );
+              return got.ok ? got.bytes : null;
+            } catch (e) {
+              log(`samples: ${url} could not be fetched here — ${(e as Error).message}`);
+              return null;
+            }
+          },
           run: (name) => {
             const file = mainScript(name, scriptsIn(vfs));
             if (file === null) {
@@ -4004,6 +4370,9 @@ async function main(): Promise<void> {
     clockByte: (_id, byte, at) => midiClock.handle(byte, at),
   });
   registerMidi(host.registry, midiManager, { log: (l) => log(l) });
+  // E9-231 — matron's "virtual" device, FIRST, as `main.cc` adds it before
+  // any hardware: `midi.devices` on a norns is never empty (midi/virtual.ts).
+  midiManager.add(createNornsVirtualPort());
   // crow and serial: not implemented, and saying so clearly (E5-10).
   registerSerial(host.registry, { log: (l) => log(l), crow: () => crow });
   // Exposed whether or not the browser grants MIDI: the manager is how a
@@ -4222,15 +4591,36 @@ async function main(): Promise<void> {
         soundFiles.set(path, declared);
         continue;
       }
-      if (!/\.wav$/i.test(path)) continue;
+      if (!SOUND_FILE.test(path)) continue;
       const bytes = vfs.read(path);
       if (bytes === null) continue;
-      const parsed = parseWavHeader(bytes);
+      const parsed = parseSoundHeader(bytes);
       if (parsed === null) continue;
       soundFiles.set(path, parsed);
       fromHeader++;
     }
     if (fromHeader > 0) log(`sound files: ${fromHeader} read from their own headers`);
+    // E9-234 — AND KEPT UP. A WAV written during the session (rpmate's
+    // recording in /dev/shm, a pack a script downloads) had no entry until
+    // the next reload, so its engine could not open it. Every write and
+    // removal of a .wav updates the table; the rewrite is batched to the end
+    // of the task, so an unzip of 960 files is one rewrite, and still lands
+    // before any engine command a script sends after it.
+    let soundFilesPending = false;
+    vfs.watch((path) => {
+      if (!SOUND_FILE.test(path)) return;
+      const bytes = vfs.read(path);
+      const parsed = bytes === null ? null : parseSoundHeader(bytes);
+      if (parsed === null) {
+        if (!soundFiles.delete(path)) return;
+      } else soundFiles.set(path, parsed);
+      if (soundFilesPending) return;
+      soundFilesPending = true;
+      queueMicrotask(() => {
+        soundFilesPending = false;
+        scEngine?.soundFilesChanged();
+      });
+    });
 
     let engine = (scEngine = await createEngineHost({
       log: (l) => log(l),
@@ -4243,6 +4633,7 @@ async function main(): Promise<void> {
       // answer to a page that looks stalled.
       onNeedsGesture: (waiting) => void (needsGesture = waiting, showGate()),
       extraClasses,
+      onDead: (why) => liveness.report(why),
     }));
 
     const injected = await engine.injectNorns();
@@ -4291,6 +4682,7 @@ async function main(): Promise<void> {
           onMatron: (m) => void engineState?.onMatron(m.address, m.args),
           onNeedsGesture: (waiting) => void (needsGesture = waiting, showGate()),
           extraClasses,
+          onDead: (why) => liveness.report(why),
         });
         await engine.injectNorns();
         const again = await engine.bootSclang().catch(() => false);
@@ -4340,6 +4732,18 @@ async function main(): Promise<void> {
     meter.fftSize = 2048;
     meter.connect(master);
     master.connect(ctx.destination);
+    // EACH SIDE, NOT THE SUM. An AnalyserNode analyses its input mixed down
+    // to mono, (L+R)/2, so a signal that is the same on both sides with the
+    // phase of one flipped reads 0: dimension-expander, a stereo widener,
+    // measured silent with a mono test tone in. A side branch, off the audio
+    // path — what reaches the speakers is unchanged.
+    const meterSplit = ctx.createChannelSplitter(2);
+    const meterSides = [ctx.createAnalyser(), ctx.createAnalyser()];
+    meter.connect(meterSplit);
+    meterSides.forEach((side, i) => {
+      side.fftSize = 2048;
+      meterSplit.connect(side, i);
+    });
     // THE MUTE AND THE LEVEL ARE ONE NUMBER on this gain, which is why
     // there is one function rather than two: a mute that multiplied a level
     // would be a second gain node to keep in step, and the two would drift
@@ -4383,7 +4787,7 @@ async function main(): Promise<void> {
     expose({
       master,
       meter,
-      peak: () => peakOf(meter),
+      peak: () => Math.max(peakOf(meterSides[0]!), peakOf(meterSides[1]!)),
       latency: () => ({
         verdict: latencyReclaim?.verdict ?? "none",
         attempts: latencyReclaim?.attempts ?? 0,
@@ -4449,6 +4853,22 @@ async function main(): Promise<void> {
           if (l.over > 0) log(`audio: ${l.over} of ${l.blocks} blocks over budget`);
         },
       });
+      // E9-240 — the JACK cables into SuperCollider, which a script moves
+      // with `jack_connect` (src/crone/jack.ts). Each session starts with
+      // norns' own: the ADC into the engine, softcut not.
+      const cables = new Map<string, boolean>();
+      setJackGraph({
+        has: (from, to) => jackRoute(from, to) !== null,
+        set: (from, to, on) => {
+          const r = jackRoute(from, to);
+          if (r === null) return;
+          const key = `${from}>${to}`;
+          if (cables.get(key) === on) return;
+          cables.set(key, on);
+          crone.call("crone_route", ["number", "number", "number"], [r.source, r.input, on ? 1 : 0]);
+          log(`jack: ${on ? "connected" : "disconnected"} ${from} -> ${to}`);
+        },
+      });
       registerCrone(host.registry, crone, {
         log: (l) => log(l),
         /**
@@ -4466,15 +4886,7 @@ async function main(): Promise<void> {
          * Once per script, because these call it per voice and per
          * channel — `oooooo` does it twelve times in one pass.
          */
-        onWantsInput: () => {
-          if (settings.audioInOn || saidInputIsOff) return;
-          saidInputIsOff = true;
-          log(
-            "audio: this script records from the audio INPUT, and the input is off — " +
-              "it will stay silent until you turn it on in the gear (the browser will " +
-              "ask for a microphone). A looper ships no sound of its own.",
-          );
-        },
+        onWantsInput: () => inputHint("records from the audio input", "a looper ships no sound of its own"),
         files: {
           vfs,
           paths: tapePaths,
@@ -4528,6 +4940,31 @@ async function main(): Promise<void> {
       // would make `level_adc` and `level_ext` the same control, which is
       // exactly what crone's two-input topology exists to prevent.
       adcInput = crone.node;
+      /**
+       * E9-222 — AND THE INPUT INTO THE ENGINE, which was never wired.
+       *
+       * On a norns, crone hands the ADC (after `level_adc`) to
+       * SuperCollider over JACK: `crone:output_5` -> `SuperCollider:in_1`.
+       * The boot log says it skipped exactly those `jack_connect`s, and
+       * nothing stood in for them, so `SoundIn` and `context.in_b` were
+       * silent with the microphone on: leslie, and every engine that
+       * processes the input, could never be heard. Crone's second output
+       * is that signal (see worklet.cpp); it goes into scsynth's input
+       * through one quantum of delay, because scsynth -> crone -> scsynth
+       * is a cycle and Web Audio, like JACK, will only run one with a
+       * block of latency in it.
+       */
+      const toEngine = new DelayNode(ctx, { maxDelayTime: 0.05, delayTime: 128 / ctx.sampleRate });
+      crone.node.connect(toEngine, 1);
+      let engineInputs = 0;
+      for (const node of scsynthOut) {
+        if (node.numberOfInputs < 1) continue;
+        toEngine.connect(node, 0, 0);
+        engineInputs++;
+      }
+      if (engineInputs === 0 && scsynthOut.length > 0) {
+        log("audio: scsynth has no input to connect, so engines will not hear the audio input");
+      }
       if (settings.audioInOn) void applyInputDevice();
       crone.node.connect(meter);
       void crone.poll("vu", true);
@@ -4557,6 +4994,8 @@ async function main(): Promise<void> {
     engineState = registerEngine(host.registry, engine, {
       callbacks: cb,
       log: (l) => log(l),
+      // E9-222 — whether this engine can hear the input; see input-use.ts.
+      onLoadEngine: (name) => void (engineHearsInput = engineReadsInput(vfs, name)),
       // Sound files into scsynth's buffers. scsynth has no libsndfile and
       // its MEMFS is not the VFS, so the browser decodes and the samples go
       // in over OSC. See src/engine/buffers.ts.
@@ -4568,6 +5007,13 @@ async function main(): Promise<void> {
         // E9-171 — so "the buffer is ready" means the server has it.
         syncServer: (ms) => engine.syncServer(ms),
         peekBuffer: (b, i, n, ms) => engine.peekBuffer(b, i, n, ms),
+        log: (l) => log(l),
+      }),
+      soundData: createSoundData({
+        vfs,
+        writeLangFile: (p, b) => engine.writeLangFile(p, b),
+        removeLangFile: (p) => engine.removeLangFile(p),
+        sendToLang: (a, g) => engine.sendToLang(a, g as never),
         log: (l) => log(l),
       }),
       onReady: () => {
@@ -4787,6 +5233,8 @@ Crone.startBoot;`);
     liveEngines = () => engineState?.engines ?? [];
     // The server exists now, so the status poll has something to ask.
     pollServer = () => engine.pollStatus();
+    probeServer = () => engine.syncServer(3000);
+    serverUp = true;
     // E9-162 — and the reply it fetches is readable by the log now, not
     // only by `audio_get_cpu_load`. See `reportFrames`.
     audioStatus = () => engine.status;

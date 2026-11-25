@@ -52,6 +52,18 @@ float cutInL[MAX_FRAMES], cutInR[MAX_FRAMES];
 float cutOutL[MAX_FRAMES], cutOutR[MAX_FRAMES];
 float auxL[MAX_FRAMES], auxR[MAX_FRAMES];
 
+// E9-240 — WHAT IS PLUGGED INTO SUPERCOLLIDER'S TWO INPUTS, as JACK
+// connections. On a norns those are cables in the JACK graph that a script
+// can move: the default is `crone:output_5/6` (the Ext sink, the ADC after
+// `level_adc`) into `SuperCollider:in_1/2`, and splnkr, otis, combos and
+// tetrabotis `jack_connect softcut:output_1 SuperCollider:in_1` to put
+// softcut through their engine. Here SuperCollider hears `aux`, which was
+// the Ext sink and nothing else. route[source][input] is 1 for a cable,
+// 0 for none; JACK sums what arrives at one port, so this does too.
+//   sources: 0 crone:output_5, 1 crone:output_6, 2 softcut:output_1, 3 softcut:output_2
+float route[4][2] = {{1.f, 0.f}, {0.f, 1.f}, {0.f, 0.f}, {0.f, 0.f}};
+float extSinkL[MAX_FRAMES], extSinkR[MAX_FRAMES];
+
 } // namespace
 
 extern "C" {
@@ -81,6 +93,22 @@ EMSCRIPTEN_KEEPALIVE float *crone_dac_right() { return dacR; }
 /** The engine bus: scsynth's output, mixed in as `ext`. */
 EMSCRIPTEN_KEEPALIVE float *crone_ext_left() { return extL; }
 EMSCRIPTEN_KEEPALIVE float *crone_ext_right() { return extR; }
+/**
+ * E9-222 — and what goes BACK to the engine: the mixer's Ext sink, which
+ * upstream fills with the ADC (`bus.ext_sink.copyFrom(bus.adc_source)`,
+ * after `level_adc`) and JACK carries to SuperCollider's inputs
+ * (`crone:output_5` -> `SuperCollider:in_1`). It was rendered here every
+ * block and never left the worklet, so `SoundIn` — and `context.in_b`,
+ * which is built from it — heard silence with the microphone on.
+ */
+EMSCRIPTEN_KEEPALIVE float *crone_aux_left() { return auxL; }
+EMSCRIPTEN_KEEPALIVE float *crone_aux_right() { return auxR; }
+
+/** E9-240 — connect (1) or disconnect (0) a source to one of SuperCollider's inputs. */
+EMSCRIPTEN_KEEPALIVE void crone_route(int source, int input, float on) {
+    if (source < 0 || source > 3 || input < 0 || input > 1) return;
+    route[source][input] = on > 0.f ? 1.f : 0.f;
+}
 
 // The two INTERNAL buses between the mixer and softcut. Nothing in the audio
 // path needs them from outside; they are exported because the chain
@@ -138,8 +166,17 @@ EMSCRIPTEN_KEEPALIVE void crone_process(int numFrames) {
     // to the engine.
     mixer->setSink(MixerClient::SinkDac, dacL, dacR);
     mixer->setSink(MixerClient::SinkCut, cutInL, cutInR);
-    mixer->setSink(MixerClient::SinkExt, auxL, auxR);
+    mixer->setSink(MixerClient::SinkExt, extSinkL, extSinkR);
     mixer->render(n);
+
+    // E9-240 — the cables into SuperCollider, summed as JACK sums them.
+    // softcut's output is THIS block's (it rendered first), which is what a
+    // JACK connection from softcut's ports would carry too.
+    for (jack_nframes_t i = 0; i < n; ++i) {
+        const float s0 = extSinkL[i], s1 = extSinkR[i], s2 = cutOutL[i], s3 = cutOutR[i];
+        auxL[i] = route[0][0] * s0 + route[1][0] * s1 + route[2][0] * s2 + route[3][0] * s3;
+        auxR[i] = route[0][1] * s0 + route[1][1] * s1 + route[2][1] * s2 + route[3][1] * s3;
+    }
 
     // The polls, LAST, so a vu frame reports the block that was just
     // rendered rather than the one before it.

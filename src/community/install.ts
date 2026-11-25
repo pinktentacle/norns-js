@@ -323,7 +323,7 @@ export async function listFiles(
    * pinned rather than at whatever the library's branch has become.
    */
   ref?: string,
-): Promise<{ branch: string; files: Candidate[] }> {
+): Promise<{ branch: string; files: Candidate[]; commit?: string }> {
   if (repo.base !== undefined) {
     const body = (await fetchJson(`${repo.base}files.json`)) as { files?: unknown };
     const raw = Array.isArray(body.files) ? (body.files as Array<{ path?: unknown; size?: unknown }>) : [];
@@ -334,7 +334,22 @@ export async function listFiles(
     return { branch: "norns-js", files };
   }
   const errors: string[] = [];
+  // A submodule pinned by its parent is already at a commit.
+  if (ref !== undefined && COMMIT.test(ref)) {
+    const tree = await gitTree(repo, ref, fetchJson, errors);
+    if (tree !== null) return { branch: ref, files: tree, commit: ref };
+  }
   for (const branch of ref ? [ref] : ["main", "master"]) {
+    // E9-221 — THE BRANCH'S COMMIT, and the files of THAT commit. See
+    // `headCommit`. Only when it cannot be had does the branch name go to
+    // the CDN, as it always did.
+    if (ref === undefined) {
+      const commit = await headCommit(repo, branch, fetchJson, errors);
+      if (commit !== null) {
+        const pinned = await gitTree(repo, commit, fetchJson, errors);
+        if (pinned !== null) return { branch, files: pinned, commit };
+      }
+    }
     // GitHub FIRST, because jsDelivr's index can be older than jsDelivr's
     // own files. See `gitTree`.
     const tree = await gitTree(repo, branch, fetchJson, errors);
@@ -357,6 +372,46 @@ export async function listFiles(
     }
   }
   throw new Error(`could not list ${repo.owner}/${repo.repo} (${errors.join("; ")})`);
+}
+
+/** A full commit id. */
+const COMMIT = /^[0-9a-f]{40}$/;
+
+/**
+ * E9-221 — WHICH COMMIT A BRANCH IS AT, so an install is ONE version.
+ *
+ * Every file was fetched as `cdn.jsdelivr.net/gh/<o>/<r>@main/<path>`, and
+ * jsDelivr caches a branch FILE BY FILE: each path is resolved and kept on
+ * its own clock. A repository that changes often can therefore be served
+ * as a mixture — one file from this week, its neighbour from last — and
+ * the install is a tree that never existed. Reported from a Pixel:
+ * `grains.lua` old enough to send `engine.prism_bright`, beside an
+ * `engine_grains.sc` new enough to have renamed it `prism_tone`, and the
+ * script died in `init` with "attempt to call a nil value". The author
+ * pushes several commits a day; the rename was at least four days old.
+ *
+ * A commit id cannot be stale. The branch is resolved here, once, and the
+ * listing and every file are asked for at that commit — jsDelivr takes a
+ * commit where a version goes (see `listFiles`), and so does raw GitHub.
+ * One small request, rate limited like the tree; null when GitHub will not
+ * say, and the install then goes by the branch as before.
+ */
+async function headCommit(
+  repo: Repo,
+  branch: string,
+  fetchJson: (url: string) => Promise<unknown>,
+  errors: string[],
+): Promise<string | null> {
+  try {
+    const body = (await fetchJson(
+      `https://api.github.com/repos/${repo.owner}/${repo.repo}/git/ref/heads/${branch}`,
+    )) as { object?: { sha?: unknown; type?: unknown } };
+    const sha = body.object?.sha;
+    return typeof sha === "string" && COMMIT.test(sha) && body.object?.type === "commit" ? sha : null;
+  } catch (err) {
+    errors.push(`${branch}: github ref ${String((err as Error)?.message ?? err)}`);
+    return null;
+  }
 }
 
 /**
@@ -603,7 +658,7 @@ async function collectSources(
       const sub = await listFiles(mod.repo, opts.fetchJson, pins.get(mod.path));
       const nested = await collectSources(
         mod.repo,
-        sub.branch,
+        sub.commit ?? sub.branch,
         sub.files,
         opts,
         skipped,
@@ -632,6 +687,8 @@ export interface InstallProgress {
 export interface CommunityInstall {
   readonly name: string;
   readonly branch: string;
+  /** The commit every file came from, when GitHub said (E9-221). */
+  readonly commit?: string;
   readonly files: number;
   readonly bytes: number;
   readonly skipped: Array<{ path: string; why: string }>;
@@ -776,7 +833,9 @@ async function installOne(
   } = {},
 ): Promise<CommunityInstall> {
   const maxFiles = opts.maxFiles ?? DEFAULT_MAX_FILES;
-  const { branch, files } = await listFiles(repo, opts.fetchJson);
+  const { branch, files, commit } = await listFiles(repo, opts.fetchJson);
+  /** Where every file is read from: the commit when there is one (E9-221). */
+  const at = commit ?? branch;
   if (files.length > maxFiles) {
     throw new Error(
       `${repo.owner}/${repo.repo} has ${files.length} files, over the limit of ${maxFiles} — ` +
@@ -788,7 +847,7 @@ async function installOne(
   // submodule — which the listing does not mention at all. See
   // `parseGitmodules`.
   const subSkips: Array<{ path: string; why: string }> = [];
-  const sources = await collectSources(repo, branch, files, opts, subSkips);
+  const sources = await collectSources(repo, at, files, opts, subSkips);
 
   /**
    * One candidate list over every source, not one per source.
@@ -824,11 +883,22 @@ async function installOne(
         continue;
       }
       const gh = `${s.repo.owner}/${s.repo.repo}`;
-      urlFor.set(p, [
-        `https://cdn.jsdelivr.net/gh/${gh}@${s.branch}/${bare}`,
-        `https://cdn.jsdelivr.net/gh/${gh}/${bare}`,
-        `https://raw.githubusercontent.com/${gh}/${s.branch}/${bare}`,
-      ]);
+      // E9-221 — at a commit, only places that serve THAT commit. The
+      // unversioned jsDelivr url is whatever the CDN has for the default
+      // branch, which is exactly the mixture a commit is there to prevent.
+      urlFor.set(
+        p,
+        COMMIT.test(s.branch)
+          ? [
+              `https://cdn.jsdelivr.net/gh/${gh}@${s.branch}/${bare}`,
+              `https://raw.githubusercontent.com/${gh}/${s.branch}/${bare}`,
+            ]
+          : [
+              `https://cdn.jsdelivr.net/gh/${gh}@${s.branch}/${bare}`,
+              `https://cdn.jsdelivr.net/gh/${gh}/${bare}`,
+              `https://raw.githubusercontent.com/${gh}/${s.branch}/${bare}`,
+            ],
+      );
     }
   }
   if (all.length > maxFiles) {
@@ -1024,7 +1094,15 @@ async function installOne(
   await opts.commit?.();
 
   const needsReload = take.some((f) => /\.(sc|scd)$/i.test(f.path));
-  return { name, branch, files: done, bytes, skipped: [...skip, ...lostFiles], needsReload };
+  return {
+    name,
+    branch,
+    ...(commit !== undefined ? { commit } : {}),
+    files: done,
+    bytes,
+    skipped: [...skip, ...lostFiles],
+    needsReload,
+  };
 }
 
 /**

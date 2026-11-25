@@ -66,17 +66,85 @@ export const toMatron = (addr: string): boolean =>
 /** A bundle counts as whatever its first message is. */
 const addressOf = (m: Decoded | null): string | undefined => m?.address ?? m?.bundle?.[0]?.address;
 
+/** scsynth's command number for `/d_recv` (SC_OSC_Commands.h: `cmd_d_recv = 5`). */
+const CMD_D_RECV = 5;
+const BUNDLE = "#bundle\0";
+
 /**
  * How many `/d_recv` acknowledgements this packet will produce.
  *
  * Every `/d_recv` in a bundle gets its own `/done`, wherever it sits in
  * the bundle -- so this counts them all, not just the first message.
+ *
+ * E9-246 — READ FROM THE BYTES, because a `/d_recv` can be a NUMBER. JITLib
+ * sends its defs as command 5 inside bundles (`Ndef`, `NodeProxy`), and
+ * scsynth acknowledges those with the same `/done /d_recv`. Counted by
+ * address only, they were invisible: their `/done` then paid off another
+ * def's wait, the barrier opened early, and a `Synth.new` reached the server
+ * before its SynthDef — "SynthDef mic not found" in carter's delay, whose
+ * 48 Ndefs went out beside its five defs.
  */
-const defsIn = (m: Decoded | null): number => {
-  if (m === null) return 0;
-  if (m.address !== undefined) return m.address === "/d_recv" ? 1 : 0;
-  return (m.bundle ?? []).filter((x) => x.address === "/d_recv").length;
-};
+export function defsInPacket(bytes: Uint8Array): number {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const count = (at: number, end: number): number => {
+    if (end - at >= 8 && BUNDLE.split("").every((c, i) => bytes[at + i] === c.charCodeAt(0))) {
+      let n = 0;
+      let o = at + 16;
+      while (o + 4 <= end) {
+        const size = view.getInt32(o);
+        if (size <= 0 || o + 4 + size > end) break;
+        n += count(o + 4, o + 4 + size);
+        o += 4 + size;
+      }
+      return n;
+    }
+    if (end - at >= 4 && bytes[at] === 0) return view.getInt32(at) === CMD_D_RECV ? 1 : 0;
+    const name = "/d_recv";
+    for (let i = 0; i < name.length; i++) if (bytes[at + i] !== name.charCodeAt(i)) return 0;
+    return at + name.length < end && bytes[at + name.length] === 0 ? 1 : 0;
+  };
+  return count(0, bytes.length);
+}
+
+/** scsynth's command number for `/sync` (`cmd_sync = 52`). */
+const CMD_SYNC = 52;
+
+/**
+ * E9-246 — does this packet hold nothing but `/d_recv` and `/sync`?
+ *
+ * Those two are ASYNCHRONOUS on the server: they go into its own FIFO and
+ * are done in order, so a second one sent while the first is unfinished
+ * cannot overtake it. Only a command that acts at once (`/s_new`,
+ * `/n_set`, `/g_new`...) needs a def to be finished before it is sent.
+ * Asked only while a def is outstanding, so it costs nothing on a note.
+ */
+export function onlyDefsAndSync(bytes: Uint8Array): boolean {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const named = (at: number, end: number, name: string): boolean => {
+    for (let i = 0; i < name.length; i++) if (bytes[at + i] !== name.charCodeAt(i)) return false;
+    return at + name.length < end && bytes[at + name.length] === 0;
+  };
+  const check = (at: number, end: number): boolean => {
+    if (end - at >= 8 && BUNDLE.split("").every((c, i) => bytes[at + i] === c.charCodeAt(0))) {
+      let o = at + 16;
+      let any = false;
+      while (o + 4 <= end) {
+        const size = view.getInt32(o);
+        if (size <= 0 || o + 4 + size > end) return false;
+        if (!check(o + 4, o + 4 + size)) return false;
+        any = true;
+        o += 4 + size;
+      }
+      return any && o === end;
+    }
+    if (end - at >= 4 && bytes[at] === 0) {
+      const c = view.getInt32(at);
+      return c === CMD_D_RECV || c === CMD_SYNC;
+    }
+    return named(at, end, "/d_recv") || named(at, end, "/sync");
+  };
+  return bytes.length > 0 && check(0, bytes.length);
+}
 
 /** The route as it was always worked out: decode everything, then ask. */
 export function routeByDecoding(bytes: Uint8Array): LangRoute {
@@ -94,11 +162,13 @@ export function routeByDecoding(bytes: Uint8Array): LangRoute {
   // is not held either — `NetAddr.sync` sends the work and the `/sync`
   // together, so holding the bundle would hold the question with it.
   const hasSync = addr === "/sync" || (msg?.bundle?.some((m) => m.address === "/sync") ?? false);
-  return { matron: null, hasSync, defs: defsIn(msg) };
+  return { matron: null, hasSync, defs: defsInPacket(bytes) };
 }
 
 /** For the server, nothing to wait for and nothing to count. */
 const SERVER: LangRoute = Object.freeze({ matron: null, hasSync: false, defs: 0 });
+/** A SynthDef sent by number (E9-246): one `/done` to wait for. */
+const ONE_DEF: LangRoute = Object.freeze({ matron: null, hasSync: false, defs: 1 });
 
 const SLASH = 0x2f;
 
@@ -111,7 +181,8 @@ const SLASH = 0x2f;
  *  - FIRST BYTE ZERO. A command number, or nothing readable. `decode`
  *    gives the address as the empty string, or throws; either way the
  *    old logic arrives at `SERVER`, because the empty string and
- *    `undefined` fail the same three tests.
+ *    `undefined` fail the same three tests — except command 5, `/d_recv`
+ *    by number, which both count (E9-246).
  *
  *  - FIRST BYTE A SLASH, and an address that is none of the ones
  *    anything asks about. Not a bundle, so there is one address and it
@@ -128,7 +199,7 @@ const SLASH = 0x2f;
 export function routeLangPacket(bytes: Uint8Array): LangRoute {
   if (!(bytes instanceof Uint8Array) || bytes.length === 0) return routeByDecoding(bytes);
   const first = bytes[0];
-  if (first === 0) return SERVER;
+  if (first === 0) return defsInPacket(bytes) === 1 ? ONE_DEF : SERVER;
   if (first !== SLASH) return routeByDecoding(bytes);
   let end = 1;
   while (end < bytes.length && bytes[end] !== 0) end++;

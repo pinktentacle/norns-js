@@ -53,3 +53,30 @@ export function createVirtualMidiPort(opts: { name?: string; id?: string } = {})
     },
   };
 }
+
+/**
+ * E9-231 — MATRON'S OWN "virtual" DEVICE, which is not the loopback above.
+ *
+ * Every norns has it: `main.cc` adds `dev_list_add(DEV_TYPE_MIDI_VIRTUAL,
+ * NULL, "virtual", NULL)` at startup, before any hardware, so `midi.devices`
+ * is never empty and its first entry is always this. It is an ALSA port
+ * another program could connect to; on its own nothing arrives on it and
+ * nothing it is sent goes anywhere. `core/midi.lua` knows it by name and
+ * never assigns it a vport.
+ *
+ * Scripts count on it without knowing they do. `cheat_codes_2`'s
+ * `ping_midi_devices` takes the highest id in `midi.devices` as a `for`
+ * limit; with the table empty that is nil, and its whole `init` failed.
+ * The loopback was the earlier answer to that, off by default and so no
+ * answer at all; a norns needs nothing switched on.
+ */
+export const NORNS_VIRTUAL_NAME = "virtual";
+
+export function createNornsVirtualPort(): MidiPort {
+  return {
+    descriptor: { id: "norns-virtual", name: NORNS_VIRTUAL_NAME },
+    send() {
+      /* an ALSA port nobody is connected to */
+    },
+  };
+}

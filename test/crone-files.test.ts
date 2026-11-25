@@ -162,9 +162,9 @@ describe("the operations that need no file", () => {
     });
   });
 
-  it("copy_mono passes eight, with reverse last", () => {
+  it("copy_mono passes eight, with reverse last, and its channels from 0 (E9-233)", () => {
     const h = harness();
-    h.call("cut_buffer_copy_mono", 0, 1, 0, 2, 3, 0.01, 0, 1);
+    h.call("cut_buffer_copy_mono", 1, 2, 0, 2, 3, 0.01, 0, 1);
     expect(h.calls.at(-1)!.args).toEqual([0, 1, 0, 2, 3, 0.01, 0, 1]);
   });
 });

@@ -7,10 +7,6 @@
   "needs": "it runs once something is done, and the label says what"
  },
  "scripts": {
-  "amenbreak": {
-   "verdict": "no",
-   "measured": "it asks for a restart for ever: its 293 MB of audio and two programs come from a GitHub release, which a page may not fetch"
-  },
   "arp_index": {
    "verdict": "no",
    "measured": "it starts, 153 pixels lit, silent: cloud.iexapis.com, where its numbers come from, has closed — on a norns too"
@@ -24,10 +20,6 @@
    "verdict": "needs",
    "label": "brings fx with it",
    "measured": "it runs, 301 pixels lit, with sixolet/fx beside it — which installing it here fetches too"
-  },
-  "lorenzos-drums": {
-   "verdict": "no",
-   "measured": "it draws its screen and has no drums: its 66 MB of samples come from a GitHub release, which a page may not fetch"
   },
   "makebreakbeat": {
    "verdict": "no",

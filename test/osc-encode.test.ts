@@ -100,3 +100,49 @@ describe("encoding an OSC message", () => {
     expect(v.getInt32(16, false), "the argument after a blob is misplaced").toBe(1);
   });
 });
+
+describe("decoding what matron hands Lua (E9-238)", () => {
+  /** The args of a decoded message, as the loose values decode returns. */
+  const argsOf = (bytes: Uint8Array): unknown[] => (decode(bytes) as { args: unknown[] }).args;
+
+  it("reads a blob as its bytes and goes on to the argument after it", () => {
+    // eterna's engine: ['/waveform', Int8Array, buffer index]
+    const args = argsOf(encodeMessage("/waveform", [new Uint8Array([1, 2, 255, 128, 7]), 4]));
+    expect(args).toHaveLength(2);
+    expect(Array.from(args[0] as Uint8Array)).toEqual([1, 2, 255, 128, 7]);
+    expect(args[1]).toBe(4);
+  });
+
+  it("reads the types a hand-built message can carry, in matron's terms", () => {
+    // ,hScmTFNIi — int64, symbol, char, midi, true, false, nil, infinitum, then an int
+    const str = (s: string): Uint8Array => {
+      const b = new Uint8Array(Math.ceil((s.length + 1) / 4) * 4);
+      for (let i = 0; i < s.length; i++) b[i] = s.charCodeAt(i);
+      return b;
+    };
+    const i32 = (n: number): Uint8Array => {
+      const b = new Uint8Array(4);
+      new DataView(b.buffer).setInt32(0, n, false);
+      return b;
+    };
+    const i64 = (n: number): Uint8Array => {
+      const b = new Uint8Array(8);
+      new DataView(b.buffer).setBigInt64(0, BigInt(n), false);
+      return b;
+    };
+    const parts: Uint8Array[] = [str("/x"), str(",hScmTFNIi"), i64(2 ** 40 + 3), str("sym"), i32(65), new Uint8Array([0, 0x90, 60, 100]), i32(9)];
+    const bytes = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const p of parts) {
+      bytes.set(p, at);
+      at += p.length;
+    }
+    const args = argsOf(bytes);
+    expect(args[0]).toBe(2 ** 40 + 3);
+    expect(args[1]).toBe("sym");
+    expect(args[2]).toBe("A");
+    expect(Array.from(args[3] as Uint8Array)).toEqual([0, 0x90, 60, 100]);
+    expect(args.slice(4, 8)).toEqual([true, false, null, Infinity]);
+    expect(args[8]).toBe(9);
+  });
+});

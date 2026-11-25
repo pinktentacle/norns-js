@@ -307,12 +307,15 @@ describe("installing", () => {
     };
     const r = await listFiles({ owner: "a", repo: "b" }, fetchJson);
     expect(r.branch).toBe("master");
-    // Four, not two: E9-56 asks GitHub for the tree before jsDelivr for
-    // each branch. This fake answers in jsDelivr's shape, which is how a
-    // GitHub reply that is not a tree falls through.
-    expect(asked.length).toBe(4);
-    expect(asked[0]).toContain("api.github.com");
-    expect(asked[1]).toContain("jsdelivr");
+    // Six, not two: for each branch E9-221 asks GitHub which commit it is
+    // at, E9-56 asks GitHub for the tree, and only then jsDelivr. This fake
+    // answers in jsDelivr's shape, which is how a GitHub reply that is
+    // neither a ref nor a tree falls through.
+    expect(asked.length).toBe(6);
+    expect(asked[0]).toContain("api.github.com/repos/a/b/git/ref/heads/main");
+    expect(asked[1]).toContain("api.github.com/repos/a/b/git/trees/main");
+    expect(asked[2]).toContain("jsdelivr");
+    expect(r.commit, "nothing said which commit").toBeUndefined();
   });
 
   it("takes GitHub's tree when it answers, and leaves jsDelivr alone", () => {
@@ -337,7 +340,10 @@ describe("installing", () => {
     };
     return listFiles({ owner: "carlosedp", repo: "terrarium" }, fetchJson).then((r) => {
       expect(r.files.map((f) => f.path)).toEqual(["terrarium.lua", "lib/needs.lua"]);
-      expect(asked.length, "jsDelivr was never asked").toBe(1);
+      expect(
+        asked.every((u) => u.includes("api.github.com")),
+        "jsDelivr was never asked",
+      ).toBe(true);
     });
   });
 
@@ -358,6 +364,77 @@ describe("installing", () => {
       throw new Error("404");
     };
     await expect(listFiles({ owner: "a", repo: "b" }, fetchJson)).rejects.toThrow(/a\/b/);
+  });
+
+  // E9-221 — one install, one version. Reported from a Pixel: grains.lua
+  // from one week and engine_grains.sc from the next, because jsDelivr
+  // caches a branch file by file.
+  it("lists and fetches every file at the commit the branch is at", async () => {
+    const sha = "07944d1a2b3c4d5e6f708192a3b4c5d6e7f80910";
+    const asked: string[] = [];
+    const fetchJson = async (url: string): Promise<unknown> => {
+      asked.push(url);
+      if (url.endsWith("/git/ref/heads/main")) return { object: { sha, type: "commit" } };
+      if (url.includes(`/git/trees/${sha}`)) {
+        return {
+          truncated: false,
+          tree: [
+            { path: "grains.lua", type: "blob", size: 10 },
+            { path: "lib/engine_grains.sc", type: "blob", size: 10 },
+          ],
+        };
+      }
+      throw new Error(`not expected: ${url}`);
+    };
+    const fetched: string[][] = [];
+    const vfs = new Vfs();
+    const r = await installFromRepo(vfs, { owner: "danielrigler", repo: "grains" }, {
+      fetchJson,
+      fetchBytes: async (url) => {
+        fetched.push([url]);
+        return new TextEncoder().encode("x");
+      },
+    });
+    expect(r.commit).toBe(sha);
+    expect(r.branch).toBe("main");
+    expect(fetched.length).toBe(2);
+    for (const [url] of fetched) {
+      expect(url, "a file not asked for at the commit").toContain(`@${sha}/`);
+    }
+    expect(asked.some((u) => u.includes("jsdelivr"))).toBe(false);
+  });
+
+  it("never falls back to an unversioned url once it has a commit", async () => {
+    const sha = "1606595d00000000000000000000000000000000";
+    const tried: string[] = [];
+    const fetchJson = async (url: string): Promise<unknown> => {
+      if (url.endsWith("/git/ref/heads/main")) return { object: { sha, type: "commit" } };
+      return { truncated: false, tree: [{ path: "x.lua", type: "blob", size: 1 }] };
+    };
+    await expect(
+      installFromRepo(new Vfs(), { owner: "a", repo: "b" }, {
+        fetchJson,
+        fetchBytes: async (url) => {
+          tried.push(url);
+          throw new Error("404");
+        },
+      }),
+    ).rejects.toThrow();
+    expect(tried.length).toBeGreaterThan(0);
+    for (const url of tried) {
+      expect(url.includes(sha), `${url} is not that commit`).toBe(true);
+    }
+  });
+
+  it("goes by the branch, as before, when GitHub will not say which commit", async () => {
+    const fetchJson = async (url: string): Promise<unknown> => {
+      if (url.includes("/git/ref/")) throw new Error("403 rate limit exceeded");
+      if (url.includes("api.github.com")) throw new Error("403 rate limit exceeded");
+      return listing;
+    };
+    const r = await listFiles({ owner: "a", repo: "b" }, fetchJson);
+    expect(r.branch).toBe("main");
+    expect(r.commit).toBeUndefined();
   });
 
   it("writes the files under code/<name> and flags the engine", async () => {

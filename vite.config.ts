@@ -20,6 +20,42 @@ const COI_HEADERS = {
 };
 
 import { execSync } from "node:child_process";
+import { Readable } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { RELAY_PREFIX, relayRelease } from "./tools/gh-release.mjs";
+
+/**
+ * E9-227 — the GitHub release relay on the dev and preview servers, so
+ * `localhost` behaves like the deployment: the same module answers here as
+ * on Cloudflare and in the desktop shell. See tools/gh-release.mjs.
+ */
+const releaseRelay = () => {
+  const handle = (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (!path.startsWith(RELAY_PREFIX)) return next();
+    void (async () => {
+      const r: Response = await relayRelease(path, {
+        fetch: (u: string, init: RequestInit) => fetch(u, init),
+        method: req.method ?? "GET",
+        site: req.headers["sec-fetch-site"] ?? null,
+      });
+      res.writeHead(r.status, Object.fromEntries(r.headers));
+      if (r.body === null) res.end();
+      else Readable.fromWeb(r.body as never).on("error", () => res.destroy()).pipe(res);
+    })();
+  };
+  return {
+    name: "norns-js:gh-release-relay",
+    // Block bodies, not arrows that return: a function returned from these
+    // hooks is taken by Vite as a middleware to add AFTER its own.
+    configureServer(server: { middlewares: { use: (f: typeof handle) => unknown } }): void {
+      server.middlewares.use(handle);
+    },
+    configurePreviewServer(server: { middlewares: { use: (f: typeof handle) => unknown } }): void {
+      server.middlewares.use(handle);
+    },
+  };
+};
 
 /**
  * E7-08 — a production build without a source URL is refused.
@@ -71,7 +107,7 @@ const requireSourceUrl = (): { name: string; config: (c: unknown, env: { command
 });
 
 export default defineConfig({
-  plugins: [requireSourceUrl()],
+  plugins: [requireSourceUrl(), releaseRelay()],
   // E9-118 — THERE IS NO `resolve.alias` ANY MORE, and that is the size of
   // what fengari cost. It was a Node-shaped CommonJS package: one alias
   // pointed `fengari` at the vendored copy carrying `patches/fengari.patch`,

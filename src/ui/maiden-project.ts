@@ -338,7 +338,20 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
    * two commonest reasons is enough to make somebody ask the right
    * question; the whole list belongs in the console, not on a row.
    */
-  const leftOut = (skipped: ReadonlyArray<{ path: string; why: string }>): string => {
+  /**
+ * E9-221 — which commit an install came from, short, as git shows it. A
+ * script that misbehaves after an update can then be matched to its source.
+ */
+const atCommit = (commit: string | undefined): string =>
+  commit
+    ? ` @${commit.slice(0, 7)}`
+    : // E9-225 — and when GitHub would not say (60 requests an hour per
+      // address, shared behind a phone carrier's NAT), the install went by
+      // branch through the CDN, whose listing and files can be days apart:
+      // terrarium came back without `lib/needs` that way in the sweep.
+      " (by branch, not pinned — GitHub did not say which commit; reinstall later if it misbehaves)";
+
+const leftOut = (skipped: ReadonlyArray<{ path: string; why: string }>): string => {
     if (skipped.length === 0) return "";
     const why = new Map<string, number>();
     for (const s of skipped) why.set(s.why, (why.get(s.why) ?? 0) + 1);
@@ -1009,7 +1022,7 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
             job.state = "done";
             job.engine = r.needsReload;
           }
-          log(`maiden: installed ${entry.name} — ${r.files} files${leftOut(r.skipped)}`);
+          log(`maiden: installed ${entry.name}${atCommit(r.commit)} — ${r.files} files${leftOut(r.skipped)}`);
           // E9-32. ASKED HERE, while the tree is in the state the install
           // left it, and asked with the name the INSTALLER chose: it
           // lower-cases the folder, and `needsOf` looks for that folder.
@@ -1220,7 +1233,7 @@ export function createMaidenProject(opts: MaidenProjectOptions): MaidenProject {
       void opts
         .installUrl(url, urlRun.signal, (done, total) => say(`installing from ${url}… ${done} of ${total}`))
         .then((r) => {
-          log(`maiden: installed ${r.name} — ${r.files} files${leftOut(r.skipped)}`);
+          log(`maiden: installed ${r.name}${atCommit(r.commit)} — ${r.files} files${leftOut(r.skipped)}`);
           if (r.needsReload) opts.onEngines?.([r.name]);
           // Same rule as the catalogue install above: said only when the
           // install actually wrote a SuperCollider class.
