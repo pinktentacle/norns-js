@@ -77,6 +77,14 @@ dead_page("WIFI", "wifi", {
   "page can reach it.",
 })
 
+-- WIFI AT BOOT. `startup_status.ok` ends with `wifi.init()`, which asks
+-- NetworkManager twice (`nmcli ... connection show`, then `... --active`).
+-- Both are refused, so every page load logged "shell refused: nmcli -- and
+-- 1 more like it", under whatever script loaded first, as if it had asked.
+-- With both refused, init leaves exactly the module's defaults (state 0,
+-- no connection, status "unavailable"), so not asking changes only the log.
+wifi.init = norns.none
+
 -- SLEEP: the half that means something, without the half that does not.
 --
 -- Saving the state and closing the tape are what sleep IS; muting the audio

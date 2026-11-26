@@ -57,7 +57,7 @@
     "blockers": "node tools/build-blockers.mjs"
   },
   "main": "desktop/main.js",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "author": "pinktentacle",
   "homepage": "https://norns-js.pages.dev/",
   "repository": {

@@ -7,6 +7,8 @@ import { installCapture, captured, uncapturedAudioContext } from "./capture.js";
 import { timed } from "../norns/call-cost.js";
 import { decode, encodeMessage } from "./osc.js";
 import { onlyDefsAndSync, routeLangPacket } from "./lang-route.js";
+import { createWriteTracker } from "./sound-writes.js";
+import { rawBufferReadOf, type RawBufferRead } from "./raw-buffer-read.js";
 import { defLoadOf, mirrorDefs } from "./def-files.js";
 import { loadClassLibrary } from "./classlib-loader.js";
 import { serialiseSend } from "./reentry.js";
@@ -64,6 +66,17 @@ export interface EngineHostOptions {
    * page tells the user and offers a restart (see `liveness.ts`).
    */
   readonly onDead?: (why: string) => void;
+  /**
+   * E9-260 — a `/b_read*` sclang sent the server by hand: done by the page's
+   * loader instead (scsynth has no libsndfile). What follows waits for it.
+   */
+  readonly onRawBufferRead?: (read: RawBufferRead) => Promise<unknown>;
+  /**
+   * E9-268 — a sound file the server finished writing (Buffer.write,
+   * Recorder, DiskOut), carried out of its own filesystem for the page's.
+   * See `sound-writes.ts`.
+   */
+  readonly onSoundFileWritten?: (path: string, bytes: Uint8Array) => void;
 }
 
 export interface EngineHost {
@@ -623,7 +636,9 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   let consecutiveTimeouts = 0;
   let sentAt = 0;
   let outstanding = 0;
-  const held: Array<{ bytes: Uint8Array; defs: number; async: boolean }> = [];
+  /** E9-260 — `/b_read*` being done by the page; everything after waits. */
+  let reading = 0;
+  const held: Array<{ bytes: Uint8Array; defs: number; async: boolean; read?: RawBufferRead }> = [];
   let releaseTimer: ReturnType<typeof setTimeout> | null = null;
 
   const disarm = (): void => {
@@ -688,7 +703,34 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
    * and still wrong.
    */
   const pump = (): void => {
-    while (held.length > 0 && (outstanding === 0 || held[0]!.async)) forward(held.shift()!);
+    while (held.length > 0 && reading === 0 && (outstanding === 0 || held[0]!.async)) {
+      const p = held.shift()!;
+      if (p.read !== undefined) return startRead(p.read);
+      forward(p);
+    }
+  };
+
+  /**
+   * E9-260 — DO A `/b_read*` HERE, IN ITS PLACE IN THE QUEUE.
+   *
+   * Nothing behind it moves until it is done, `/sync` included: twins sends
+   * a megaframe's `/b_readChannel` and then `s.sync`, and expects the sync
+   * to mean the samples are in. Then the server's own answer is given —
+   * `/done` — and the completion message, if any, goes first.
+   */
+  const startRead = (r: RawBufferRead): void => {
+    reading++;
+    void Promise.resolve()
+      .then(() => opts.onRawBufferRead!(r))
+      .catch((e) => log(`buffer ${r.bufnum}: ${r.cmd} failed — ${(e as Error).message}`))
+      .finally(() => {
+        reading--;
+        sclang.sendOsc(encodeMessage("/done", [r.cmd, r.bufnum]));
+        if (r.completion !== null) {
+          held.unshift({ bytes: r.completion, defs: routeLangPacket(r.completion).defs, async: false });
+        }
+        pump();
+      });
   };
 
   /**
@@ -716,6 +758,23 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
    */
   sclang.onOsc = (bytes: Uint8Array) => timed("osc:from-lang", () => onLangOsc(bytes));
 
+  // E9-268 — what the server writes lands in the page's filesystem: the
+  // folder made in the server's before the command, the finished file
+  // carried out after its `/done`. See `sound-writes.ts`.
+  const soundWrites = createWriteTracker({
+    mkdir: (dir) => scsynth.FS.mkdirTree(dir),
+    readFile: (path) => {
+      try {
+        return scsynth.FS.readFile(path) as Uint8Array;
+      } catch {
+        return null;
+      }
+    },
+    unlink: (path) => scsynth.FS.unlink(path),
+    onFile: (path, bytes) => opts.onSoundFileWritten?.(path, bytes),
+    log,
+  });
+
   const onLangOsc = (bytes: Uint8Array): void => {
     // E9-247 — a SynthDef file the server is asked to load was written by
     // sclang, into sclang's filesystem: it goes across first. See def-files.ts.
@@ -735,13 +794,25 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
       opts.onMatron?.(route.matron);
       return;
     }
+    // E9-268 — a `/b_write` (alone, in a bundle, or as Recorder's
+    // completion message) needs its folder in the server's filesystem
+    // before the server runs it. Cheap for anything else: two bytes read.
+    if (scsynth.FS) soundWrites.fromLang(bytes);
+    // E9-260 — a `/b_read*` by hand is done by the page, in its turn.
+    const raw = opts.onRawBufferRead !== undefined && !transport.dead ? rawBufferReadOf(bytes) : null;
+    if (raw !== null) {
+      if (outstanding > 0 || held.length > 0 || reading > 0) held.push({ bytes, defs: 0, async: false, read: raw });
+      else startRead(raw);
+      return;
+    }
     // E9-246 — `/sync` WAITS ITS TURN like everything else; see above.
-    if (outstanding > 0 || held.length > 0) {
+    if (outstanding > 0 || held.length > 0 || reading > 0) {
       // Defs and syncs go on into the server's own queue, which keeps their
       // order; only what acts at once waits for them (E9-246). Behind
       // anything already held, everything waits, so nothing is reordered.
+      // A page-side read is not in that queue, so nothing passes it.
       const async = onlyDefsAndSync(bytes);
-      if (held.length === 0 && async) {
+      if (held.length === 0 && async && reading === 0) {
         forward({ bytes, defs: route.defs });
         return;
       }
@@ -826,6 +897,10 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
           peekWaiting.delete(key);
           waiter(a.slice(3).map(Number));
         }
+      }
+      // E9-268 — a file the server finished writing, or could not.
+      if ((r.address === "/done" || r.address === "/fail") && scsynth.FS) {
+        soundWrites.fromServer(r.address, r.args ?? []);
       }
       // E9-171 — the answer from behind the server's queue.
       if (r.address === "/synced") {

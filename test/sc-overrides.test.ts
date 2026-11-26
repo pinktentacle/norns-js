@@ -54,15 +54,19 @@ describe("DiodeRingMod, as core UGens", () => {
 });
 
 describe("a buffer write", () => {
-  it("never builds a /b_write for the server", () => {
+  // E9-268 — the server writes when it was built with libsndfile, and still
+  // dies on the command when it was not. DiskOut is the sign of which.
+  it("builds a /b_write only for a server that has DiskOut", () => {
     const sc = code("NornsJsBufferWriteOverride.sc");
-    expect(sc).toMatch(/writeMsg \{/);
-    expect(sc, "a /b_write would stop the server").not.toContain('"/b_write"');
-    expect(sc).toContain('^["/b_query", bufnum]');
+    // (comment lines are stripped by `code`)
+    expect(sc).toMatch(/writeMsg \{[\s\S]*if \(Buffer\.nornsJsServerWrites\) \{\s*\^\["\/b_write", bufnum, path,/);
+    expect(sc).toMatch(/\*nornsJsServerWrites \{[\s\S]*known\.includes\(\\DiskOut\)/);
   });
 
-  it("says that it did not write", () => {
-    expect(code("NornsJsBufferWriteOverride.sc")).toMatch(/NOT writing buffer/);
+  it("refuses, and says so, for a server without it", () => {
+    const sc = code("NornsJsBufferWriteOverride.sc");
+    expect(sc).toContain('^["/b_query", bufnum]');
+    expect(sc).toMatch(/NOT writing buffer/);
   });
 });
 

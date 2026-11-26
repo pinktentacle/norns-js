@@ -10,9 +10,11 @@
 //
 // One script is tested once, whatever its tags: what has been swept is kept
 // in localStorage (`DONE`) across categories, and a category only plans what
-// is not in it yet.
+// is not in it yet. `start` adds the names in docs/measurements/browser-sweep.json
+// (the copy on disk, refreshed by hand after a sweep).
 //
-// A BATCH is installed, the page reloads so sclang compiles the batch's
+// A BATCH is installed, with the dependencies the app would install with each
+// script (`installDeps`), the page reloads so sclang compiles the batch's
 // engines, then each script is exercised (`__norns.exercise`: load, draw,
 // keys, encoders, a MIDI note, a grid press, the peak), then checked for
 // what this session taught: a dead server, SuperCollider errors that the
@@ -90,9 +92,60 @@ function catalogue() {
     .filter((e) => typeof e.name === "string" && typeof e.url === "string");
 }
 
-export function start(opts) {
+/** What docs/measurements/browser-sweep.json says is done: the pane's storage can be wiped. */
+async function doneOnDisk() {
+  try {
+    const r = await fetch("/docs/measurements/browser-sweep.json", { cache: "no-store" });
+    return r.ok ? ((await r.json()).done ?? []) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Write what is known to docs/measurements/browser-sweep.json (the dev
+ * server's /__sweep/export, vite.config.ts), MERGED with what is there: a
+ * wiped localStorage must add nothing and take nothing away. One row per
+ * label and name; this page's row wins.
+ */
+export async function exportToDisk() {
+  let disk = { done: [], results: [] };
+  try {
+    const r = await fetch("/docs/measurements/browser-sweep.json", { cache: "no-store" });
+    if (r.ok) disk = await r.json();
+  } catch {}
+  // `hand` and `deps` are trailing and optional; a row with deps and no
+  // hand note carries "" for the note so the columns stay in place.
+  const row = (r) => {
+    const a = [r.label, r.batch, r.name, r.verdict, (r.problems ?? []).join(",")];
+    if (r.hand || r.deps) a.push(r.hand ?? "");
+    if (r.deps) a.push(r.deps.join(", "));
+    return a;
+  };
+  const byKey = new Map((disk.results ?? []).map((a) => [`${a[0]}|${a[2]}`, a]));
+  for (const r of read(RESULTS, [])) byKey.set(`${r.label}|${r.name}`, row(r));
+  const done = [...new Set([...(disk.done ?? []), ...read(DONE, [])])].sort();
+  const rows = [...byKey.values()].map((a) => JSON.stringify(a));
+  // One result per line, so a diff of the file reads as the rows that changed.
+  const body = [
+    "{",
+    ` "exported": ${JSON.stringify(new Date().toISOString())},`,
+    ' "columns": ["label", "batch", "name", "verdict", "problems", "hand", "deps"],',
+    ` "done": ${JSON.stringify(done)},`,
+    ' "results": [',
+    rows.map((r) => `  ${r}`).join(",\n"),
+    " ]",
+    "}",
+    "",
+  ].join("\n");
+  const res = await fetch("/__sweep/export", { method: "POST", body });
+  return { ok: res.ok, done: done.length, results: rows.length };
+}
+
+export async function start(opts) {
   const tags = opts.tags ?? [];
-  const done = new Set(read(DONE, []));
+  const done = new Set([...read(DONE, []), ...(await doneOnDisk())]);
+  write(DONE, [...done]);
   // `names`: exactly these, done or not — a re-test.
   const plan = (
     opts.names
@@ -115,6 +168,9 @@ export function start(opts) {
     installed: {},
     retried: {},
     preexisting: pre,
+    // Here, not by `hold()` after `start()`: the loop has read the state by
+    // then and writes it back without the flag.
+    hold: opts.hold === true,
     startedAt: new Date().toISOString(),
     notes: [],
   });
@@ -156,6 +212,79 @@ export async function ensureRunning() {
   return status();
 }
 
+/**
+ * What the app installs WITH a script, installed with it here: `needsOf`
+ * after each install, the providers into the same tree, two levels deep at
+ * most (maiden-project.ts, E9-34 and NEED_DEPTH). Without this the sweep
+ * noted "missing Moonshine" for streams, which the store makes work.
+ * Recorded in `s.deps` under the folder, with the batch scripts it was for;
+ * removed with the batch.
+ */
+async function installDeps(s, batch, inst) {
+  const n = N();
+  const nd = await import("/src/community/needs.ts");
+  const se = await import("/src/community/study-engines.ts");
+  s.deps ??= {};
+  const entries = catalogue();
+  let askers = batch.filter((e) => s.installed[e.name]?.ok).map((e) => ({ who: s.installed[e.name].dir, root: s.installed[e.name].dir }));
+  for (let depth = 0; depth < 2 && askers.length > 0; depth++) {
+    const next = [];
+    for (const { who, root } of askers) {
+      // What the sweep already installed is passed as `absent`, so a second
+      // script that needs it is still told so and is credited with it.
+      for (const need of nd.needsOf(n.vfs, who, entries, "/home/we/dust", n.engineState?.engines ?? [], Object.keys(s.deps))) {
+        const e = need.entry;
+        if (!e) continue;
+        const dir = e.name.toLowerCase();
+        if (s.deps[dir]) {
+          if (!s.deps[dir].for.includes(root)) s.deps[dir].for.push(root);
+          continue;
+        }
+        if (n.vfs.isDir(`${CODE}/${dir}`)) continue; // `exists` is for files
+        const t0 = performance.now();
+        try {
+          const study = se.studyEngineOf(e.url);
+          let r;
+          if (study) {
+            r = await se.installStudyEngine(n.vfs, study, { commit: () => n.opfs.flush() });
+          } else {
+            const repo = inst.parseRepoUrl(e.url);
+            if (!repo) throw new Error(`not a GitHub repository url: ${e.url}`);
+            r = await inst.installFromRepo(n.vfs, repo, { name: dir, commit: () => n.opfs.flush(), maxFiles: inst.DEFAULT_MAX_FILES });
+          }
+          s.deps[dir] = { ok: true, for: [root], want: need.want, files: r.files, ms: Math.round(performance.now() - t0) };
+          next.push({ who: r.name, root });
+        } catch (err) {
+          s.deps[dir] = { ok: false, for: [root], want: need.want, why: String(err?.message ?? err).slice(0, 300) };
+        }
+        save(s);
+      }
+    }
+    askers = next;
+  }
+}
+
+/**
+ * NORNS' OWN BOOT TONE. `Crone.sc` ends its boot with a test sine,
+ * `SinOsc.ar([218,223]) * 0.125 * EnvGen.ar(Env.linen(2, 3, 6))`: eleven
+ * seconds, faithfully played here too. The first script after every reload
+ * was listened to inside it and read 0.134 at rest, so a MIDI-only script
+ * came out "ok-sound". Wait for it to end: eleven and a half seconds after
+ * /crone/ready (log stamps are seconds since the page started).
+ */
+async function afterBootTone() {
+  const line = logLines().find((l) => /\/crone\/ready/.test(l));
+  const at = line ? parseFloat(line) : NaN;
+  const until = (Number.isFinite(at) ? at * 1000 : 6000) + 11500;
+  while (performance.now() < until) await sleep(250);
+}
+
+/** The dependencies installed for one batch script, as a row lists them. */
+const depsOf = (s, dir) =>
+  Object.entries(s.deps ?? {})
+    .filter(([, d]) => [].concat(d.for).includes(dir))
+    .map(([k, d]) => (d.ok ? `${k} (${d.want})` : `${k} (${d.want}, failed)`));
+
 async function loop() {
   if (!(await booted())) throw new Error("the page did not boot");
   const n = N();
@@ -181,7 +310,7 @@ async function loop() {
           const r = await inst.installFromRepo(n.vfs, repo, {
             name: e.name.toLowerCase(),
             commit: () => n.opfs.flush(),
-            maxFiles: 600,
+            maxFiles: inst.DEFAULT_MAX_FILES, // the app's own default (mosaic is 1209)
           });
           s.installed[e.name] = {
             ok: true,
@@ -197,6 +326,7 @@ async function loop() {
         }
         save(s);
       }
+      await installDeps(s, batch, inst);
       await n.opfs.flush();
       s.phase = "run";
       s.idx = 0;
@@ -206,6 +336,7 @@ async function loop() {
     }
 
     if (s.phase === "run") {
+      await afterBootTone();
       // A batch whose classes crashed the compiler boots WITHOUT any of
       // them, and every engine in it would be reported missing.
       const fallback = logLines().some((l) => /booted WITHOUT the installed scripts/.test(l));
@@ -276,6 +407,8 @@ async function loop() {
         }
         row.label = s.label;
         row.batch = s.batch;
+        const deps = depsOf(s, s.installed[e.name]?.dir);
+        if (deps.length > 0) row.deps = deps;
         const all = read(RESULTS, []).filter((r) => !(r.name === row.name && r.label === row.label));
         all.push(row);
         write(RESULTS, all);
@@ -285,6 +418,8 @@ async function loop() {
         s.idx++;
         save(s);
       }
+      // Every batch's rows go to disk as soon as they exist.
+      await exportToDisk().catch(() => {});
       // `hold`: stop here, the batch still installed and compiled, for the
       // hand tests (probe.js); `resume()` then cleans and goes on.
       if (s.hold && s.heldAt !== s.batch) {
@@ -301,11 +436,19 @@ async function loop() {
         for (const p of n.vfs.walk(dir)) n.vfs.remove(p);
         n.vfs.remove(dir);
       }
+      // And what was installed for them: the next batch must ask for its own.
+      for (const [name, d] of Object.entries(s.deps ?? {})) {
+        if (!d.ok || s.preexisting.includes(name)) continue;
+        const dir = `${CODE}/${name}`;
+        for (const p of n.vfs.walk(dir)) n.vfs.remove(p);
+        n.vfs.remove(dir);
+      }
       await n.opfs.flush();
       s.batch++;
       s.phase = "install";
       s.idx = 0;
       s.installed = {};
+      s.deps = {};
       save(s);
     }
   }

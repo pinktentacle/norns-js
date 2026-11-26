@@ -88,7 +88,7 @@ index 27f33034ba79865d3ff513011c8599ab3eb2fa94..20872d5331e463f4514a522f861c6c1e
 +    ENV['HOME'] = '/home/we';
 +});
 diff --git a/server/plugins/CMakeLists.txt b/server/plugins/CMakeLists.txt
-index e54fed7713d40ecd17e094383baa67b8c1bde745..6822177fbd2209af50f5cfa170dfe928416d8f6d 100644
+index e54fed7713d40ecd17e094383baa67b8c1bde745..c105f20752930b2b1624d633efa9d9e4d03656c1 100644
 --- a/server/plugins/CMakeLists.txt
 +++ b/server/plugins/CMakeLists.txt
 @@ -107,6 +107,768 @@ foreach(plugin_src ${plugin_sources})
@@ -860,6 +860,19 @@ index e54fed7713d40ecd17e094383baa67b8c1bde745..6822177fbd2209af50f5cfa170dfe928
  # BelaUGens
  
  if(AUDIOAPI STREQUAL bela)
+@@ -299,6 +1061,12 @@ if(NOT NO_LIBSNDFILE)
+         if (APPLE)
+             target_link_libraries(DiskIO_UGens PRIVATE "-framework CoreServices")
+         endif()
++        # norns-js E9-268: -pthread, like ByteBeat. DiskIO_UGens starts its
++        # own disk thread (std::thread, atomics), and wasm-ld refuses
++        # --shared-memory for an object built without the atomics feature.
++        if(EMSCRIPTEN)
++            target_compile_options(DiskIO_UGens PRIVATE -pthread)
++        endif()
+         list(APPEND plugins DiskIO_UGens)
+ 
+         if(SUPERNOVA)
 diff --git a/server/plugins/FFT2InterfaceTable.cpp b/server/plugins/FFT2InterfaceTable.cpp
 index 5d704dc1454f4fe5a99962477c98a4f7f6f5e037..68d7ffbfc91c0a7cce9795c1add100ebbdfcd05c 100644
 --- a/server/plugins/FFT2InterfaceTable.cpp
@@ -1292,7 +1305,7 @@ index abaaa78fffc6c0a48e6a0993b98ae9b523afd00c..7ba0d7e3164f38fb37ebafb0e5b3f56a
  
  void unloadStaticPlugins() {
 diff --git a/server/scsynth/CMakeLists.txt b/server/scsynth/CMakeLists.txt
-index 75c228c87672e3e94c40b1e72e800f55e1b78068..28ab97e27f277e3adb206b42587822ec51ea9fb2 100644
+index 75c228c87672e3e94c40b1e72e800f55e1b78068..fd11dd86db42b4be92cc3021794a0255f3dc2b22 100644
 --- a/server/scsynth/CMakeLists.txt
 +++ b/server/scsynth/CMakeLists.txt
 @@ -234,6 +234,55 @@ endif()
@@ -1351,7 +1364,7 @@ index 75c228c87672e3e94c40b1e72e800f55e1b78068..28ab97e27f277e3adb206b42587822ec
      # add plugin archives
      target_link_libraries(libscsynth PRIVATE ${static_plugins})
  endif()
-@@ -326,8 +375,55 @@ elseif(AUDIOAPI STREQUAL webaudio)
+@@ -326,8 +375,63 @@ elseif(AUDIOAPI STREQUAL webaudio)
          --bind -sMODULARIZE=1 -sEXPORT_ES6=1 -sEXPORT_NAME='ScSynth'
          --pre-js "${CMAKE_SOURCE_DIR}/platform/wasm/scsynth.pre.js"
          -sEXPORTED_FUNCTIONS=['_malloc','_free','_webOscBindingAnchor']
@@ -1374,6 +1387,14 @@ index 75c228c87672e3e94c40b1e72e800f55e1b78068..28ab97e27f277e3adb206b42587822ec
 +        # -fexceptions -- ByteBeat.cpp, lex.cpp, parse.cpp -- get landing
 +        # pads (and SC_GraphDef.cpp since E9-242, below).
 +        -fexceptions
++        # norns-js E9-269: a 1 MB stack for every thread the server starts.
++        # They are std::threads (NRT, DiskIO), so they get emscripten's
++        # default, 64 KB, and libvorbis' encoder allocates more than that
++        # on the stack: an .ogg written from the NRT thread overran it,
++        # the thread died without a word, and every /sync after it waited
++        # for ever. Measured in node with the same libraries: 64 KB, the
++        # thread vanishes; 1 MB, 48000 frames written.
++        -sDEFAULT_PTHREAD_STACK_SIZE=1048576
      )
 +    # norns-js E9-242: and SC_GraphDef.cpp, so `GraphDef_Recv`'s own
 +    # try/catch is there. Without landing pads the catch is dropped, and a
@@ -1408,6 +1429,29 @@ index 75c228c87672e3e94c40b1e72e800f55e1b78068..28ab97e27f277e3adb206b42587822ec
      if(WASM_DEBUG)
          target_compile_options(scsynth PRIVATE -pthread -g)
          target_compile_options(libscsynth PRIVATE -pthread -g)
+diff --git a/server/scsynth/SC_Node.cpp b/server/scsynth/SC_Node.cpp
+index 7190388a8f3fc8da20271cceb16a04c715f216f1..b1b99a3df9bd3f58ac0f3474357b1629a526fbb6 100644
+--- a/server/scsynth/SC_Node.cpp
++++ b/server/scsynth/SC_Node.cpp
+@@ -268,9 +268,17 @@ void Node_SetRun(Node* inNode, int inRun) {
+                 inNode->mCalcFunc = (NodeCalcFunc)&Graph_Calc;
+             }
+             Node_StateMsg(inNode, kNode_On);
++        } else if (inNode->mCalcFunc == (NodeCalcFunc)&Graph_NullFirstCalc) {
++            // norns-js: paused before its first calc, and resumed before it
++            // came: it is still not constructed, so it starts like a new one.
++            inNode->mCalcFunc = (NodeCalcFunc)&Graph_FirstCalc;
++            Node_StateMsg(inNode, kNode_On);
+         }
+     } else {
+-        if (inNode->mCalcFunc != &Node_NullCalc) {
++        // norns-js: a second pause before the first calc must not lose the
++        // "not constructed yet" state -- Node_NullCalc would make Graph_Dtor
++        // run the destructors of units whose constructors never ran (twins).
++        if (inNode->mCalcFunc != &Node_NullCalc && inNode->mCalcFunc != (NodeCalcFunc)&Graph_NullFirstCalc) {
+             if (!inNode->mIsGroup && inNode->mCalcFunc == (NodeCalcFunc)&Graph_FirstCalc) {
+                 inNode->mCalcFunc = (NodeCalcFunc)&Graph_NullFirstCalc;
+             } else {
 diff --git a/server/scsynth/SC_WebAudio.cpp b/server/scsynth/SC_WebAudio.cpp
 index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..9eca69467b32caf7394a5c6799237fc5a28c4b4c 100644
 --- a/server/scsynth/SC_WebAudio.cpp

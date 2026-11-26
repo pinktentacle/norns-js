@@ -113,6 +113,13 @@
 			};
 		};
 		Crone.server.sync;
+		// E9-256 — a `free` that was `Server.freeAll`: the next engine
+		// waits for crone's context to be built again (at most 5 s).
+		50.do {
+			if (Library.at(\nornsJs, \contextRebuild) == true) { 0.1.wait };
+		};
+		// E9-258 — and the context whole at all, whatever took a part of it.
+		if (Crone.context.notNil) { Crone.context.nornsJsEnsure };
 		Library.put(\nornsJs, \engineFree, this, \done);
 		doneCallback.value(this);
 		waiting.do({ arg cb; cb.value(this) });

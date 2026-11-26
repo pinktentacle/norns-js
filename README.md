@@ -160,9 +160,10 @@ deploy.
 
 ### `third_party/` is most of the work and none of it is ours
 
-Eight upstream git trees and nine unpacked releases — norns, SuperCollider,
-sc3-plugins, mi-UGens, softcut-lib, DaisySP, Eigen, cairo, pixman, FreeType,
-FFTW and the toolchain — about 2.7 GB, **not in this repository**. The exact
+Eight upstream git trees and fourteen unpacked releases — norns,
+SuperCollider, sc3-plugins, mi-UGens, softcut-lib, DaisySP, Eigen, cairo,
+pixman, FreeType, FFTW, libsndfile and its codecs (FLAC, Ogg, Vorbis, Opus,
+mpg123, LAME) and the toolchain — about 2.7 GB, **not in this repository**. The exact
 commit of each is in **[`PINS.md`](PINS.md)**, generated
 rather than hand-kept so it cannot quietly go stale, and `npm run pins:check`
 fails when it does.
@@ -183,10 +184,10 @@ emsdk, which `setup-windows.ps1 -Role build` already cloned.
 It also **applies `patches/`**, which is not a convenience: without
 `patches/supercollider.patch` the build below completes, says BUILD OK and
 produces something subtly different, because CMake accepts an unknown `-D`
-in silence. `npm run pins:check` should answer **15 trees, 3 patched**; `0
+in silence. `npm run pins:check` should answer **22 trees, 4 patched**; `0
 patched` means they are not on.
 
-Three of them are patched, and the patches are in
+Four of them are patched, and the patches are in
 [`patches/`](patches/) rather than applied in place, so what is ours and what
 is theirs stay separable. Without `patches/supercollider.patch` the build
 completes and produces something subtly different — CMake accepts an unknown
@@ -280,7 +281,7 @@ __norns.exercise()
 | `src/` | the application: the `_norns` host, the screen, the engine, crone, the UI |
 | `tools/` | the generators and build scripts — `npm run assets`, the notices, the blockers table |
 | `tools/sclang`, `tools/screen`, `tools/pack` | the WebAssembly builds — `sclang`, `scsynth`, the screen, the class library. These are how every `.wasm` here was produced, and each is a `build.sh` you can run |
-| `patches/` | three upstream trees need changes; they are diffs, so what is ours stays separable |
+| `patches/` | four upstream trees need changes; they are diffs, so what is ours stays separable |
 | `test/` | 1100 of them, and six that say so when they are skipped |
 | `desktop/`, `electron-builder.yml` | the Electron shell for the Windows app — four files; the page it wraps is the same `src/` |
 

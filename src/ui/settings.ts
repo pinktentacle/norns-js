@@ -23,7 +23,7 @@
 // shape it predates.
 
 import { DEFAULT_KEYMAP, sanitise, type Keymap } from "./keymap.js";
-import { DEFAULT_MAX_FILES } from "../community/install.js";
+import { DEFAULT_MAX_AUDIO_MB, DEFAULT_MAX_FILES } from "../community/install.js";
 import type { MachinePreference } from "./machine.js";
 
 export const STORAGE_KEY = "norns-js/settings/v1";
@@ -213,6 +213,8 @@ export interface Settings {
    * ours to make for them.
    */
   readonly installMaxFiles: number;
+  /** E9-261 — and the MB of audio one install will take. Same reasoning. */
+  readonly installMaxAudioMb: number;
 }
 
 export interface SettingsStore {
@@ -242,6 +244,8 @@ export interface SettingsStore {
   setEditor(value: EditorSettings): void;
   readonly installMaxFiles: number;
   setInstallMaxFiles(value: number): void;
+  readonly installMaxAudioMb: number;
+  setInstallMaxAudioMb(value: number): void;
   /** False when this browser refused storage: the settings are session-only. */
   readonly persisted: boolean;
   setKeymap(map: Keymap): void;
@@ -272,6 +276,8 @@ export interface StorageLike {
  */
 export const INSTALL_FILES_MIN = 50;
 export const INSTALL_FILES_MAX = 10000;
+export const INSTALL_AUDIO_MB_MIN = 16;
+export const INSTALL_AUDIO_MB_MAX = 4096;
 
 export const ZOOM_MIN = 0.5;
 export const ZOOM_MAX = 2.5;
@@ -383,6 +389,7 @@ const fallback = (): Settings => ({
   midiVelocity: 100,
   editor: DEFAULT_EDITOR,
   installMaxFiles: DEFAULT_MAX_FILES,
+  installMaxAudioMb: DEFAULT_MAX_AUDIO_MB,
 });
 
 export function createSettings(storage: StorageLike | null): SettingsStore {
@@ -432,6 +439,9 @@ export function createSettings(storage: StorageLike | null): SettingsStore {
         editor: readEditor(parsed["editor"]),
         installMaxFiles: Math.round(
           clampNum(parsed["installMaxFiles"], INSTALL_FILES_MIN, INSTALL_FILES_MAX, DEFAULT_MAX_FILES),
+        ),
+        installMaxAudioMb: Math.round(
+          clampNum(parsed["installMaxAudioMb"], INSTALL_AUDIO_MB_MIN, INSTALL_AUDIO_MB_MAX, DEFAULT_MAX_AUDIO_MB),
         ),
       };
     } catch {
@@ -529,6 +539,18 @@ export function createSettings(storage: StorageLike | null): SettingsStore {
         ...state,
         installMaxFiles: Math.round(
           clampNum(value, INSTALL_FILES_MIN, INSTALL_FILES_MAX, DEFAULT_MAX_FILES),
+        ),
+      };
+      write("files");
+    },
+    get installMaxAudioMb(): number {
+      return state.installMaxAudioMb;
+    },
+    setInstallMaxAudioMb(value: number): void {
+      state = {
+        ...state,
+        installMaxAudioMb: Math.round(
+          clampNum(value, INSTALL_AUDIO_MB_MIN, INSTALL_AUDIO_MB_MAX, DEFAULT_MAX_AUDIO_MB),
         ),
       };
       write("files");

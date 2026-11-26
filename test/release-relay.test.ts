@@ -204,7 +204,8 @@ describe("every server this page is served from relays", () => {
     expect(read("functions/gh-release/[[path]].js")).toMatch(/import \{ relayRelease \} from "\.\.\/\.\.\/tools\/gh-release\.mjs"/);
     expect(read("tools/serve.mjs")).toMatch(/url\.pathname\.startsWith\(RELAY_PREFIX\)[\s\S]{0,80}relayRelease\(/);
     expect(read("desktop/main.js")).toMatch(/url\.pathname\.startsWith\(RELAY_PREFIX\)[\s\S]{0,40}return relayRelease\(url\.pathname, \{\s*fetch: \(u, init\) => net\.fetch\(u, init\)/);
-    expect(read("vite.config.ts")).toMatch(/plugins: \[requireSourceUrl\(\), releaseRelay\(\)\]/);
+    // In the plugin list, whatever else is in it (the dev server also has the sweep's export).
+    expect(read("vite.config.ts")).toMatch(/plugins: \[requireSourceUrl\(\), releaseRelay\(\)[,\]]/);
   });
 
   it("the module travels with the servers that import it", () => {

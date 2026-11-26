@@ -187,20 +187,29 @@ describe("which of a repository's files belong in a dust tree", () => {
     ]);
   });
 
-  it("stops at one big file, and at a running total", () => {
-    const huge = { path: "/samples/epic.wav", size: 20 * 1024 * 1024 };
-    expect(wanted([huge]).skip[0]!.why).toContain("16 MB of audio");
+  it("stops at a running total of audio, the one in SETTINGS > FILES", () => {
+    // E9-261 — nc01-drone's three drones, which the old 16 MB a file and
+    // 64 MB an install both refused: the script loaded and played nothing.
+    const drones = [
+      { path: "/lib/bc.wav", size: 31_991_684 },
+      { path: "/lib/dd.wav", size: 26_274_604 },
+      { path: "/lib/eb.wav", size: 65_567_560 },
+    ];
+    expect(wanted(drones).take.length).toBe(3);
 
-    // Eight 10 MB files: six fit under 64 MB, the rest are said rather than
-    // silently downloaded into somebody's browser storage.
+    // Eight 10 MB files under a 64 MB limit: six fit, the rest are said
+    // rather than silently downloaded into somebody's browser storage.
     const many = Array.from({ length: 8 }, (_, i) => ({
       path: `/samples/${i}.wav`,
       size: 10 * 1024 * 1024,
     }));
-    const r = wanted(many);
+    const r = wanted(many, 64);
     expect(r.take.length).toBe(6);
     expect(r.skip.length).toBe(2);
     expect(r.skip[0]!.why).toContain("past 64 MB");
+    expect(r.skip[0]!.why).toContain("SETTINGS > FILES");
+    // One file bigger than the whole limit is skipped the same way.
+    expect(wanted([{ path: "/x.wav", size: 20 * 1024 * 1024 }], 16).take).toEqual([]);
   });
 
   it("ALWAYS takes the licence, which is how a tidy filter infringes", () => {

@@ -192,8 +192,15 @@ describe("holding a reply until it is asked for", () => {
 
   it("gives up when the command's own time limit runs out", async () => {
     const token = w.net.start("curl a", { ...REQ, timeoutMs: 20 });
-    await new Promise((r) => setTimeout(r, 60));
-    expect(w.net.poll(token)).toEqual({ done: true, body: "" });
+    // Polled rather than one fixed 60 ms wait: under the whole suite's load
+    // the 20 ms timer can fire after it, and the test failed on timing alone.
+    // (`poll` hands the reply over once, so the answer is kept, not re-asked.)
+    let got = w.net.poll(token);
+    for (let i = 0; i < 100 && !got.done; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+      got = w.net.poll(token);
+    }
+    expect(got).toEqual({ done: true, body: "" });
     expect(w.lines[0]).toContain("no reply within 0 s");
   });
 

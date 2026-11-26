@@ -184,6 +184,15 @@ $steps = @(
     Why  = "libfftw3f.a, which sclang links or does without IN SILENCE"
   },
   @{
+    # E9-268 — before sclang, for the same reason as fftw: build.sh links
+    # it when it is there and builds a server that cannot write sound
+    # files, without a word, when it is not.
+    Name = "sndfile"; Stage = 1; How = "bash"; Clean = $true
+    Run  = @("tools/sclang/build-sndfile.sh")
+    Makes = @("third_party/libsndfile/build-wasm/libsndfile.a")
+    Why  = "libsndfile.a: Buffer.write, Recorder and DiskOut in scsynth"
+  },
+  @{
     Name = "sclang"; Stage = 1; How = "bash"; Clean = $true
     Run  = @("tools/sclang/build.sh")
     Makes = @("third_party/supercollider/build-wasm/wasm-dist/sclang/sclang.js",

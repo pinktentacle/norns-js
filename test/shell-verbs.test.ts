@@ -15,7 +15,7 @@
 
 import { describe, expect, it } from "vitest";
 import { Vfs } from "../src/fs/vfs.js";
-import { runShell } from "../src/fs/shell.js";
+import { dateOutput, runShell } from "../src/fs/shell.js";
 
 const text = (s: string): Uint8Array => new TextEncoder().encode(s);
 const read = (vfs: Vfs, p: string): string | null => {
@@ -351,21 +351,46 @@ describe("a download the shell hands up", () => {
 describe("a chained command does not file its punctuation", () => {
   it("makes the directory it was asked for and nothing else", () => {
     const vfs = new Vfs();
-    const r = runShell(vfs, "mkdir -p /home/we/dust/data/thing && mv a b");
-    expect(r.ok, r.refused).toBe(true);
+    // `mv a b` has no `a` to move: the line fails there, as in a shell
+    // (E9-265). The directory is made; the punctuation is not.
+    runShell(vfs, "mkdir -p /home/we/dust/data/thing && mv a b");
     expect(vfs.isDir("/home/we/dust/data/thing")).toBe(true);
     for (const junk of ["/&&", "/mv", "/a", "/b"]) {
       expect(vfs.isDir(junk), `${junk} is not a directory anybody asked for`).toBe(false);
     }
   });
 
-  it("stops at the operator for rm too", () => {
+  // E9-265 — and the part after it RUNS. This test used to check that the
+  // second `rm` did not happen: that was the bug, kept as the lesser evil
+  // next to E9-65's directories called `&&`.
+  it("runs each part of an && line in turn", () => {
+    const vfs = new Vfs();
+    vfs.write("/home/we/dust/data/one.txt", "1");
+    vfs.write("/home/we/dust/data/two.txt", "2");
+    const r = runShell(vfs, "rm /home/we/dust/data/one.txt && rm /home/we/dust/data/two.txt");
+    expect(r.ok, r.refused).toBe(true);
+    expect(vfs.read("/home/we/dust/data/one.txt")).toBeNull();
+    expect(vfs.read("/home/we/dust/data/two.txt")).toBeNull();
+  });
+
+  it("moves loudnumbers' example data into the folder it has just made", () => {
+    const vfs = new Vfs();
+    vfs.write("/home/we/dust/code/ln/ignorethisfolder/_temperature.csv", "year,t\n");
+    const r = runShell(
+      vfs,
+      "mkdir /home/we/dust/data/ln/csv/ && mv /home/we/dust/code/ln/ignorethisfolder/_temperature.csv /home/we/dust/data/ln/csv/_temperature.csv",
+    );
+    expect(r.ok, r.refused).toBe(true);
+    expect(vfs.readText("/home/we/dust/data/ln/csv/_temperature.csv")).toBe("year,t\n");
+    expect(vfs.read("/home/we/dust/code/ln/ignorethisfolder/_temperature.csv")).toBeNull();
+  });
+
+  it("stops at the first part that fails, as && does", () => {
     const vfs = new Vfs();
     vfs.write("/home/we/dust/data/keep.txt", "keep");
-    vfs.write("/home/we/dust/data/go.txt", "go");
-    runShell(vfs, "rm /home/we/dust/data/go.txt && rm /home/we/dust/data/keep.txt");
-    expect(vfs.read("/home/we/dust/data/go.txt"), "the first part ran").toBeNull();
-    expect(vfs.readText("/home/we/dust/data/keep.txt"), "the second did not").toBe("keep");
+    const r = runShell(vfs, "touch /home/we/dust/data/t && test -f /home/we/dust/data/absent.txt && rm /home/we/dust/data/keep.txt");
+    expect(r.ok).toBe(false);
+    expect(vfs.readText("/home/we/dust/data/keep.txt"), "never reached").toBe("keep");
   });
 
   it("leaves a quoted operator alone, because it is a name", () => {
@@ -373,5 +398,35 @@ describe("a chained command does not file its punctuation", () => {
     const r = runShell(vfs, `mkdir -p "/home/we/dust/data/a && b"`);
     expect(r.ok, r.refused).toBe(true);
     expect(vfs.isDir("/home/we/dust/data/a && b")).toBe(true);
+  });
+});
+
+// E9-266 — nice-tapes: util.os_capture("date +%y%m%d"), refused until now.
+describe("date", () => {
+  const at = new Date(Date.UTC(2026, 10, 26, 9, 5, 7));
+
+  it("answers the conversions a script asks for, from the clock", () => {
+    expect(dateOutput("%y%m%d", at, true)).toBe("261126");
+    expect(dateOutput("%Y-%m-%d %H:%M:%S", at, true)).toBe("2026-11-26 09:05:07");
+    expect(dateOutput("%F %T %j %a %b %e %s %%", at, true)).toBe(
+      `2026-11-26 09:05:07 330 Thu Nov 26 ${Math.floor(at.getTime() / 1000)} %`,
+    );
+    expect(dateOutput(null, at, true)).toBe("Thu Nov 26 09:05:07 UTC 2026");
+  });
+
+  it("refuses a conversion it cannot answer rather than printing it", () => {
+    expect(dateOutput("%Z", at, true)).toBeNull();
+    const vfs = new Vfs();
+    expect(runShell(vfs, "date +%Z").ok).toBe(false);
+    expect(runShell(vfs, "date -d yesterday").ok).toBe(false);
+  });
+
+  it("runs as the shell command nice-tapes sends", () => {
+    const vfs = new Vfs();
+    const r = runShell(vfs, "date +%y%m%d");
+    expect(r.ok, r.refused).toBe(true);
+    expect(r.out).toMatch(/^\d{6}\n$/);
+    expect(runShell(vfs, "date -u '+%Y'").out).toBe(`${new Date().getUTCFullYear()}\n`);
+    expect(runShell(vfs, "date").ok).toBe(true);
   });
 });

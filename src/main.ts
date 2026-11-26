@@ -87,6 +87,7 @@ import { createHandDownloads, type HandDownload } from "./fs/hand-downloads.js";
 import { unpack as unpackArchive } from "./fs/unpack.js";
 import { fetchFile, quarters } from "./fs/release-relay.js";
 import { setJackGraph, type ShellFetch } from "./fs/shell.js";
+import { setProgramHost } from "./fs/programs.js";
 import { jackRoute } from "./crone/jack.js";
 import { engineReadsInput } from "./engine/input-use.js";
 import { GridManager } from "./grid/manager.js";
@@ -108,6 +109,8 @@ import { createCoverStore } from "./community/covers.js";
 import { createMetaStore } from "./community/meta.js";
 import { parseCatalog } from "./community/catalog.js";
 import { mainScript } from "./ui/scripts-model.js";
+import { restartInto } from "./ui/restart-into.js";
+import { createScriptDownloads, type DownloadsView } from "./ui/script-downloads.js";
 import { CrowClockSource } from "./clock/crow-source.js";
 import { createPortChooser, type ChooserElement, type PortChoice } from "./ui/port-chooser.js";
 import {
@@ -130,6 +133,7 @@ import { createEngineHost } from "./engine/host.js";
 import { repairScSource } from "./engine/sc-source.js";
 import { registerEngine } from "./engine/register.js";
 import { createBufferLoader } from "./engine/buffers.js";
+import type { RawBufferRead } from "./engine/raw-buffer-read.js";
 import { createSoundData } from "./engine/sound-data.js";
 import { parseSoundHeader } from "./fs/wav-header.js";
 /** E9-235 — the formats whose header `parseSoundHeader` reads: WAV, FLAC, AIFF. */
@@ -200,7 +204,8 @@ let saidInputIsOff = false;
 let engineHearsInput = false;
 /** How many `# script clear` have gone by, and who wants to hear the next. E9-202. */
 let scriptClears = 0;
-let onScriptClear: (() => void) | null = null;
+/** E9-262 — more than one now: the latency reclaim and the download queue. */
+const onScriptClear: Array<() => void> = [];
 const log = (line: string): void => {
   if (line.startsWith("# script run")) scriptIsLoaded = true;
   else if (line.startsWith("# script clear")) {
@@ -211,7 +216,7 @@ const log = (line: string): void => {
     engineHearsInput = false;
     document.getElementById("input-notice")?.remove();
     scriptClears++;
-    onScriptClear?.();
+    for (const f of onScriptClear) f();
   }
   rawLog(line);
 };
@@ -281,15 +286,138 @@ function showStorageNotice(): void {
  * with the switch beside it. Dismissable, and gone with the script: it is
  * advice about this instrument, not an alarm.
  */
+/**
+ * E9-255 — the advice at the top of the page shares one column, so the
+ * input notice and the download notice stack instead of covering each other.
+ */
+function topNotices(): HTMLElement {
+  let box = document.getElementById("top-notices");
+  if (box === null) {
+    box = document.createElement("div");
+    box.id = "top-notices";
+    box.style.cssText = "position:fixed;left:0;right:0;top:0;z-index:999;display:flex;flex-direction:column";
+    document.body.appendChild(box);
+  }
+  return box;
+}
+
+const NOTICE_STYLE =
+  "padding:8px 12px;display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;" +
+  "background:#3a2a00;color:#ffd27a;font:13px/1.4 system-ui,sans-serif;text-align:center";
+const NOTICE_BUTTON =
+  "font:inherit;padding:3px 10px;border-radius:4px;border:1px solid #ffd27a;" +
+  "background:transparent;color:#ffd27a;cursor:pointer";
+
+/**
+ * E9-255 — what a script is downloading, at the top while it runs. `null`
+ * takes it away; `action` adds a button (the "load it again" at the end).
+ */
+function showDownloadNotice(text: string | null, end?: { action?: { label: string; run: () => void } }): void {
+  let el = document.getElementById("download-notice");
+  if (text === null) {
+    el?.remove();
+    return;
+  }
+  // The running bar is built differently; an outcome replaces it whole.
+  if (el !== null && el.dataset["kind"] === "progress") {
+    el.remove();
+    el = null;
+  }
+  if (el === null) {
+    el = document.createElement("div");
+    el.id = "download-notice";
+    el.setAttribute("role", "status");
+    el.style.cssText = NOTICE_STYLE;
+    topNotices().prepend(el);
+  }
+  el.textContent = "";
+  const words = document.createElement("span");
+  words.textContent = text;
+  el.append(words);
+  if (end !== undefined) {
+    const action = end.action;
+    if (action !== undefined) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = action.label;
+      b.style.cssText = NOTICE_BUTTON;
+      b.addEventListener("click", () => {
+        el?.remove();
+        action.run();
+      });
+      el.append(b);
+    }
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "×";
+    close.setAttribute("aria-label", "dismiss");
+    close.style.cssText = NOTICE_BUTTON;
+    close.addEventListener("click", () => el?.remove());
+    el.append(close);
+  }
+}
+
+/**
+ * E9-262 — while downloads run: one line that never wraps, a bar, and
+ * `stop`. Built once and updated in place, so a progress event every chunk
+ * changes two properties instead of rebuilding the row.
+ */
+function showDownloadProgress(v: DownloadsView, who: string | null, stop: () => void): void {
+  let el = document.getElementById("download-notice");
+  if (el !== null && el.dataset["kind"] !== "progress") {
+    el.remove();
+    el = null;
+  }
+  if (el === null) {
+    el = document.createElement("div");
+    el.id = "download-notice";
+    el.dataset["kind"] = "progress";
+    el.setAttribute("role", "status");
+    el.style.cssText = NOTICE_STYLE + ";flex-wrap:nowrap";
+    const words = document.createElement("span");
+    words.className = "dl-words";
+    words.style.cssText = "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+    const bar = document.createElement("div");
+    bar.style.cssText =
+      "flex:0 0 96px;height:6px;border-radius:3px;background:rgba(255,210,122,.25);overflow:hidden";
+    const fill = document.createElement("div");
+    fill.className = "dl-fill";
+    fill.style.cssText = "height:100%;width:0;background:#ffd27a;transition:width .2s";
+    bar.append(fill);
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "dl-stop";
+    b.textContent = "stop";
+    b.style.cssText = NOTICE_BUTTON;
+    el.append(words, bar, b);
+    topNotices().prepend(el);
+  }
+  const words = el.querySelector<HTMLElement>(".dl-words")!;
+  const fill = el.querySelector<HTMLElement>(".dl-fill")!;
+  const b = el.querySelector<HTMLButtonElement>(".dl-stop")!;
+  words.textContent = who === null ? v.line : `${who}: ${v.line}`;
+  words.title = words.textContent;
+  // Nothing says how far: a dim full bar, which reads as "working".
+  fill.style.width = v.fraction === null ? "100%" : `${Math.round(v.fraction * 100)}%`;
+  fill.style.opacity = v.fraction === null ? "0.35" : "1";
+  b.style.display = v.stoppable ? "" : "none";
+  b.onclick = () => stop();
+}
+
+/** `/home/we/dust/code/tmi/tmi.lua` → `tmi`: the folder, which can hold a space. */
+function scriptNameOf(path: string | null): string | null {
+  if (path === null) return null;
+  const parts = path.split("/");
+  const at = parts.indexOf("code");
+  return at >= 0 && parts.length > at + 1 ? parts[at + 1]! : null;
+}
+
 function showInputNotice(text: string, turnOn: () => Promise<boolean>): void {
   document.getElementById("input-notice")?.remove();
   const el = document.createElement("div");
   el.id = "input-notice";
   el.setAttribute("role", "status");
-  el.style.cssText =
-    "position:fixed;left:0;right:0;top:0;z-index:999;padding:8px 12px;display:flex;gap:10px;" +
-    "align-items:center;justify-content:center;flex-wrap:wrap;background:#3a2a00;color:#ffd27a;" +
-    "font:13px/1.4 system-ui,sans-serif;text-align:center";
+  el.style.cssText = NOTICE_STYLE;
   const words = document.createElement("span");
   words.textContent = text;
   const on = document.createElement("button");
@@ -299,11 +427,7 @@ function showInputNotice(text: string, turnOn: () => Promise<boolean>): void {
   close.type = "button";
   close.textContent = "×";
   close.setAttribute("aria-label", "dismiss");
-  for (const b of [on, close]) {
-    b.style.cssText =
-      "font:inherit;padding:3px 10px;border-radius:4px;border:1px solid #ffd27a;" +
-      "background:transparent;color:#ffd27a;cursor:pointer";
-  }
+  for (const b of [on, close]) b.style.cssText = NOTICE_BUTTON;
   on.addEventListener("click", () => {
     on.disabled = true;
     void turnOn().then((ok) => {
@@ -313,7 +437,7 @@ function showInputNotice(text: string, turnOn: () => Promise<boolean>): void {
   });
   close.addEventListener("click", () => el.remove());
   el.append(words, on, close);
-  document.body.appendChild(el);
+  topNotices().appendChild(el);
 }
 
 /**
@@ -893,13 +1017,115 @@ async function main(): Promise<void> {
     log: (l) => log(l),
     onAsk: (d) => showHandDownloadNotice(d, (bytes) => handDownloads.provide(d.dest, bytes)),
   });
+  /**
+   * E9-255 — THE DOWNLOADS A SCRIPT STARTS, at the top of the page while
+   * they run (see ui/script-downloads.ts). When the last one ends the line
+   * goes; the script that was starting when they began is offered a reload
+   * for ten seconds, because a script that asked for its files at launch was
+   * told they were not there yet (E9-37), and one that stopped on a missing
+   * library (E9-109) never got going: both only see them the next time.
+   */
+  let downloadsSettle: ReturnType<typeof setTimeout> | null = null;
+  /** The last `# script load`, and the one the running downloads are for. */
+  let lastScriptPath: string | null = null;
+  let downloadsFor: string | null = null;
+  const downloads = createScriptDownloads(() => {
+    if (downloadsSettle !== null) clearTimeout(downloadsSettle);
+    downloadsSettle = null;
+    const view = downloads.view();
+    if (view !== null) {
+      downloadsFor ??= lastScriptPath;
+      return showDownloadProgress(view, scriptNameOf(downloadsFor), () => downloads.stop());
+    }
+    const failed = downloads.failed();
+    const stopped = downloads.stopped();
+    const again = downloadsFor;
+    downloadsFor = null;
+    if (failed.length > 0) {
+      // E9-262 — counted past three: a list of 278 names is not a sentence.
+      const names = failed.length <= 3 ? failed.join(", ") : `${failed.length} files (${failed[0]}, …)`;
+      showDownloadNotice(`Could not download ${names}.`, {});
+    } else if (stopped > 0) {
+      showDownloadNotice(`Stopped ${stopped} download${stopped === 1 ? "" : "s"}.`, {});
+    } else if (again !== null) {
+      showDownloadNotice("Downloaded. If the script is still waiting for its files, load it again.", {
+        // A JSON string is a Lua string: the same quotes and escapes.
+        action: { label: "load it again", run: () => void host.run(`norns.script.load(${JSON.stringify(again)})`) },
+      });
+    } else {
+      return showDownloadNotice(null);
+    }
+    downloadsSettle = setTimeout(() => showDownloadNotice(null), 10_000);
+  });
+
+  /**
+   * E9-262 — A SCRIPT'S FILES, A FEW AT A TIME, AND ONLY WHILE IT RUNS.
+   *
+   * `pirate-radio` asks its server for every file the community has ever
+   * uploaded, one `curl` after another in a clock — 278 of them, 140 MB,
+   * the day it was measured. On a norns each `curl` blocks until it is
+   * done, so they go one by one, and stopping the script kills the clock:
+   * what is left is never fetched. Here a `curl` returns at once and the
+   * page fetches, so all 278 started together and went on after the script
+   * was gone (user, 2026-11-26: "stoppe le, c'est beaucoup trop").
+   *
+   * So a file waits for one of FETCH_SLOTS, and a `# script clear` drops
+   * every file still waiting — the ones already on their way finish, as the
+   * `curl` running when a norns script stops does. Repositories (a `git
+   * clone`) are not held back: they are a library the script needs, and
+   * they have their own count.
+   */
+  const FETCH_SLOTS = 4;
+  let fetchBusy = 0;
+  const fetchWaiting = new Set<() => void>();
+  /** Files waiting for a slot, by their own way out. */
+  const fetchQueued = new Set<AbortController>();
+  const takeSlot = async (signal: AbortSignal): Promise<boolean> => {
+    while (fetchBusy >= FETCH_SLOTS && !signal.aborted) {
+      await new Promise<void>((wake) => {
+        fetchWaiting.add(wake);
+        signal.addEventListener("abort", () => wake(), { once: true });
+      });
+    }
+    if (signal.aborted) return false;
+    fetchBusy++;
+    return true;
+  };
+  const giveSlot = (): void => {
+    fetchBusy--;
+    const next = fetchWaiting.values().next();
+    if (next.done !== true) {
+      fetchWaiting.delete(next.value);
+      next.value();
+    }
+  };
+  onScriptClear.push(() => {
+    for (const ac of fetchQueued) ac.abort();
+    fetchQueued.clear();
+  });
+
   const startFetch = (f: ShellFetch): void => {
     void (async () => {
       if (f.kind === "unzip") {
-        await handDownloads.unzip(f.url, f.dest).catch((e) => log(`unzip: ${f.url} failed — ${(e as Error).message}`));
+        const unpacking = downloads.start(`unpacking ${f.url.split("/").pop() ?? f.url}`);
+        await handDownloads.unzip(f.url, f.dest).then(
+          () => unpacking.end(true),
+          (e) => {
+            unpacking.end(false);
+            log(`unzip: ${f.url} failed — ${(e as Error).message}`);
+          },
+        );
         return;
       }
       if (f.kind === "file") handDownloads.started(f.url, f.dest, f.unzipTo);
+      // E9-262 — `stop` on the bar gives up on this one, wherever it is.
+      const ac = new AbortController();
+      const shown = downloads.start(
+        f.kind === "repo" ? (f.dest.split("/").filter(Boolean).pop() ?? f.url) : (f.dest.split("/").pop() ?? f.url),
+        f.kind === "repo" ? "files" : "bytes",
+        () => ac.abort(),
+      );
+      let slot = false;
       try {
         if (f.kind === "repo") {
           const repo = parseRepoUrl(f.url);
@@ -909,14 +1135,35 @@ async function main(): Promise<void> {
           }
           const name = f.dest.split("/").filter(Boolean).pop() ?? repo.repo;
           keepStorage();
-          const r = await installFromRepo(vfs, repo, { name, commit: () => mirror.flush() });
+          const r = await installFromRepo(vfs, repo, {
+            name,
+            signal: ac.signal,
+            commit: () => mirror.flush(),
+            onProgress: (p) => shown.progress(p.done, p.total),
+          });
           log(`fetch: ${repo.owner}/${repo.repo} → ${f.dest} (${r.files} files)`);
+          shown.end(true);
         } else {
           // E9-227 — a GitHub release file goes through this page's own
           // server, which can fetch what the page may not (fs/release-relay.ts).
+          fetchQueued.add(ac);
+          slot = await takeSlot(ac.signal);
+          fetchQueued.delete(ac);
+          if (!slot) {
+            log(`fetch: ${f.url} not fetched — stopped before its turn`);
+            shown.drop();
+            return;
+          }
           keepStorage();
           const name = f.dest.split("/").pop() ?? f.url;
-          const got = await fetchFile(f.url, { fetch: (u) => fetch(u), onProgress: quarters(log, name) });
+          const quarter = quarters(log, name);
+          const got = await fetchFile(f.url, {
+            fetch: (u) => fetch(u, { signal: ac.signal }),
+            onProgress: (done, total) => {
+              quarter(done, total);
+              shown.progress(done, total ?? 0);
+            },
+          });
           const via = got.relayed ? ", through this page's server" : "";
           if (!got.ok) {
             log(`fetch: ${f.url} answered ${got.status}${via}`);
@@ -925,12 +1172,24 @@ async function main(): Promise<void> {
           }
           log(`fetch: ${f.url} → ${f.dest} (${(got.bytes.length / 1024).toFixed(0)} KB${via})`);
           await handDownloads.fetched(f.dest, got.bytes);
+          shown.end(true);
         }
       } catch (e) {
+        if (ac.signal.aborted) {
+          // Stopped from the bar: nothing to ask anybody for.
+          log(`fetch: ${f.url} stopped`);
+          shown.drop();
+          return;
+        }
         log(`fetch: ${f.url} failed — ${(e as Error).message}`);
         // A TypeError here is the browser refusing a cross-origin reply —
         // GitHub's release downloads, for one. A person can still get it.
         if (f.kind === "file") handDownloads.failed(f.dest, (e as Error).message);
+      } finally {
+        if (slot) giveSlot();
+        fetchQueued.delete(ac);
+        // Every way out that did not say `end(true)` is a failure.
+        shown.end(false);
       }
     })();
   };
@@ -964,6 +1223,7 @@ async function main(): Promise<void> {
   const watchIncludes = (line: string): void => {
     const loaded = SCRIPT_LOAD.exec(line);
     if (loaded !== null) {
+      lastScriptPath = loaded[1]!;
       // `/home/we/dust/code/tmi/tmi.lua` — the FOLDER is the script's name,
       // and a folder can have a space in it (`get in the sea!`), so this
       // takes the segment rather than the file's stem.
@@ -1000,6 +1260,19 @@ async function main(): Promise<void> {
           return;
         }
         log(`fetching \`${want}\` — maiden has it; load the script again when it is done.`);
+        // E9-255 — and said at the top while maiden's queue fetches it.
+        const lib = maiden.library;
+        if (lib !== null) {
+          const shown = downloads.start(want, "files", () => lib.cancel(want));
+          const look = (): void => {
+            const st = lib.state(want);
+            if (st.job === "queued" || st.job === "running") return shown.progress(st.done, st.total);
+            unwatch();
+            shown.end(st.installed);
+          };
+          const unwatch = lib.onChange(look);
+          look();
+        }
       } catch (e) {
         log(`\`${want}\` could not be fetched — ${(e as Error).message}`);
       }
@@ -1111,29 +1384,52 @@ async function main(): Promise<void> {
           log: (l) => log(l),
         })
       : null;
+  // E9-239 — the programs on this norns are in this page: sclang and
+  // scsynth through the engine host, matron by its own osc.event (later,
+  // not inside the send — a script sending to itself on hardware hears
+  // it on the next pass of the event loop too).
+  const oscLocal = (port: number, path: string, args: Array<number | string>): boolean => {
+    if (port === 57120 && scEngine !== null) {
+      scEngine.sendToLang(path, args);
+      return true;
+    }
+    if (port === 57110 && scEngine !== null) {
+      scEngine.sendToServer(path, args);
+      return true;
+    }
+    if (port === 10111) {
+      setTimeout(() => {
+        cbLater()?.oscEvent(path, [...args], ["127.0.0.1", "10111"]);
+        dirtyFlag();
+      }, 0);
+      return true;
+    }
+    return false;
+  };
   registerOsc(host.registry, {
     remote: oscRemote,
-    // E9-239 — the programs on this norns are in this page: sclang and
-    // scsynth through the engine host, matron by its own osc.event (later,
-    // not inside the send — a script sending to itself on hardware hears
-    // it on the next pass of the event loop too).
-    local: (port, path, args) => {
-      if (port === 57120 && scEngine !== null) {
-        scEngine.sendToLang(path, args);
-        return true;
-      }
-      if (port === 57110 && scEngine !== null) {
-        scEngine.sendToServer(path, args);
-        return true;
-      }
-      if (port === 10111) {
-        setTimeout(() => {
-          cbLater()?.oscEvent(path, [...args], ["127.0.0.1", "10111"]);
-          dirtyFlag();
-        }, 0);
-        return true;
+    local: oscLocal,
+    log: (l) => log(l),
+  });
+  // E9-267 — what sendosc, oscnotify and audiowaveform need from the page
+  // (src/fs/programs.ts): the same OSC routes as `osc.send`, and the
+  // browser's decoder for the sound files the shell cannot read itself,
+  // at the file's own rate so the peaks keep its sample positions.
+  setProgramHost({
+    oscSend: (to, port, path, args) => {
+      if (/^(localhost|127\.0\.0\.1|::1)$/i.test(to) && oscLocal(port, path, [...args])) return "here";
+      if (oscRemote !== null) {
+        oscRemote.send(to, port, path, [...args]);
+        return "relay";
       }
       return false;
+    },
+    decodeAudio: async (bytes, sampleRate) => {
+      const ctx = new OfflineAudioContext(1, 1, sampleRate ?? 48000);
+      const buf = await ctx.decodeAudioData(bytes.slice().buffer);
+      const channels: Float32Array[] = [];
+      for (let c = 0; c < buf.numberOfChannels; c++) channels.push(buf.getChannelData(c));
+      return { sampleRate: buf.sampleRate, channels };
     },
     log: (l) => log(l),
   });
@@ -1517,9 +1813,9 @@ async function main(): Promise<void> {
    * on disk describes a machine that was shut down rather than one that
    * stopped mid-sentence.
    */
-  const doRestart = (): void => {
-    log("restart: asked from the rail");
-    host.run("if _norns and _norns.restart then _norns.restart() end");
+  const doRestart = (open: string | null = null): void => {
+    log(open === null ? "restart: asked from the rail" : `restart: asked from the store, back into ${open}`);
+    host.run(restartInto(open));
   };
 
   // --- the sound cards (E9-15) -------------------------------------------
@@ -1646,6 +1942,8 @@ async function main(): Promise<void> {
   };
   /** Takes back what an underrun left in the output. Null until there is a context. E9-202. */
   let latencyReclaim: Reclaim | null = null;
+  // One listener for whichever reclaim is current: a new context replaces it.
+  onScriptClear.push(() => latencyReclaim?.scriptCleared());
   const startLatencyReclaim = (ctx: AudioContext): void => {
     const stats = (): { resetLatency?: () => void } | undefined => {
       const c = ctx as unknown as { playbackStats?: { resetLatency?: () => void }; playoutStats?: { resetLatency?: () => void } };
@@ -1668,7 +1966,6 @@ async function main(): Promise<void> {
     latencyReclaim = r;
     // norns' own startup clear may already have gone by.
     if (scriptClears > 0) r.scriptCleared();
-    onScriptClear = () => r.scriptCleared();
   };
 
   /** Where a microphone goes: crone's input 1, which IS the adc (processor.js:16). */
@@ -4116,6 +4413,7 @@ async function main(): Promise<void> {
           // boot: somebody who raises the limit because a script was
           // refused expects the next attempt to use the new number.
           maxFiles: settings.installMaxFiles,
+          maxAudioMb: settings.installMaxAudioMb,
           // E9-140 — "installed" has to mean on disk. See install.ts.
           commit: () => mirror.flush(),
         });
@@ -4128,6 +4426,7 @@ async function main(): Promise<void> {
           signal: withStallTimeout(signal),
           onProgress: (p) => onProgress(p.done, p.total),
           maxFiles: settings.installMaxFiles,
+          maxAudioMb: settings.installMaxAudioMb,
           commit: () => mirror.flush(),
         });
       },
@@ -4223,7 +4522,8 @@ async function main(): Promise<void> {
             return true;
           },
           restartOwed: () => [...restartOwed],
-          restart: doRestart,
+          // E9-254 — from a script's own button, restart back into it.
+          restart: (name) => doRestart(name === undefined ? null : mainScript(name, scriptsIn(vfs))),
           onToggle: (on) => {
             dialogOpen = on;
             if (on) closeOtherPanels(null);
@@ -4622,6 +4922,15 @@ async function main(): Promise<void> {
       });
     });
 
+    // E9-260 — `/b_read*` sent by hand, done by the buffer loader made below.
+    let rawBufferRead: (r: RawBufferRead) => Promise<unknown> = async () => false;
+    // E9-268 — a sound file the server wrote (Buffer.write, Recorder,
+    // DiskOut), into the page's filesystem, where the script, the editor
+    // and persistence see it.
+    const soundFileWritten = (path: string, bytes: Uint8Array): void => {
+      vfs.write(path, bytes);
+      log(`sound file: ${path} written by the server, ${(bytes.length / 1024).toFixed(0)} KB`);
+    };
     let engine = (scEngine = await createEngineHost({
       log: (l) => log(l),
       soundFiles,
@@ -4634,6 +4943,8 @@ async function main(): Promise<void> {
       onNeedsGesture: (waiting) => void (needsGesture = waiting, showGate()),
       extraClasses,
       onDead: (why) => liveness.report(why),
+      onRawBufferRead: (r) => rawBufferRead(r),
+      onSoundFileWritten: (path, bytes) => soundFileWritten(path, bytes),
     }));
 
     const injected = await engine.injectNorns();
@@ -4683,6 +4994,8 @@ async function main(): Promise<void> {
           onNeedsGesture: (waiting) => void (needsGesture = waiting, showGate()),
           extraClasses,
           onDead: (why) => liveness.report(why),
+          onRawBufferRead: (r) => rawBufferRead(r),
+          onSoundFileWritten: (path, bytes) => soundFileWritten(path, bytes),
         });
         await engine.injectNorns();
         const again = await engine.bootSclang().catch(() => false);
@@ -4991,24 +5304,26 @@ async function main(): Promise<void> {
       }
     }
 
+    // Sound files into scsynth's buffers. scsynth has no libsndfile and
+    // its MEMFS is not the VFS, so the browser decodes and the samples go
+    // in over OSC. See src/engine/buffers.ts.
+    const bufferLoader = createBufferLoader({
+      vfs,
+      context: ctx,
+      sendToServer: (a, g) => engine.sendToServer(a, g as never),
+      sendToLang: (a, g) => engine.sendToLang(a, g as never),
+      // E9-171 — so "the buffer is ready" means the server has it.
+      syncServer: (ms) => engine.syncServer(ms),
+      peekBuffer: (b, i, n, ms) => engine.peekBuffer(b, i, n, ms),
+      log: (l) => log(l),
+    });
+    rawBufferRead = (r) => bufferLoader.readRaw(r);
     engineState = registerEngine(host.registry, engine, {
       callbacks: cb,
       log: (l) => log(l),
       // E9-222 — whether this engine can hear the input; see input-use.ts.
       onLoadEngine: (name) => void (engineHearsInput = engineReadsInput(vfs, name)),
-      // Sound files into scsynth's buffers. scsynth has no libsndfile and
-      // its MEMFS is not the VFS, so the browser decodes and the samples go
-      // in over OSC. See src/engine/buffers.ts.
-      buffers: createBufferLoader({
-        vfs,
-        context: ctx,
-        sendToServer: (a, g) => engine.sendToServer(a, g as never),
-        sendToLang: (a, g) => engine.sendToLang(a, g as never),
-        // E9-171 — so "the buffer is ready" means the server has it.
-        syncServer: (ms) => engine.syncServer(ms),
-        peekBuffer: (b, i, n, ms) => engine.peekBuffer(b, i, n, ms),
-        log: (l) => log(l),
-      }),
+      buffers: bufferLoader,
       soundData: createSoundData({
         vfs,
         writeLangFile: (p, b) => engine.writeLangFile(p, b),

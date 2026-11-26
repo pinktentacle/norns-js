@@ -33,8 +33,15 @@ ways that read as bugs in this project rather than as a version skew.
 |---|---|
 | `cairo-build` | cairo-1.16.0, pixman-0.42.2 |
 | `fftw3` | fftw-3.3.10.tar.gz |
+| `flac` | flac-1.4.3.tar.xz |
 | `freetype-2104` | freetype-VER-2-10-4 |
+| `lame` | lame-3.100.tar.gz |
+| `libogg` | libogg-1.3.5.tar.xz |
+| `libsndfile` | libsndfile-1.2.2.tar.xz |
+| `libvorbis` | libvorbis-1.3.7.tar.xz |
 | `lua53` | Makefile, README, doc |
+| `mpg123` | mpg123-1.32.9.tar.bz2 |
+| `opus` | opus-1.5.2.tar.gz |
 | `pixman-0400` | pixman-0.40.0, pixman-0.40.0.tar.gz |
 | `portedplugins` | CHANGELOG.md, CMakeLists.txt, CONTRIBUTING.md |
 | `sc-plugins-extra` | ByteBeat, FormantTriPTR, LICENSE |
@@ -182,7 +189,7 @@ git -C third_party/softcut-lib apply ../../patches/softcut-lib.patch
 
 ### `supercollider`
 
-Base `0c5a96d701be`, 9 file(s) changed:
+Base `0c5a96d701be`, 10 file(s) changed:
 
 - `lang/CMakeLists.txt`
 - `platform/wasm/CMakeLists.txt`
@@ -192,6 +199,7 @@ Base `0c5a96d701be`, 9 file(s) changed:
 - `server/plugins/ML.cpp`
 - `server/plugins/SC_StaticPlugins.h`
 - `server/scsynth/CMakeLists.txt`
+- `server/scsynth/SC_Node.cpp`
 - `server/scsynth/SC_WebAudio.cpp`
 
 ```

@@ -110,6 +110,22 @@ export const LUA_PATCHES: readonly LuaPatch[] = [
       "until E6-01 made PSETs survive a reload. Writing inf and -inf also " +
       "means a PSET written here can be read by a real norns",
   },
+  {
+    module: "core/softcut",
+    // softcut.lua:406, in SC.reset — one line, see the note on the state patch.
+    find: "   _norns.cut_reset()",
+    replace:
+      "   _norns.cut_reset()" + "\n" +
+      "   -- norns-js (E9-257): the input filter's cutoff back to SC.defaults()." + "\n" +
+      "   for i = 1, SC.VOICE_COUNT do SC.pre_filter_fc(i, 16000) end",
+    why:
+      "a script that turned the input filter down silenced the next script's " +
+      "recording. softcut-lib's Voice::reset puts the input filter back to " +
+      "lowpass with dry 0 but at `svfPreFcBase`, the LAST cutoff any script " +
+      "set, not 16000 -- SC.defaults() says 16000. raft's cutoff, turned to " +
+      "20 Hz, left nmQuadroDubber and larc recording nothing (measured: 0.006 " +
+      "against 0.72). The same on a norns, until a restart; nobody chose it",
+  },
 ];
 
 /**

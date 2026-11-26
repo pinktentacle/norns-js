@@ -1017,6 +1017,10 @@ const leftOut = (skipped: ReadonlyArray<{ path: string; why: string }>): string 
             paintRow(entry.name);
             sayQueue();
           });
+          // E9-253 — the restart is owed the moment THIS script is in, not
+          // when the queue drains: its dependencies may still be installing,
+          // and its store button said "open" meanwhile (amen, oooooo on a Pixel).
+          if (r.needsReload) opts.onEngines?.([entry.name]);
           ok++;
           if (job !== undefined) {
             job.state = "done";
@@ -1137,7 +1141,6 @@ const leftOut = (skipped: ReadonlyArray<{ path: string; why: string }>): string 
       say(cancelled ? "cancelled — nothing was installed" : "nothing to do");
       return;
     }
-    if (engines.length > 0) opts.onEngines?.(engines);
     // THE RESTART LINE, AND NOW ONLY WHEN IT IS TRUE.
     //
     // maiden says it after every install because on hardware it cannot know

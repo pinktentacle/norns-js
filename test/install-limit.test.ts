@@ -14,9 +14,15 @@
 // gets a note.
 
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MAX_FILES, installFromRepo } from "../src/community/install.js";
+import { DEFAULT_MAX_AUDIO_MB, DEFAULT_MAX_FILES, installFromRepo } from "../src/community/install.js";
 import limits from "../src/community/limits.json";
-import { createSettings, INSTALL_FILES_MAX, INSTALL_FILES_MIN } from "../src/ui/settings.js";
+import {
+  createSettings,
+  INSTALL_AUDIO_MB_MAX,
+  INSTALL_AUDIO_MB_MIN,
+  INSTALL_FILES_MAX,
+  INSTALL_FILES_MIN,
+} from "../src/ui/settings.js";
 import { Vfs } from "../src/fs/vfs.js";
 
 /** A listing of `n` Lua files, which is what a big repository looks like. */
@@ -184,5 +190,48 @@ describe("an install is not finished until it is durable", () => {
     });
     expect(r.files).toBe(1);
     expect(vfs.readText("/home/we/dust/code/thing/thing.lua")).toBe("-- x");
+  });
+});
+
+// E9-261 — the audio an install will take, the same way.
+describe("the install audio limit", () => {
+  const store = (): Record<string, string> => ({});
+  const storageOf = (back: Record<string, string>) => ({
+    getItem: (k: string) => back[k] ?? null,
+    setItem: (k: string, v: string) => void (back[k] = v),
+    removeItem: (k: string) => void delete back[k],
+  });
+
+  it("is the one in limits.json, and takes nc01-drone's 118 MB", () => {
+    expect(DEFAULT_MAX_AUDIO_MB).toBe(limits.installMaxAudioMb);
+    expect(DEFAULT_MAX_AUDIO_MB).toBeGreaterThan(118);
+  });
+
+  it("is a setting: default, kept, clamped", () => {
+    const back = store();
+    const s = createSettings(storageOf(back));
+    expect(s.installMaxAudioMb).toBe(DEFAULT_MAX_AUDIO_MB);
+    expect(createSettings(null).installMaxAudioMb).toBe(DEFAULT_MAX_AUDIO_MB);
+    s.setInstallMaxAudioMb(1024);
+    expect(createSettings(storageOf(back)).installMaxAudioMb).toBe(1024);
+    s.setInstallMaxAudioMb(1);
+    expect(s.installMaxAudioMb).toBe(INSTALL_AUDIO_MB_MIN);
+    s.setInstallMaxAudioMb(1e9);
+    expect(s.installMaxAudioMb).toBe(INSTALL_AUDIO_MB_MAX);
+  });
+
+  it("is obeyed by the install it is given to", async () => {
+    const vfs = new Vfs();
+    const r = await installFromRepo(vfs, { owner: "a", repo: "drone" }, {
+      fetchJson: async () => ({
+        files: [
+          { name: "/drone.lua", size: 10 },
+          { name: "/lib/a.wav", size: 20 * 1024 * 1024 },
+        ],
+      }),
+      fetchBytes: async () => new Uint8Array(4),
+      maxAudioMb: 16,
+    });
+    expect(r.skipped.map((x) => x.path)).toContain("lib/a.wav");
   });
 });

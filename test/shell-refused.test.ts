@@ -42,14 +42,16 @@ beforeAll(() => {
 describe("a script's own os.execute", () => {
   it("reports the command it would not run, and the reason", () => {
     // E9-228: this used to be amenbreak's `test -n "$(find …)"`, which the
-    // shell now answers (test/tar-shell.test.ts). Its `pkill` it cannot.
-    const cmd = "pkill -f oscnotify";
+    // shell now answers (test/tar-shell.test.ts), and then its
+    // `pkill -f oscnotify`, which E9-267 answers from the page's own
+    // process table (test/programs.test.ts). paracosms' sudo it cannot.
+    const cmd = "sudo apt-get install -y sox";
     refusals.length = 0;
     host.run(`_EXEC_OK = os.execute(${JSON.stringify(cmd)})`);
 
     expect(refusals).toHaveLength(1);
     expect(refusals[0]?.cmd).toBe(cmd);
-    expect(refusals[0]?.why).toContain("pkill");
+    expect(refusals[0]?.why).toContain("sudo");
   });
 
   it("reports an install that shells out to the network", () => {

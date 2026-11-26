@@ -79,3 +79,5 @@ tools/*.zip
 # E9-117 — the Lua interpreter, built by tools/lua53/build.sh. Generated,
 # like every other wasm artefact here: `npm run lua` makes it.
 src/lua/lua53/
+# wrangler's build scratch (4-cloudflare.ps1 deploys from this folder)
+.wrangler/

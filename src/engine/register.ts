@@ -51,7 +51,7 @@ export interface RegisterEngineOptions {
       start: number,
       frames: number,
       pick?: readonly number[],
-    ): Promise<void>;
+    ): Promise<unknown>;
   };
   /** A sound file's samples into sclang, for `SoundFile.readData` (E9-251). */
   readonly soundData?: {

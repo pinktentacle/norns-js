@@ -196,6 +196,38 @@ else
   echo "           (bash tools/sclang/build-fftw.sh)"
 fi
 
+# --- libsndfile ---------------------------------------------------------------
+# E9-268. What lets scsynth WRITE sound files: Buffer.write, Recorder, and
+# the DiskIO_UGens (DiskOut, DiskIn, VDiskIn), which SuperCollider compiles
+# only when libsndfile is found. Reading does not go through it here (the
+# page decodes, src/engine/buffers.ts). Build it with
+# tools/sclang/build-sndfile.sh; without it the server is what it was,
+# `-DNO_LIBSNDFILE`, and `/b_write` stays refused in sclang.
+SNDFILE_OPTS=(-DNO_LIBSNDFILE=yes)
+if [ -f "$ROOT/third_party/libsndfile/build-wasm/libsndfile.a" ]; then
+  # E9-269 — and the codecs it was built with, after it on the link line
+  # (a static library's dependencies come after it). Whichever are there.
+  SNDFILE_LIBS="$(w "$ROOT/third_party/libsndfile/build-wasm/libsndfile.a")"
+  for l in libFLAC libvorbisenc libvorbis libopus libogg libmpg123 libmp3lame; do
+    f="$ROOT/third_party/libsndfile/deps-wasm/lib/$l.a"
+    [ -f "$f" ] && SNDFILE_LIBS="$SNDFILE_LIBS;$(w "$f")"
+  done
+  SNDFILE_OPTS=(
+    -DNO_LIBSNDFILE=no
+    -DSNDFILE_INCLUDE_DIR="$(w "$ROOT/third_party/libsndfile/include")"
+    -DSNDFILE_LIBRARY="$SNDFILE_LIBS"
+  )
+  echo "sndfile  : $SNDFILE_LIBS"
+  # E9-269 — FindSndfile's SNDFILE_HAS_VORBIS/OPUS/MPEG are CACHED checks:
+  # a build directory configured once with NO_LIBSNDFILE keeps them false
+  # for ever, and SuperCollider then refuses "OGG" and "MPEG" as header
+  # formats (measured: /b_write failed for .ogg, .opus and .mp3 with the
+  # codecs linked). `-U` below drops them so every configure asks again.
+else
+  echo "sndfile  : absent - scsynth cannot write sound files, and DiskOut/DiskIn are missing"
+  echo "           (bash tools/sclang/build-sndfile.sh)"
+fi
+
 STUB_OBJ="$ROOT/tools/sclang/build/wasm-stubs.o"
 mkdir -p "$(dirname "$STUB_OBJ")"
 if ! "$EMCC" -O2 -pthread -c "$(w "$ROOT/tools/sclang/wasm-stubs.c")" -o "$(w "$STUB_OBJ")"; then
@@ -240,7 +272,8 @@ SCSYNTH_MEMORY="${SCSYNTH_MEMORY:-536870912}"
   -DSC_QT=no \
   -DSUPERNOVA=no \
   -DSC_HIDAPI=no \
-  -DNO_LIBSNDFILE=yes \
+  "${SNDFILE_OPTS[@]}" \
+  -U "SNDFILE_HAS_*" \
   -DSTATIC_PLUGINS=yes \
   -DSC3_PLUGINS_DIR="$SC3_PLUGINS" \
   -DSC3_FAUST_WRAPPER_DIR="$SC3_FAUST" \

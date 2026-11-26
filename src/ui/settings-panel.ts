@@ -28,6 +28,8 @@ import {
 } from "./keymap.js";
 import { COMPONENTS, COPYRIGHT, LICENCE, TRADEMARK, sourceUrl } from "./about.js";
 import {
+  INSTALL_AUDIO_MB_MAX,
+  INSTALL_AUDIO_MB_MIN,
   INSTALL_FILES_MAX,
   INSTALL_FILES_MIN,
   VELOCITY_MAX,
@@ -37,7 +39,7 @@ import {
   type SettingsStore,
   type PanelKind,
 } from "./settings.js";
-import { DEFAULT_MAX_FILES } from "../community/install.js";
+import { DEFAULT_MAX_AUDIO_MB, DEFAULT_MAX_FILES } from "../community/install.js";
 import type { Stage } from "./stage.js";
 import type { Detection, MachineKind, MachinePreference } from "./machine.js";
 
@@ -692,9 +694,8 @@ export function createSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
 
   // --- installing (E9-72) -------------------------------------------------
   //
-  // The one install limit that is a judgement rather than a fact. The
-  // others in `install.ts` count BYTES and have a reason a number can be
-  // argued from — a 16 MB sample is a sample, 64 MB of them is a library.
+  // A judgement rather than a fact, like the audio limit below it (E9-261);
+  // the others in `install.ts` count BYTES of images and data.
   // This one counted FILES, at 400, and measuring it against the catalogue
   // showed what was inside the guess: of the 351 repositories that list,
   // exactly one is over 400 — `mosaic`, at 1209 — and the next largest is
@@ -749,6 +750,50 @@ export function createSettingsPanel(opts: SettingsPanelOptions): SettingsPanel {
     ),
   );
   markMax();
+
+  // E9-261 — the sound one install will take. Past it, the rest of the
+  // samples are skipped and the install says which.
+  install.append(el("p", "sp-sub", "most audio an install will take"));
+  const audioRow = el("div", "sp-row");
+  const maxAudio = el("input", "sp-count") as HTMLInputElement;
+  maxAudio.type = "number";
+  maxAudio.min = String(INSTALL_AUDIO_MB_MIN);
+  maxAudio.max = String(INSTALL_AUDIO_MB_MAX);
+  maxAudio.step = "64";
+  const audioUnit = el("span", "sp-sub", "MB");
+  const audioReset = el("button", "sp-reset", "default");
+  const markAudio = (): void => {
+    maxAudio.value = String(settings.installMaxAudioMb);
+    audioReset.disabled = settings.installMaxAudioMb === DEFAULT_MAX_AUDIO_MB;
+  };
+  // On `change`, for the same reason as the count above.
+  maxAudio.addEventListener(
+    "change",
+    () => {
+      settings.setInstallMaxAudioMb(Number(maxAudio.value));
+      markAudio();
+    },
+    { signal },
+  );
+  audioReset.addEventListener(
+    "click",
+    () => {
+      settings.setInstallMaxAudioMb(DEFAULT_MAX_AUDIO_MB);
+      markAudio();
+    },
+    { signal },
+  );
+  audioRow.append(maxAudio, audioUnit, audioReset);
+  install.append(audioRow);
+  install.append(
+    el(
+      "p",
+      "sp-hint",
+      "samples past this are left on the server and the install says so. " +
+        "the most in the catalogue is nc01-drone, at 118 MB.",
+    ),
+  );
+  markAudio();
   filesPane.append(install);
 
   // --- starting again (E9-142, E9-143) ------------------------------------

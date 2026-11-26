@@ -20,6 +20,7 @@ const COI_HEADERS = {
 };
 
 import { execSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { RELAY_PREFIX, relayRelease } from "./tools/gh-release.mjs";
@@ -52,6 +53,43 @@ const releaseRelay = () => {
       server.middlewares.use(handle);
     },
     configurePreviewServer(server: { middlewares: { use: (f: typeof handle) => unknown } }): void {
+      server.middlewares.use(handle);
+    },
+  };
+};
+
+/**
+ * The browser sweep's results, kept on disk (tools/sweep/runner.js). The
+ * page's storage can be wiped — in the app pane it lives in memory — so
+ * the runner posts what it has after every batch and this writes it to
+ * docs/measurements/browser-sweep.json. Dev server only: `vite preview`
+ * and the deployment never have it.
+ */
+const sweepExport = () => {
+  const handle = (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
+    const path = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (path !== "/__sweep/export" || req.method !== "POST") return next();
+    // Only from this page: a cross-site form must not be able to write here.
+    if ((req.headers["sec-fetch-site"] ?? "same-origin") !== "same-origin") {
+      res.writeHead(403).end();
+      return;
+    }
+    const chunks: Buffer[] = [];
+    req.on("data", (c: Buffer) => chunks.push(c));
+    req.on("end", () => {
+      try {
+        const body = Buffer.concat(chunks).toString("utf8");
+        JSON.parse(body);
+        writeFileSync(new URL("docs/measurements/browser-sweep.json", import.meta.url), body);
+        res.writeHead(204).end();
+      } catch (e) {
+        res.writeHead(400).end(String(e));
+      }
+    });
+  };
+  return {
+    name: "norns-js:sweep-export",
+    configureServer(server: { middlewares: { use: (f: typeof handle) => unknown } }): void {
       server.middlewares.use(handle);
     },
   };
@@ -107,7 +145,7 @@ const requireSourceUrl = (): { name: string; config: (c: unknown, env: { command
 });
 
 export default defineConfig({
-  plugins: [requireSourceUrl(), releaseRelay()],
+  plugins: [requireSourceUrl(), releaseRelay(), sweepExport()],
   // E9-118 — THERE IS NO `resolve.alias` ANY MORE, and that is the size of
   // what fengari cost. It was a Node-shaped CommonJS package: one alias
   // pointed `fengari` at the vendored copy carrying `patches/fengari.patch`,

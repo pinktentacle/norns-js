@@ -66,6 +66,17 @@ describe("the menu pages that cannot work here", () => {
     expect(refused.filter((c) => c.startsWith("nmcli"))).toEqual([]);
   });
 
+  it("ends boot without asking NetworkManager anything, and wifi reads off", () => {
+    // `startup_status.ok` calls `wifi.init()`: two nmcli, both refused, one
+    // log line on every page load that landed under the first script.
+    refused.length = 0;
+    expect(host.run(`wifi.init()`)).toBeNull();
+    expect(refused.filter((c) => c.startsWith("nmcli"))).toEqual([]);
+    expect(probe("wifi.state")).toBe("0");
+    expect(probe("wifi.connection_name")).toBe("");
+    expect(probe("wifi.status")).toBe("unavailable");
+  });
+
   it("SLEEP saves the state and does NOT mute the output", () => {
     // The half that means something, without the half that does not:
     // `norns.shutdown` muted the DAC and the headphone gain in preparation

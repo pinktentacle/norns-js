@@ -34,17 +34,40 @@
 // `/b_alloc` — and whose reply only refreshes what the client already
 // knows of the buffer.
 //
-// Writing the file for real (the samples fetched with `/b_getn` and saved
-// into the page's own tree) is possible and is not done here.
+// E9-268 — AND NOW THE SERVER WRITES IT ITSELF. scsynth is built with
+// libsndfile (tools/sclang/build-sndfile.sh), so `/b_write` is the real
+// command again: Buffer.write, Recorder (whose `/b_alloc` carries a
+// `/b_write` left open for DiskOut) and DiskOut. The page carries the file
+// out of the server's filesystem into its own when the server says it is
+// done (src/engine/sound-writes.ts).
+//
+// THE REFUSAL STAYS FOR A SERVER WITHOUT IT, which still dies on the
+// command. Which one is running is read from its UGen list: DiskOut is
+// compiled exactly when libsndfile is (server/plugins/CMakeLists.txt), so a
+// server that has DiskOut writes.
 
 + Buffer {
 
 	writeMsg { arg path, headerFormat = "aiff", sampleFormat = "int24", numFrames = -1,
 		startFrame = 0, leaveOpen = false, completionMessage;
 		if(bufnum.isNil) { Error("Cannot write a % that has been freed".format(this.class.name)).throw };
+		if (Buffer.nornsJsServerWrites) {
+			// upstream's message, unchanged
+			^["/b_write", bufnum, path,
+				headerFormat, sampleFormat, numFrames.asInteger, startFrame.asInteger,
+				leaveOpen.binaryValue, completionMessage.value(this)];
+		};
 		("norns-js: NOT writing buffer " ++ bufnum ++ " to " ++ path
 			++ " -- this scsynth cannot write sound files, and asking it to would stop the server.").postln;
 		^["/b_query", bufnum]
+	}
+
+	*nornsJsServerWrites {
+		var known = Library.at(\nornsJs, \ugens);
+		if (known.isNil and: { Library.at(\nornsJs, \ugensTried).isNil }) {
+			known = SynthDef.nornsJsLoadUGens;
+		};
+		^known.notNil and: { known.includes(\DiskOut) }
 	}
 
 }

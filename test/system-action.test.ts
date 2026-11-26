@@ -19,6 +19,7 @@ import { registerFs } from "../src/fs/register.js";
 import { registerClock } from "../src/clock/register.js";
 import { Vfs } from "../src/fs/vfs.js";
 import { bootedHost } from "./support/script-harness.js";
+import { restartInto } from "../src/ui/restart-into.js";
 
 function harness() {
   const vfs = new Vfs();
@@ -188,5 +189,55 @@ describe("the page's reload flushes before it goes", () => {
       /mirror\.flush\(\)\s*\.\s*(finally|then)\s*\(/,
     );
     expect(body.indexOf("mirror.flush()")).toBeLessThan(body.indexOf("location?.reload()"));
+  });
+});
+
+// E9-254 — THE STORE'S RESTART, FROM A SCRIPT THAT BROUGHT AN ENGINE.
+//
+// Pressed to play that script, so it comes back into it — through norns'
+// own resume, with the file put back after `_norns.restart` clears it.
+describe("restart back into a script", () => {
+  const FILE = "/home/we/dust/code/backagain/backagain.lua";
+  const booted = () => {
+    const h = bootedHost();
+    h.host.run(`for i = 1, 16 do norns.state.clock.midi_out[i] = 0 end`);
+    h.vfs.write("/home/we/dust/code/backagain/lib/helper.lua", `print("BACKAGAIN-HELPER") return {}`);
+    h.vfs.write(FILE, `local helper = include("lib/helper")
+function init() print("BACKAGAIN-INIT") end`);
+    return h;
+  };
+
+  it("saves a clean shutdown that names the script", () => {
+    const h = booted();
+    const err = h.host.run(restartInto(FILE));
+    expect(err, `restart failed: ${err}`).toBeFalsy();
+    const saved = h.vfs.readText("/home/we/dust/data/system.state") ?? "";
+    expect(saved).toContain(`norns.state.script = '${FILE}'`);
+    expect(saved).toContain("norns.state.clean_shutdown = true");
+  });
+
+  it("and the boot that follows loads it", () => {
+    const h = booted();
+    h.host.run(restartInto(FILE));
+    const before = h.host.output.length;
+    const err = h.host.run(`dofile("/home/we/dust/data/system.state"); norns.state.resume()`);
+    expect(err, `resume failed: ${err}`).toBeFalsy();
+    const said = h.host.output.slice(before).join("");
+    expect(said).toContain(`last file loaded: ${FILE}`);
+    expect(said).toContain(`# script load: ${FILE}`);
+    // Its own folder, as when it is loaded by hand: `include("lib/…")`.
+    expect(said).toContain("BACKAGAIN-HELPER");
+    expect(said).not.toContain("MISSING INCLUDE");
+    // `Script.load()` appends a "/" to the saved path, as after a sleep on a norns.
+    expect(
+      h.host.run(`assert(norns.state.name == "backagain" and norns.state.path:find("/home/we/dust/code/backagain/", 1, true) == 1)`),
+    ).toBeFalsy();
+  });
+
+  it("is the plain restart without a script", () => {
+    const h = booted();
+    h.host.run(`norns.state.script = '${FILE}'`);
+    expect(h.host.run(restartInto(null))).toBeFalsy();
+    expect(h.vfs.readText("/home/we/dust/data/system.state") ?? "").toContain("norns.state.script = ''");
   });
 });

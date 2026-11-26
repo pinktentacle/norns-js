@@ -118,7 +118,17 @@ const SOURCES = [
  * one, and scsynth dies on it -- which is exactly the failure the check
  * exists to prevent, arrived at from the other side.
  */
-const BUILD_DEFINES = new Set(["NO_LIBSNDFILE", "NO_X11"]);
+const BUILD_DEFINES = new Set(["NO_X11"]);
+// E9-268 — and NO_LIBSNDFILE only when the build really set it: scsynth
+// links libsndfile once tools/sclang/build-sndfile.sh has run, and then
+// DiskIn, VDiskIn and DiskOut ARE in the binary. Read from the build's own
+// CMake cache; no cache, no claim — the define stays, as it always did.
+{
+  const cache = path.join(ROOT, "third_party/supercollider/build-wasm/CMakeCache.txt");
+  const line = fs.existsSync(cache) ? /^NO_LIBSNDFILE:[A-Z]+=(.*)$/m.exec(fs.readFileSync(cache, "utf8")) : null;
+  const off = line !== null && /^(no|off|false|0|n)$/i.test(line[1].trim());
+  if (!off) BUILD_DEFINES.add("NO_LIBSNDFILE");
+}
 
 /**
  * What is actually REGISTERED, which is not the same as what is compiled.

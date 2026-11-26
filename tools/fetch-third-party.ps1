@@ -200,6 +200,67 @@ $downloads = @(
     Why  = "the FFT under SuperCollider's spectral UGens"
   },
   @{
+    # E9-268 — scsynth writes sound files (Buffer.write, Recorder, DiskOut)
+    # with it. Built by tools/sclang/build-sndfile.sh, WAV/AIFF/CAF only.
+    Name = "libsndfile"; File = "libsndfile-1.2.2.tar.xz"
+    Url  = "https://github.com/libsndfile/libsndfile/releases/download/1.2.2/libsndfile-1.2.2.tar.xz"
+    Sha  = "3799ca9924d3125038880367bf1468e53a1b7e3686a934f098b7e1d286cdb80e"
+    Into = "libsndfile"; Keep = "libsndfile\libsndfile-1.2.2.tar.xz"; Strip = 1
+    Makes = "libsndfile\CMakeLists.txt"
+    Why  = "libsndfile 1.2.2 (LGPL-2.1), so scsynth can write sound files"
+  },
+  # E9-269 — libsndfile's codecs, so the server writes FLAC (o-o-o records
+  # .flac), Ogg/Vorbis, Opus and mp3 too. Built by build-sndfile.sh.
+  @{
+    Name = "libogg"; File = "libogg-1.3.5.tar.xz"
+    Url  = "https://downloads.xiph.org/releases/ogg/libogg-1.3.5.tar.xz"
+    Sha  = "c4d91be36fc8e54deae7575241e03f4211eb102afb3fc0775fbbc1b740016705"
+    Into = "libogg"; Keep = "libogg\libogg-1.3.5.tar.xz"; Strip = 1
+    Makes = "libogg\CMakeLists.txt"
+    Why  = "libogg 1.3.5 (BSD-3), the container under Vorbis, Opus and Ogg FLAC"
+  },
+  @{
+    Name = "libvorbis"; File = "libvorbis-1.3.7.tar.xz"
+    Url  = "https://downloads.xiph.org/releases/vorbis/libvorbis-1.3.7.tar.xz"
+    Sha  = "b33cc4934322bcbf6efcbacf49e3ca01aadbea4114ec9589d1b1e9d20f72954b"
+    Into = "libvorbis"; Keep = "libvorbis\libvorbis-1.3.7.tar.xz"; Strip = 1
+    Makes = "libvorbis\CMakeLists.txt"
+    Why  = "libvorbis 1.3.7 (BSD-3), for writing .ogg"
+  },
+  @{
+    Name = "flac"; File = "flac-1.4.3.tar.xz"
+    Url  = "https://downloads.xiph.org/releases/flac/flac-1.4.3.tar.xz"
+    Sha  = "6c58e69cd22348f441b861092b825e591d0b822e106de6eb0ee4d05d27205b70"
+    Into = "flac"; Keep = "flac\flac-1.4.3.tar.xz"; Strip = 1
+    Exclude = @("*/test/flac-to-flac-metadata-test-files/*")
+    Makes = "flac\CMakeLists.txt"
+    Why  = "libFLAC 1.4.3 (BSD-3), for writing .flac"
+  },
+  @{
+    Name = "opus"; File = "opus-1.5.2.tar.gz"
+    Url  = "https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz"
+    Sha  = "65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1"
+    Into = "opus"; Keep = "opus\opus-1.5.2.tar.gz"; Strip = 1
+    Makes = "opus\CMakeLists.txt"
+    Why  = "libopus 1.5.2 (BSD-3), for writing .opus"
+  },
+  @{
+    Name = "mpg123"; File = "mpg123-1.32.9.tar.bz2"
+    Url  = "https://www.mpg123.de/download/mpg123-1.32.9.tar.bz2"
+    Sha  = "03b61e4004e960bacf2acdada03ed94d376e6aab27a601447bd4908d8407b291"
+    Into = "mpg123"; Keep = "mpg123\mpg123-1.32.9.tar.bz2"; Strip = 1
+    Makes = "mpg123\ports\cmake\CMakeLists.txt"
+    Why  = "libmpg123 1.32.9 (LGPL-2.1), which libsndfile wants beside LAME for mp3"
+  },
+  @{
+    Name = "lame"; File = "lame-3.100.tar.gz"
+    Url  = "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz"
+    Sha  = "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
+    Into = "lame"; Keep = "lame\lame-3.100.tar.gz"; Strip = 1
+    Makes = "lame\libmp3lame\lame.c"
+    Why  = "LAME 3.100 (LGPL-2.0), for writing .mp3"
+  },
+  @{
     Name = "portedplugins"; File = "portedplugins.tar.gz"
     Url  = "https://codeload.github.com/schollz/portedplugins/tar.gz/refs/heads/main"
     Sha  = "4df66a95fba94586aff0ad010d6a2744b4598b4c7ccc64374efb5e03c472333c"
@@ -583,12 +644,29 @@ foreach ($s in $steps) {
     $into = Join-Path $script:Vendor $d.Into
     if ($Force -and (Test-Path $into)) { Remove-Item -Recurse -Force $into }
     if (-not (Test-Path $into)) { New-Item -ItemType Directory -Force $into | Out-Null }
+    # E9-269 — `Exclude`: members left out, for an archive whose test files
+    # carry names Windows' tar cannot make (flac's are UTF-8: Prøve.flac,
+    # Hebrew, an emoji). Nothing that is built.
+    $ex = @()
+    if ($d.Exclude) { foreach ($x in $d.Exclude) { $ex += "--exclude=$x" } }
     if ($d.Strip -gt 0) {
-      & tar -xf $cache -C $into --strip-components=$($d.Strip)
+      & tar -xf $cache -C $into --strip-components=$($d.Strip) @ex
     } else {
-      & tar -xf $cache -C $into
+      & tar -xf $cache -C $into @ex
     }
-    if ($LASTEXITCODE -ne 0) { Say ("extract failed: " + $cache) "Red"; exit 1 }
+    if ($LASTEXITCODE -ne 0) {
+      # Windows' tar cannot even READ those names, so the exclusion cannot
+      # match them and the exit status says "error" regardless. Accepted
+      # for an entry that declares them, and only when what the build needs
+      # is there.
+      if ($d.Exclude -and (Test-Path (Join-Path $script:Vendor $d.Makes))) {
+        Say ("extract: skipped the members listed in Exclude — " + ($d.Exclude -join ", ")) "DarkYellow"
+        # or the script's own exit status would still be tar's
+        $global:LASTEXITCODE = 0
+      } else {
+        Say ("extract failed: " + $cache) "Red"; exit 1
+      }
+    }
 
     # The copy the publishing runbook's §3 tarball reads, under the name it
     # reads it by — `cairo.tar.xz`, not `cairo-1.16.0.tar.xz`.

@@ -60,7 +60,8 @@ export interface ScriptsStoreOptions {
   readonly run: (name: string) => boolean;
   /** Names whose SuperCollider classes are on disk and not yet compiled. */
   readonly restartOwed?: () => readonly string[];
-  readonly restart?: () => void;
+  /** Restart; given a script's name (its own button), come back into it. */
+  readonly restart?: (name?: string) => void;
   readonly onToggle?: (open: boolean) => void;
   readonly today?: () => Date;
   /** Stars and dates, for the charts and the sort. Without it: by name. */
@@ -146,7 +147,7 @@ function actOf(
       return {
         act: "restart",
         label: "restart",
-        title: "it brought a SuperCollider engine, which is compiled at start — restart to finish",
+        title: "it brought a SuperCollider engine, which is compiled at start — restart, and it opens by itself",
         progress: 0,
       };
     }
@@ -362,7 +363,7 @@ export function createScriptsStore(opts: ScriptsStoreOptions): ScriptsStore {
     if (act === "cancel") library.cancel(name);
     else if (act === "open") {
       if (opts.run(name)) hide();
-    } else if (act === "restart") opts.restart?.();
+    } else if (act === "restart") opts.restart?.(name);
     else if (entry !== null && entry.url !== "") library.install([entry]);
   };
 
@@ -844,7 +845,7 @@ export function createScriptsStore(opts: ScriptsStoreOptions): ScriptsStore {
 
     if (state.job === "failed" && state.why !== undefined) parts.push(note(`the last attempt failed — ${state.why}`, "st-d-fail"));
     if (owed(name)) {
-      parts.push(note("installed. it brought a SuperCollider engine, which is compiled when the norns starts: restart to finish.", "st-d-info"));
+      parts.push(note("installed. it brought a SuperCollider engine, which is compiled when the norns starts: restart, and it opens by itself.", "st-d-info"));
     }
 
     // How it stands here comes BEFORE what it is: it is the first thing

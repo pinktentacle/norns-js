@@ -41,8 +41,11 @@
 // 48 kHz is about 700 MB and will not load. Timber only streams samples
 // over its own length threshold, so the short ones were never affected.
 //
-// `DiskOut` is NOT overridden. It writes a file, and there is nowhere to
-// write one; it stays refused by the SynthDef check with its own message.
+// `DiskOut` is NOT overridden, and since E9-268 it does not need to be:
+// scsynth is built with libsndfile and runs it, and the page carries the
+// file it writes out of the server's filesystem when the buffer is closed
+// (src/engine/sound-writes.ts). Reading stays here because the files to
+// read live in the page's filesystem, not the server's.
 
 + Buffer {
 

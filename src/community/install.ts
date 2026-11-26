@@ -191,14 +191,18 @@ const MAX_DATA_TOTAL = 32 * 1024 * 1024;
 /**
  * Sound is allowed to be big, but not unbounded.
  *
- * 16 MB a file matches what the dust packer allows (tools/build-dust.mjs),
- * and amen's two samples — 1.2 MB and 9.3 MB — both fit. The running total
- * is what stops a repository that is a sample library: past it, the rest is
- * skipped and SAID, rather than quietly downloading half a gigabyte into
- * somebody's browser storage.
+ * The running total is what stops a repository that is a sample library:
+ * past it, the rest is skipped and SAID, rather than quietly downloading a
+ * gigabyte into somebody's browser storage.
+ *
+ * E9-261 — ONE NUMBER, AND THE PERSON'S. It was 16 MB a file and 64 MB an
+ * install, and `nc01-drone` is three drones of 31, 26 and 65 MB: all three
+ * skipped, the script loaded and played nothing. The per-file cap was the
+ * dust packer's (tools/build-dust.mjs), which is about what this build
+ * ships, not about what somebody installs. Now the total alone, from
+ * SETTINGS > FILES (see limits.json for the measurement behind 512).
  */
-const MAX_AUDIO = 16 * 1024 * 1024;
-const MAX_AUDIO_TOTAL = 64 * 1024 * 1024;
+export const DEFAULT_MAX_AUDIO_MB: number = limits.installMaxAudioMb;
 /**
  * How many files an install will take before it refuses.
  *
@@ -209,7 +213,7 @@ const MAX_AUDIO_TOTAL = 64 * 1024 * 1024;
  * and it is `mosaic` at 1209 files. The next largest is `pirate-radio` at
  * 239. So the limit refused one script in 355 and protected nobody from
  * anything — what actually stops a repository that is a sample library is
- * MAX_AUDIO_TOTAL above, which counts BYTES.
+ * the audio total (DEFAULT_MAX_AUDIO_MB), which counts BYTES.
  *
  * The default lives in `limits.json` because three things need the same
  * number: here, SETTINGS > FILES, and `tools/build-blockers.mjs`, which
@@ -223,10 +227,14 @@ export interface Candidate {
   readonly size: number;
 }
 
-export function wanted(files: readonly Candidate[]): {
+export function wanted(
+  files: readonly Candidate[],
+  maxAudioMb: number = DEFAULT_MAX_AUDIO_MB,
+): {
   take: Candidate[];
   skip: Array<{ path: string; why: string }>;
 } {
+  const maxAudio = maxAudioMb * 1024 * 1024;
   const take: Candidate[] = [];
   const skip: Array<{ path: string; why: string }> = [];
   let audio = 0;
@@ -267,10 +275,11 @@ export function wanted(files: readonly Candidate[]): {
       continue;
     }
     if (AUDIO_EXT.has(ext)) {
-      if (f.size > MAX_AUDIO) {
-        skip.push({ path, why: `larger than ${MAX_AUDIO / 1024 / 1024} MB of audio` });
-      } else if (audio + f.size > MAX_AUDIO_TOTAL) {
-        skip.push({ path, why: `past ${MAX_AUDIO_TOTAL / 1024 / 1024} MB of audio in one install` });
+      if (audio + f.size > maxAudio) {
+        skip.push({
+          path,
+          why: `past ${maxAudioMb} MB of audio in one install (SETTINGS > FILES)`,
+        });
       } else {
         audio += f.size;
         take.push({ path, size: f.size });
@@ -821,6 +830,8 @@ async function installOne(
      * after.
      */
     maxFiles?: number;
+    /** E9-261 — how many MB of audio this install may take, from SETTINGS > FILES. */
+    maxAudioMb?: number;
     /**
      * E9-140 — MAKE IT DURABLE BEFORE SAYING IT IS INSTALLED.
      *
@@ -909,7 +920,7 @@ async function installOne(
     );
   }
 
-  const { take, skip: ownSkip } = wanted(all);
+  const { take, skip: ownSkip } = wanted(all, opts.maxAudioMb ?? DEFAULT_MAX_AUDIO_MB);
   const skip = [...ownSkip, ...subSkips];
   if (take.length === 0) throw new Error("nothing in that repository looks like a norns script");
 

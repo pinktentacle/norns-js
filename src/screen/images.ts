@@ -44,6 +44,7 @@ import type { Screen } from "./screen.js";
 import { SCREEN_H, SCREEN_W } from "./screen.js";
 import type { Vfs } from "../fs/vfs.js";
 import { lauxlib, lua, to_luastring, type LuaState } from "../lua/lua.js";
+import { decodePngSync } from "./png-sync.js";
 
 export interface ScreenImage {
   readonly id: number;
@@ -165,7 +166,42 @@ export function registerScreenImages(registry: NornsRegistry, opts: ImageOptions
   const knows = (path: string): boolean =>
     vfs.read(path) !== null || vfs.remoteAt(path) !== null;
 
+  /**
+   * E9-264 — a PNG already in memory is decoded now, as cairo does: a
+   * script that reads its picture back in `init` (esper) gets pixels, not
+   * zeros. Past a million pixels the synchronous decode costs a visible
+   * pause (3299x2662 took 226 ms), and those keep the browser's decoder.
+   */
+  const SYNC_MAX_PIXELS = 1 << 20;
+  const fillNow = (img: ScreenImage, path: string): boolean => {
+    const bytes = vfs.read(path);
+    if (bytes === null || bytes.length < 24) return false;
+    const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (v.getUint32(16) * v.getUint32(20) > SYNC_MAX_PIXELS) return false;
+    let d: ReturnType<typeof decodePngSync>;
+    try {
+      d = decodePngSync(bytes);
+    } catch {
+      return false; // the browser's decoder gets its turn, and says what is wrong
+    }
+    if (d === null) return false;
+    const n = d.width * d.height;
+    const grey = new Uint8Array(n);
+    const alpha = new Uint8Array(n);
+    for (let i = 0, q = 0; i < n; i++, q += 4) {
+      grey[i] = luma4(d.rgba[q]!, d.rgba[q + 1]!, d.rgba[q + 2]!);
+      alpha[i] = d.rgba[q + 3]!;
+    }
+    img.width = d.width;
+    img.height = d.height;
+    img.grey = grey;
+    img.alpha = alpha;
+    img.ready = true;
+    return true;
+  };
+
   const fill = (img: ScreenImage, path: string): void => {
+    if (fillNow(img, path)) return;
     if (pending.has(path)) return;
     pending.add(path);
     void (async () => {
@@ -365,8 +401,9 @@ export function registerScreenImages(registry: NornsRegistry, opts: ImageOptions
   registry.implementRaw("screen_load_png", (S) => {
     const path = lua.lua_tojsstring(S, 1);
     // Upstream raises when the file will not load, and a wrong path is the
-    // failure that actually happens. The decode itself is asynchronous and
-    // cannot be waited for, so what is checked here is that the file EXISTS.
+    // failure that actually happens. What is checked here is that the file
+    // EXISTS: one in memory is then decoded at once (E9-264), one that is
+    // still to be fetched cannot be waited for.
     if (!path || !knows(path)) {
       return lauxlib.luaL_error(S, to_luastring("image loading failed"));
     }
@@ -422,6 +459,8 @@ export function registerScreenImages(registry: NornsRegistry, opts: ImageOptions
     const img = newImage(p, 1, 1);
     pngCache.set(p, img);
     fill(img, p);
+    // Decoded on the spot (E9-264): drawn on this frame, not the next.
+    if (img.ready) blit(img, 0, 0, img.width, img.height, Number(x ?? 0), Number(y ?? 0));
   });
 
   // --- exporting ----------------------------------------------------------

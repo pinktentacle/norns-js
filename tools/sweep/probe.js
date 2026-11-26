@@ -59,6 +59,11 @@ function dustFiles() {
 export async function probe(name, opts = {}) {
   const n = N();
   n.master.gain.value = 0;
+  // norns' boot tone (Crone.sc: a 218/223 Hz sine, 11 s): on a fresh page,
+  // wait until it is over, or it is measured as the script (see runner.js).
+  const ready = logLines().find((l) => /\/crone\/ready/.test(l));
+  const until = (ready ? parseFloat(ready) * 1000 : 6000) + 11500;
+  while (performance.now() < until) await sleep(250);
   // `fresh`: the script's saved state goes first. The sweep turns encoders
   // at random and most scripts save their params on the way out, so a
   // second test starts from the first one's knob positions (piwip came back

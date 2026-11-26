@@ -22,6 +22,7 @@
 import { Vfs, normalise, basename, dirname } from "./vfs.js";
 import { insideExtensions } from "../community/extensions.js";
 import { runFind } from "./find.js";
+import { runProgram } from "./programs.js";
 
 export interface ShellResult {
   /** Standard output, as norns expects to receive it. */
@@ -524,6 +525,65 @@ function downloadChain(vfs: Vfs, cmd: string, depth: number): ShellResult | null
 }
 
 /**
+ * E9-265 — `a && b`, when `a` is a plain file command: each in turn, and
+ * the line stops at the first that fails, as a shell does.
+ *
+ * `loudnumbers_norns` moves its example data into place on first run:
+ *
+ *   mkdir <data>/loudnumbers_norns/csv/ && mv <code>/…/_temperature.csv <data>/…/csv/
+ *
+ * The whole line went to the `mkdir` branch, which stops at the `&&`
+ * (E9-65, so the operator is not made into a directory) and answers yes.
+ * The `mv` never ran, `os.execute` said true, and the script found no data
+ * and stopped at a nil. Only lines whose first command is one of these:
+ * the branches that read a chain whole (`cd X && wget …`, jack's
+ * connections, a download and its unzip) keep matching the line as before.
+ */
+const PLAIN_HEAD = /^(mkdir|mv|cp|rm|touch|chmod|ln|echo)(\s|$)/;
+
+function andChain(vfs: Vfs, command: string, depth: number): ShellResult | null {
+  if (!command.includes("&&")) return null;
+  // Split on `&&` outside quotes; any other operator and this is not the shape.
+  const parts: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!;
+    if (quote !== null) {
+      if (ch === quote) quote = null;
+      cur += ch;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      cur += ch;
+      continue;
+    }
+    if (ch === "&" && command[i + 1] === "&") {
+      parts.push(cur.trim());
+      cur = "";
+      i++;
+      continue;
+    }
+    if (ch === "|" || ch === "&" || ch === ";" || ch === "`" || (ch === "$" && command[i + 1] === "(")) return null;
+    cur += ch;
+  }
+  if (quote !== null) return null;
+  parts.push(cur.trim());
+  if (parts.length < 2 || parts.some((p) => p === "") || !PLAIN_HEAD.test(parts[0]!)) return null;
+  let out = "";
+  for (const part of parts) {
+    const r = runShell(vfs, part, depth + 1);
+    // A download or a question in the middle: what the line was is handed
+    // up whole, as runShell does with `;` (the commands before it are done).
+    if (r.fetch || r.request || r.more) return { ...r, out: out + r.out };
+    if (!r.ok) return { ...r, out: out + r.out };
+    out += r.out;
+  }
+  return OK(out);
+}
+
+/**
  * E9-248 — a line of commands separated by `;`, run one after the other.
  *
  * TRIED ONLY WHEN THE LINE AS A WHOLE WAS REFUSED, so the lines this shell
@@ -536,7 +596,68 @@ function downloadChain(vfs: Vfs, cmd: string, depth: number): ShellResult | null
  * unknown line. As in a shell, each part runs whatever the one before it
  * did; a part this shell does not know refuses the line, by its own name.
  */
+/**
+ * E9-266 — what `date` prints, from a clock: local time, or UTC with `-u`.
+ *
+ * `format` null is plain `date` (`Thu Nov 26 14:55:01 UTC 2026` in the C
+ * locale, the zone shown as an offset when it is not UTC). Only the
+ * conversions below are known; any other answers null, so the caller
+ * refuses rather than handing back a literal `%Z`.
+ */
+export function dateOutput(format: string | null, now: Date, utc = false): string | null {
+  const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const DAYS_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const Y = utc ? now.getUTCFullYear() : now.getFullYear();
+  const mo = utc ? now.getUTCMonth() : now.getMonth();
+  const d = utc ? now.getUTCDate() : now.getDate();
+  const H = utc ? now.getUTCHours() : now.getHours();
+  const M = utc ? now.getUTCMinutes() : now.getMinutes();
+  const S = utc ? now.getUTCSeconds() : now.getSeconds();
+  const wd = utc ? now.getUTCDay() : now.getDay();
+  const p2 = (n: number): string => String(n).padStart(2, "0");
+  const offMin = utc ? 0 : -now.getTimezoneOffset();
+  const z = (offMin < 0 ? "-" : "+") + p2(Math.floor(Math.abs(offMin) / 60)) + p2(Math.abs(offMin) % 60);
+  const jan1 = utc ? Date.UTC(Y, 0, 1) : new Date(Y, 0, 1).getTime();
+  const today = utc ? Date.UTC(Y, mo, d) : new Date(Y, mo, d).getTime();
+  const yday = Math.round((today - jan1) / 86400000) + 1;
+  const conv: Record<string, string> = {
+    Y: String(Y),
+    y: p2(Y % 100),
+    m: p2(mo + 1),
+    d: p2(d),
+    e: String(d).padStart(2, " "),
+    H: p2(H),
+    M: p2(M),
+    S: p2(S),
+    s: String(Math.floor(now.getTime() / 1000)),
+    j: String(yday).padStart(3, "0"),
+    a: DAYS[wd]!,
+    A: DAYS_LONG[wd]!,
+    b: MONTHS[mo]!,
+    B: MONTHS_LONG[mo]!,
+    F: `${Y}-${p2(mo + 1)}-${p2(d)}`,
+    T: `${p2(H)}:${p2(M)}:${p2(S)}`,
+    z,
+    "%": "%",
+  };
+  if (format === null) {
+    const zone = offMin === 0 ? "UTC" : z;
+    return `${conv.a} ${conv.b} ${conv.e} ${conv.T} ${zone} ${Y}`;
+  }
+  let bad = false;
+  const out = format.replace(/%(.)/g, (_, c: string) => {
+    const v = conv[c];
+    if (v === undefined) bad = true;
+    return v ?? "";
+  });
+  return bad ? null : out;
+}
+
 export function runShell(vfs: Vfs, command: string, depth = 0): ShellResult {
+  const chained = depth < 4 ? andChain(vfs, command, depth) : null;
+  if (chained !== null) return chained;
   const whole = runLine(vfs, command, depth);
   if (whole.ok || whole.failed === true || whole.fetch || whole.request || depth >= 4) return whole;
   const parts = sequenceParts(command);
@@ -593,7 +714,30 @@ function runLine(vfs: Vfs, command: string, depth: number): ShellResult {
    * script went looking elsewhere. There is no stderr here to redirect;
    * dropping it is the whole of the right answer.
    */
-  const cmd = command.trim().replace(/\s*2>\s*(?:\/dev\/null|&1)\s*$/, "").trim();
+  let cmd = command.trim().replace(/\s*2>\s*(?:\/dev\/null|&1)\s*$/, "").trim();
+
+  // --- `X &`: X, in the background (E9-267) -------------------------------
+  //
+  // Each line here runs to completion anyway, so taking the `&` off is the
+  // whole of it — except for the programs below, which really do keep
+  // going: audiowaveform decodes on, oscnotify watches on.
+  let background = false;
+  {
+    const bg = /^([\s\S]*[^&])&$/.exec(cmd);
+    if (bg !== null && !/&&$/.test(cmd)) {
+      cmd = bg[1]!.trim().replace(/\s*2>\s*(?:\/dev\/null|&1)\s*$/, "").trim();
+      background = true;
+    }
+  }
+
+  // --- programs a script installs for itself (E9-267) ----------------------
+  //
+  // sendosc, oscnotify, audiowaveform, and the `pkill` / `ps | xargs kill`
+  // that manage them: src/fs/programs.ts.
+  {
+    const p = runProgram(vfs, cmd, background);
+    if (p !== null) return p;
+  }
 
   // --- `nice` only changes a priority (E9-248) ---------------------------
   //
@@ -1252,6 +1396,18 @@ function runLine(vfs: Vfs, command: string, depth: number): ShellResult {
     return OK(lines.join("\n") + (lines.length ? "\n" : ""));
   }
 
+  // --- date (E9-266) -------------------------------------------------------
+  //
+  // nice-tapes names every tape `util.os_capture("date +%y%m%d")`, and the
+  // refusal gave it an empty date. A browser has the clock this asks for.
+  // `date` and `date [-u] +FORMAT` only; `-d`, `-r` and `-s` are refused.
+  if (/^date(\s|$)/.test(cmd)) {
+    const m = /^date(\s+-u)?(?:\s+(?:"\+([^"]*)"|'\+([^']*)'|\+(\S+)))?\s*$/.exec(cmd);
+    if (!m) return NO(`date: only \`date\` and \`date [-u] +FORMAT\` are known, not ${cmd}`);
+    const out = dateOutput(m[2] ?? m[3] ?? m[4] ?? null, new Date(), m[1] !== undefined);
+    return out === null ? NO(`date: a conversion this page cannot answer in ${cmd}`) : OK(out + "\n");
+  }
+
   // --- git clone, wget -O, curl -o ---------------------------------------
   //
   // E9-37. FOURTEEN SCRIPTS INSTALL THEIR OWN DEPENDENCIES this way, and
@@ -1508,6 +1664,12 @@ function runLine(vfs: Vfs, command: string, depth: number): ShellResult {
       // Comments, the shebang, blank lines, and `set -e` and friends, which
       // say how a shell should behave rather than asking it to do anything.
       if (one === "" || one.startsWith("#") || /^set\s+[-+]/.test(one)) continue;
+      // E9-267 — `cd "$(dirname "$0")"`: the script's own folder, the way
+      // every oscnotify run.sh starts.
+      if (/^cd\s+"?\$\(dirname\s+"?\$0"?\)"?$/.test(one)) {
+        cwd = dirname(path);
+        continue;
+      }
       const cdOnly = /^cd\s+([^\s;|&]+)$/.exec(one);
       if (cdOnly !== null) {
         cwd = normalise(unquote(cdOnly[1]!), vfs.home);

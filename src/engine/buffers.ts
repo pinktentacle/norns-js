@@ -19,6 +19,7 @@
 
 import type { Vfs } from "../fs/vfs.js";
 import { stagedToDust } from "./dust-path.js";
+import type { RawBufferRead } from "./raw-buffer-read.js";
 
 export interface BufferLoaderOptions {
   readonly vfs: Vfs;
@@ -59,6 +60,8 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
   const log = opts.log ?? (() => {});
   /** When a buffer was last read back, so a burst is checked once. E9-175. */
   let lastReadAt = -Infinity;
+  /** The last file decoded, for reads of one file in pieces. E9-260. */
+  let lastDecode: { path: string; size: number; decoded: AudioBuffer; at: number } | null = null;
 
   /**
    * Load `path` into buffer `bufnum`, then tell sclang what arrived.
@@ -82,13 +85,21 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
      * sample then plays at HALF SPEED, with no error anywhere.
      */
     pick?: readonly number[],
-  ): Promise<void> {
+    /**
+     * E9-260 — a `/b_read*` sent to the server by hand (raw-buffer-read.ts).
+     * `alloc` false writes into the buffer as it is, from frame `bufStart`,
+     * as scsynth's `/b_read` does; neither form answers with
+     * `/norns-js/buffer/done`, which only the sclang override waits for.
+     */
+    raw?: { readonly bufStart: number; readonly alloc: boolean },
+  ): Promise<boolean> {
     // E9-220 — a sample beside a script's class, asked for by the path of
     // the staged copy the class was compiled from. See `dust-path.ts`.
     const path = stagedToDust(asked);
-    const fail = (why: string): void => {
+    const fail = (why: string): boolean => {
       log(`buffer ${bufnum}: ${path}: ${why}`);
-      opts.sendToLang("/norns-js/buffer/done", [bufnum, 0, 0, 0]);
+      if (raw === undefined) opts.sendToLang("/norns-js/buffer/done", [bufnum, 0, 0, 0]);
+      return false;
     };
 
     let bytes: Uint8Array | null = opts.vfs.read(path);
@@ -102,14 +113,21 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
     }
 
     let decoded: AudioBuffer;
-    try {
-      // `slice()` because `decodeAudioData` DETACHES the ArrayBuffer it is
-      // given, and the VFS is still holding this one — a second read of the
-      // same path would find an empty file.
-      decoded = await opts.context.decodeAudioData(bytes.slice().buffer as ArrayBuffer);
-    } catch (err) {
-      return fail(`the browser cannot decode it (${(err as Error).message})`);
+    // E9-260 — twins reads one file a megaframe and a channel at a time:
+    // the same decode, again and again, unless the last one is kept.
+    if (lastDecode !== null && lastDecode.path === path && lastDecode.size === bytes.length && Date.now() - lastDecode.at < 30000) {
+      decoded = lastDecode.decoded;
+    } else {
+      try {
+        // `slice()` because `decodeAudioData` DETACHES the ArrayBuffer it is
+        // given, and the VFS is still holding this one — a second read of the
+        // same path would find an empty file.
+        decoded = await opts.context.decodeAudioData(bytes.slice().buffer as ArrayBuffer);
+      } catch (err) {
+        return fail(`the browser cannot decode it (${(err as Error).message})`);
+      }
     }
+    lastDecode = { path, size: bytes.length, decoded, at: Date.now() };
 
     const channels = decoded.numberOfChannels;
     const first = Math.max(0, Math.min(Math.floor(startFrame), decoded.length));
@@ -151,7 +169,10 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
       for (let i = 0; i < frames; i++) interleaved[i * out + c] = data[first + i]!;
     }
 
-    opts.sendToServer("/b_alloc", [bufnum, frames, out]);
+    // E9-260 — `/b_read*` writes where it is told, into the buffer as it is.
+    const allocate = raw === undefined || raw.alloc;
+    const base = allocate ? 0 : Math.max(0, Math.floor(raw.bufStart)) * out;
+    if (allocate) opts.sendToServer("/b_alloc", [bufnum, frames, out]);
 
     /**
      * E9-171 — AND WAIT FOR THE ALLOCATION BEFORE WRITING INTO IT.
@@ -198,7 +219,7 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
      * second of script load spent proving something the queue already
      * guarantees.
      */
-    if (opts.syncServer) {
+    if (opts.syncServer && allocate) {
       const allocated = await opts.syncServer();
       if (!allocated) {
         log(`buffer ${bufnum}: the server did not confirm the allocation within 4 s`);
@@ -207,7 +228,7 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
 
     for (let at = 0; at < interleaved.length; at += CHUNK) {
       const slice = interleaved.subarray(at, Math.min(at + CHUNK, interleaved.length));
-      opts.sendToServer("/b_setn", [bufnum, at, slice.length, ...slice]);
+      opts.sendToServer("/b_setn", [bufnum, base + at, slice.length, ...slice]);
     }
 
     /**
@@ -278,7 +299,7 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
         }
       }
       if (loudest > 0.01) {
-        const got = await opts.peekBuffer(bufnum, at, 4);
+        const got = await opts.peekBuffer(bufnum, base + at, 4);
         if (got === null) {
           log(`buffer ${bufnum}: the server did not answer /b_getn — cannot say whether it has the samples`);
         } else {
@@ -298,13 +319,19 @@ export function createBufferLoader(opts: BufferLoaderOptions) {
     // `PlayBuf` at rate 1.0 should play it at the speed it was decoded to,
     // and a script that computes `buf.numFrames / buf.sampleRate` wants the
     // duration, which survives the resample.
-    opts.sendToLang("/norns-js/buffer/done", [bufnum, frames, out, decoded.sampleRate]);
+    if (raw === undefined) opts.sendToLang("/norns-js/buffer/done", [bufnum, frames, out, decoded.sampleRate]);
     log(
       `buffer ${bufnum}: ${path} — ${frames} frames, ${out} ch at ` +
         `${decoded.sampleRate} Hz` +
-        (out !== channels ? ` (channel ${take.join(",")} of ${channels})` : ""),
+        (out !== channels ? ` (channel ${take.join(",")} of ${channels})` : "") +
+        (base > 0 ? ` from frame ${base / out}` : ""),
     );
+    return true;
   }
 
-  return { read };
+  /** E9-260 — a `/b_read*` the server was sent by hand; see raw-buffer-read.ts. */
+  const readRaw = (r: RawBufferRead): Promise<boolean> =>
+    read(r.bufnum, r.path, r.fileStart, r.numFrames, r.channels, { bufStart: r.bufStart, alloc: r.alloc });
+
+  return { read, readRaw };
 }

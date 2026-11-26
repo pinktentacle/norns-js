@@ -1,5 +1,7 @@
 {
   "what": "The one install limit a person can change, kept here because three things need the same number: the installer enforces it, SETTINGS > FILES shows and sets it, and tools/build-blockers.mjs decides from it whether a repository gets a 'too many files' note. Three copies of a number is how a note comes to describe a limit that is no longer there.",
   "installMaxFiles": 2000,
+  "installMaxAudioMb": 512,
+  "audio": "E9-261, the sound an install will take, in MB, also in SETTINGS > FILES. It was 16 MB a file and 64 MB an install; measured over the 28 catalogue repositories that carry audio, one went past it: nc01-drone, three drones of 31, 26 and 65 MB (118 MB), skipped, so it played nothing. Next largest: goldeneye 43 MB, kolor 57 MB. One number now, the total; a single file only has to fit in it.",
   "measured": "E9-72, over all 351 repositories the catalogue lists: exactly one is over 400 files, and it is mosaic at 1209. The next largest is pirate-radio at 239. So 400 refused one script in 355 and 2000 refuses none, with room for a repository that grows and for the submodules a listing does not mention. The other limits in install.ts are about BYTES and are unchanged: a repository that is a sample library is still stopped by MAX_AUDIO_TOTAL, which is the thing that was actually worth stopping."
 }

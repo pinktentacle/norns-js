@@ -143,6 +143,7 @@ describe("the page", () => {
   });
 
   it("hands every unzip to the registry, never to the fetcher", () => {
-    expect(main).toMatch(/if \(f\.kind === "unzip"\) \{\s*await handDownloads\.unzip\(f\.url, f\.dest\)/);
+    // E9-255 — with the line at the top of the page started first.
+    expect(main).toMatch(/if \(f\.kind === "unzip"\) \{[\s\S]{0,200}?await handDownloads\.unzip\(f\.url, f\.dest\)/);
   });
 });
