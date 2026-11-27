@@ -43,6 +43,15 @@ export interface Screen {
   peek(x: number, y: number, w: number, h: number): Uint8Array;
   /** Write a region of 0..15 grey. The inverse of `peek`. */
   poke(x: number, y: number, w: number, h: number, bytes: Uint8Array): void;
+  /**
+   * E9-280 — the surface's own bytes, flushed: ARGB32 premultiplied, so
+   * B, G, R, A in memory, 128 * 4 bytes a row. For compositing in eight
+   * bits as cairo does, where `peek` would round every pixel to a level --
+   * and misread one that is not a whole level (see images.ts `blit`).
+   */
+  surface(): Uint8Array;
+  /** Tell cairo the bytes `surface` returned were written. */
+  touched(): void;
   /** Install a font that was not preloaded. Returns false if FreeType refused. */
   installFont(index: number, bytes: Uint8Array): boolean;
   fontName(index: number): string;
@@ -257,6 +266,10 @@ export async function createScreen(
     return module.HEAPU8.subarray(ptr, ptr + SCREEN_W * SCREEN_H * 4);
   };
 
+  // screen_poke over an empty region writes nothing and still calls
+  // cairo_surface_mark_dirty, which is all that is wanted here.
+  const touched = (): void => void call.poke(0, 0, 0, 0, 0);
+
   const greyscale = (out?: Uint8Array): Uint8Array => {
     // E2-07. `ssd1322.cc:283-305` has two paths and picks by a flag: when
     // nothing that could carry colour has been drawn, it takes the GREEN
@@ -281,6 +294,8 @@ export async function createScreen(
     pixels,
     peek,
     poke,
+    surface: pixels,
+    touched,
     greyscale,
     panel: () => ({
       brightness: call.getBrightness() as number,

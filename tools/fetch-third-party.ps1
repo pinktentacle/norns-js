@@ -261,6 +261,18 @@ $downloads = @(
     Why  = "LAME 3.100 (LGPL-2.0), for writing .mp3"
   },
   @{
+    # E9-275 — the `sox` program scripts run (sampswap, makebreakbeat,
+    # zxcvbn, norman, paracosms). Debian's orig tarball for the package a
+    # norns installs (14.4.2+git20190427), which is byte for byte the
+    # 14.4.2 release: the same sha256.
+    Name = "sox"; File = "sox_14.4.2+git20190427.orig.tar.bz2"
+    Url  = "https://deb.debian.org/debian/pool/main/s/sox/sox_14.4.2+git20190427.orig.tar.bz2"
+    Sha  = "81a6956d4330e75b5827316e44ae381e6f1e8928003c6aa45896da9041ea149c"
+    Into = "sox"; Keep = "sox\sox_14.4.2+git20190427.orig.tar.bz2"; Strip = 1
+    Makes = "sox\src\sox.c"
+    Why  = "SoX 14.4.2 (GPL-2.0+ program, LGPL-2.1+ library), the sox command"
+  },
+  @{
     Name = "portedplugins"; File = "portedplugins.tar.gz"
     Url  = "https://codeload.github.com/schollz/portedplugins/tar.gz/refs/heads/main"
     Sha  = "4df66a95fba94586aff0ad010d6a2744b4598b4c7ccc64374efb5e03c472333c"

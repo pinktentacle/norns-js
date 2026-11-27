@@ -125,7 +125,7 @@ describe("the shapes the catalogue writes", () => {
     const v = tree();
     for (const cmd of [
       "du -sh /home/we/dust/audio",
-      "ls /home/we/dust/audio | awk '{print $1}'",
+      "ls /home/we/dust/audio | awk '{s+=$1} END {print s}'",
       "cat /tmp/foo < /tmp/other",
       "sudo systemctl restart norns-sclang",
       "jack_connect crone:output_5 SuperCollider:in_1",

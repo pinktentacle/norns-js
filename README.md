@@ -69,6 +69,15 @@ and installs any of them straight from the author's repository into
 SuperCollider engine, pulls it in with it. A script that needs a GitHub
 repository nobody publishes any more says so instead.
 
+**How a script is played.** The **i** in the rail, under the console, opens
+the loaded script's README over the page — or, for a script without one, the
+comment at the top of its file, which is what norns shows in SELECT — and its
+thread on lines, twenty posts at a time. lines lets no page read it directly,
+so the server the page came from relays that one thing (and the README's
+pictures): `tools/info-relay.mjs`, on Cloudflare, in the portable copy, in
+the desktop app and on the dev server. Served from anywhere else, the sheet
+says so and links to the thread.
+
 **Nothing of anyone else's ships inside this.** A script you install is your
 copy of its author's work, with their licence file beside it. See
 [`LICENCES.md`](LICENCES.md) for why that is the only honest

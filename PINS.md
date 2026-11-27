@@ -45,6 +45,7 @@ ways that read as bugs in this project rather than as a version skew.
 | `pixman-0400` | pixman-0.40.0, pixman-0.40.0.tar.gz |
 | `portedplugins` | CHANGELOG.md, CMakeLists.txt, CONTRIBUTING.md |
 | `sc-plugins-extra` | ByteBeat, FormantTriPTR, LICENSE |
+| `sox` | sox_14.4.2+git20190427.orig.tar.bz2 |
 
 ### `sc-plugins-extra` — one directory per upstream repository
 
@@ -189,9 +190,10 @@ git -C third_party/softcut-lib apply ../../patches/softcut-lib.patch
 
 ### `supercollider`
 
-Base `0c5a96d701be`, 10 file(s) changed:
+Base `0c5a96d701be`, 11 file(s) changed:
 
 - `lang/CMakeLists.txt`
+- `lang/LangSource/SC_WasmClient.cpp`
 - `platform/wasm/CMakeLists.txt`
 - `platform/wasm/sclang.pre.js`
 - `server/plugins/CMakeLists.txt`

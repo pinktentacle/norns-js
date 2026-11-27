@@ -122,6 +122,7 @@ await mkdir(SRC, { recursive: true });
 await cp(join(ROOT, "tools/serve.mjs"), join(OUT, "serve.mjs"));
 // E9-227 — serve.mjs imports the GitHub release relay from beside itself.
 await cp(join(ROOT, "tools/gh-release.mjs"), join(OUT, "gh-release.mjs"));
+await cp(join(ROOT, "tools/info-relay.mjs"), join(OUT, "info-relay.mjs"));
 // Two servers, because two machines have different things installed: Node
 // on a desktop, Python on a Steam Deck (whose root filesystem is immutable,
 // so installing Node there does not survive an update). Both send the two

@@ -52,6 +52,122 @@ index 94bdec763320977e420105bf2000076a925f02be..81abaeb58d97618b8944821423b6cc15
      if(WASM_DEBUG)
          target_compile_options(libsclang PUBLIC -pthread -g)
          target_compile_options(sclang PRIVATE -pthread -g)
+diff --git a/lang/LangSource/SC_WasmClient.cpp b/lang/LangSource/SC_WasmClient.cpp
+index e84c19ae3c1ad47cb1aecf4ff6c700cb7f0217a4..7a8da9da8f8a366ad3ef5235a58874d233a1decc 100644
+--- a/lang/LangSource/SC_WasmClient.cpp
++++ b/lang/LangSource/SC_WasmClient.cpp
+@@ -20,10 +20,12 @@ SuperCollider real time audio synthesis system wasm binding
+ #include "SC_WasmClient.h"
+ 
+ #include <iostream>
++#include <vector>
+ #include <emscripten/bind.h>
+ #include <emscripten/emscripten.h>
+ #include <emscripten/threading.h>
+ 
++#include "GC.h"
+ #include "PyrKernel.h"
+ #include "PyrPrimitive.h"
+ #include "PyrSched.h"
+@@ -116,6 +118,89 @@ static int prAppClockSchedNotify(VMGlobals* g, int numArgsPushed) {
+     return errNone;
+ }
+ 
++/* norns-js E9-271 — Bus:getSynchronous, as on a norns.
++ *
++ * There it reads scsynth's shared memory segment: synchronous, from anywhere,
++ * the value the server has now. Engines read it in command handlers, which
++ * are not Routines (PolySub, FM7, MT7, orgn, turntable, R, dronecaster, the
++ * Glut family). Until now this build could only ask with /c_get, which needs
++ * a Routine to wait in, and answered 0 outside one. Where the engine maps the
++ * bus right after, the map reached the server before the first block and
++ * nothing was heard wrong; where it does not, the 0 stayed: PolySub's `solo`
++ * voice started at level 0 (measured: peak 0.087, 1.114 with this).
++ *
++ * scsynth's memory is a SharedArrayBuffer the page holds, and the page lays
++ * the control buses out as a Float32Array (`globalThis.__nornsJsControlBuses`,
++ * src/engine/host.ts). The language runs on its own pthread, which cannot see
++ * that buffer, so the read is proxied to the main thread and waited for. It
++ * fails (and the class library falls back) when the page has no such view.
++ */
++static int prNornsJsControlBusGet(VMGlobals* g, int numArgsPushed) {
++    PyrSlot* a = g->sp - 2;
++    PyrSlot* b = g->sp - 1;
++    PyrSlot* c = g->sp;
++    int busIndex, count;
++    if (slotIntVal(b, &busIndex) || slotIntVal(c, &count))
++        return errWrongType;
++    if (busIndex < 0 || count < 1 || count > 65536)
++        return errIndexOutOfRange;
++    std::vector<float> values(count);
++    const int got = MAIN_THREAD_EM_ASM_INT(
++        {
++            var view = globalThis['__nornsJsControlBuses'] ? globalThis['__nornsJsControlBuses']() : null;
++            if (!view || $1 + $2 > view.length)
++                return -1;
++            new Float32Array(wasmMemory.buffer, $0, $2).set(view.subarray($1, $1 + $2));
++            return $2;
++        },
++        values.data(), busIndex, count);
++    if (got != count)
++        return errFailed;
++    PyrObject* ret = newPyrArray(g->gc, count, 0, true);
++    ret->size = count;
++    for (int i = 0; i != count; ++i)
++        SetFloat(ret->slots + i, values[i]);
++    SetObject(a, ret);
++    return errNone;
++}
++
++/* And the other way, as the shared memory interface's setControlBusValues:
++ * the floats go straight into the server's buses. */
++static int prNornsJsControlBusSet(VMGlobals* g, int numArgsPushed) {
++    PyrSlot* a = g->sp - 2;
++    PyrSlot* b = g->sp - 1;
++    PyrSlot* c = g->sp;
++    int busIndex;
++    if (slotIntVal(b, &busIndex))
++        return errWrongType;
++    if (!isKindOfSlot(c, class_array))
++        return errWrongType;
++    PyrObject* array = slotRawObject(c);
++    const int count = array->size;
++    if (busIndex < 0 || count < 1 || count > 65536)
++        return errIndexOutOfRange;
++    std::vector<float> values(count);
++    for (int i = 0; i != count; ++i) {
++        float v;
++        if (slotFloatVal(array->slots + i, &v))
++            return errWrongType;
++        values[i] = v;
++    }
++    const int put = MAIN_THREAD_EM_ASM_INT(
++        {
++            var view = globalThis['__nornsJsControlBuses'] ? globalThis['__nornsJsControlBuses']() : null;
++            if (!view || $1 + $2 > view.length)
++                return -1;
++            view.set(new Float32Array(wasmMemory.buffer, $0, $2), $1);
++            return $2;
++        },
++        values.data(), busIndex, count);
++    if (put != count)
++        return errFailed;
++    SetTrue(a);
++    return errNone;
++}
++
+ void SC_WasmClient::onLibraryStartup() {
+     SC_LanguageClient::onLibraryStartup();
+     int index = 0;
+@@ -123,6 +208,8 @@ void SC_WasmClient::onLibraryStartup() {
+     definePrimitive(base, index++, "_Wasm_runCode", prRunJsCode, 2, 0);
+     definePrimitive(base, index++, "_Wasm_ideSend", prIdeSend, 2, 0);
+     definePrimitive(base, index++, "_AppClock_SchedNotify", prAppClockSchedNotify, 1, 0);
++    definePrimitive(base, index++, "_NornsJsControlBusGet", prNornsJsControlBusGet, 3, 0);
++    definePrimitive(base, index++, "_NornsJsControlBusSet", prNornsJsControlBusSet, 3, 0);
+ }
+ 
+ void SC_WasmClient::runCode(const std::string& code, const bool silent) {
 diff --git a/platform/wasm/CMakeLists.txt b/platform/wasm/CMakeLists.txt
 index c34a2c300978f6c865489407fa0ce956fda06dc3..e298c41c3063eef41f31c2b79fca7aafe5676ebd 100644
 --- a/platform/wasm/CMakeLists.txt
@@ -1453,7 +1569,7 @@ index 7190388a8f3fc8da20271cceb16a04c715f216f1..b1b99a3df9bd3f58ac0f3474357b1629
                  inNode->mCalcFunc = (NodeCalcFunc)&Graph_NullFirstCalc;
              } else {
 diff --git a/server/scsynth/SC_WebAudio.cpp b/server/scsynth/SC_WebAudio.cpp
-index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..9eca69467b32caf7394a5c6799237fc5a28c4b4c 100644
+index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..04f25d53001682240fb00b9f01c86af850adaf38 100644
 --- a/server/scsynth/SC_WebAudio.cpp
 +++ b/server/scsynth/SC_WebAudio.cpp
 @@ -97,8 +97,11 @@ WorldOptions toScWorld(ScWebAudioOptions* userOptions) {
@@ -1527,3 +1643,25 @@ index 4a2cb668d1b43b387413cff4e7d90a245b5827f6..9eca69467b32caf7394a5c6799237fc5
      // this wakes up the NRT pthread!
      mAudioSync.Signal();
  
+@@ -517,6 +556,21 @@ EMSCRIPTEN_BINDINGS(scWebAudio) {
+                          }));
+     emscripten::function("nextLine", nextLine);
+ 
++    /** @brief norns-js E9-271: where the control buses are, for a synchronous read.
++     *
++     * On a norns, `Bus:getSynchronous` reads the bus out of scsynth's shared
++     * memory segment. Here the server's memory is a SharedArrayBuffer the page
++     * can see, so the page reads the same floats at this offset, and sclang
++     * asks the page. 0 until the world exists.
++     */
++    emscripten::function("controlBusOffset", emscripten::optional_override([]() -> unsigned int {
++                             return gWorld ? static_cast<unsigned int>(reinterpret_cast<uintptr_t>(gWorld->mControlBus))
++                                           : 0u;
++                         }));
++    emscripten::function("controlBusCount", emscripten::optional_override([]() -> unsigned int {
++                             return gWorld ? gWorld->mNumControlBusChannels : 0u;
++                         }));
++
+     /** @brief function to send raw osc messages to the server.
+      *
+      * The passed value must be a Uint8Array w/ the binary content of an OSC message.

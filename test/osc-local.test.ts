@@ -3,6 +3,10 @@
 import { describe, expect, it } from "vitest";
 import { NornsRegistry } from "../src/norns/registry.js";
 import { registerOsc } from "../src/osc/register.js";
+import { decode, encodeMessage, OscFloat } from "../src/engine/osc.js";
+
+/** The arguments with OscFloat unwrapped, to compare values. */
+const plain = (args: unknown[]): unknown[] => args.map((a) => (a instanceof OscFloat ? a.value : a));
 
 function setup(remoteSends: unknown[] | null = null) {
   const r = new NornsRegistry();
@@ -27,12 +31,30 @@ describe("osc.send to localhost", () => {
     send(["localhost", "57120"], "/nb_smpkit/trig", [1, 0.8]);
     send(["127.0.0.1", 57110], "/n_set", [1000, "freq", 220]);
     send(["localhost", "10111"], "/self", ["hi"]);
-    expect(local).toEqual([
+    expect(local.map(([port, path, args]) => [port, path, plain(args)])).toEqual([
       [57120, "/nb_smpkit/trig", [1, 0.8]],
       [57110, "/n_set", [1000, "freq", 220]],
       [10111, "/self", ["hi"]],
     ]);
     expect(logs).toEqual([]);
+  });
+
+  // E9-274 — as weaver.cc's _osc_send types them.
+  it("types the arguments as matron does: numbers as floats, booleans and nil kept", () => {
+    const { send, local } = setup();
+    send(["localhost", "57120"], "/hs010/note_on", [36, 0.875, false, true, null, "s"]);
+    const args = local[0]![2];
+    expect(args[0]).toBeInstanceOf(OscFloat);
+    expect(args[1]).toBeInstanceOf(OscFloat);
+    expect(plain(args)).toEqual([36, 0.875, false, true, null, "s"]);
+    const bytes = encodeMessage("/hs010/note_on", args as never);
+    expect((decode(bytes) as { args: unknown[] }).args).toEqual([36, 0.875, false, true, null, "s"]);
+  });
+
+  it("leaves out what matron refuses (a table, a function)", () => {
+    const { send, local } = setup();
+    send(["localhost", "57120"], "/x", [1, { a: 1 }, () => 0, "y"] as never);
+    expect(plain(local[0]![2])).toEqual([1, "y"]);
   });
 
   it("still needs the relay for anything else, and says so once", () => {

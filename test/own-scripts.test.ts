@@ -7,10 +7,13 @@ import { installFromRepo, listFiles, ownRepo } from "../src/community/install.js
 import {
   createOwnScripts,
   isOwnUrl,
+  OWN_LIST,
   OWN_TAG,
   ownBase,
   ownCover,
   ownName,
+  ownPage,
+  parseOwnList,
   parseOwnIndex,
   withOwn,
 } from "../src/community/own-scripts.js";
@@ -91,6 +94,106 @@ describe("own scripts: the index", () => {
     expect(own.last().map((e) => e.name)).toEqual(["poche"]);
     await own.load();
     expect(calls).toBe(2);
+  });
+});
+
+describe("own scripts: listed, each from its own repository, so a new one needs no release (E9-278)", () => {
+  const LIST = "https://raw.githubusercontent.com/pinktentacle/norns-js-scripts/main/index.json";
+  const listed = (...names: string[]): unknown => ({
+    scripts: names.map((name) => ({
+      name,
+      description: name,
+      repo: `https://github.com/pinktentacle/${name}`,
+      cover: "screenshots/playing.png",
+    })),
+  });
+  const here = (...names: string[]): unknown => ({ scripts: names.map((name) => ({ name, description: name })) });
+
+  it("reads each script's repository and cover from the list, and checks what it names", () => {
+    const got = parseOwnList({
+      scripts: [
+        { name: "poche", repo: "https://github.com/pinktentacle/poche", cover: "screenshots/playing.png", tags: ["drums"] },
+        { name: "away", repo: "https://example.com/x/away" },
+        { name: "bad cover", repo: "https://github.com/a/b", cover: "../../x.png" },
+        { name: "nocover", repo: "https://github.com/a/nocover/", cover: "../x.png" },
+      ],
+    });
+    expect(got.map((e) => e.name)).toEqual(["poche", "nocover"]);
+    expect(got[0]!.url).toBe("https://github.com/pinktentacle/poche");
+    expect(got[0]!.cover).toBe("https://raw.githubusercontent.com/pinktentacle/poche/HEAD/screenshots/playing.png");
+    expect(got[0]!.tags).toEqual(["drums", OWN_TAG]);
+    expect(got[1]!.url).toBe("https://github.com/a/nocover");
+    expect(got[1]!.cover).toBeUndefined();
+    expect(OWN_LIST).toBe(LIST);
+  });
+
+  it("reads the list first; one only in this build is still offered, from beside the page", async () => {
+    const own = createOwnScripts({
+      base: BASE,
+      remote: LIST,
+      fetchJson: async (url) => (url === LIST ? listed("poche", "nouveau") : here("poche", "ancien")),
+    });
+    const got = await own.load();
+    expect(got.map((e) => e.name)).toEqual(["poche", "nouveau", "ancien"]);
+    // A listed script installs from its own repository, as a catalogue one does.
+    expect(got[0]!.url).toBe("https://github.com/pinktentacle/poche");
+    expect(isOwnUrl(got[0]!.url, BASE)).toBe(false);
+    expect(got[2]!.url).toBe(`${BASE}ancien/`);
+    expect(isOwnUrl(got[2]!.url, BASE)).toBe(true);
+  });
+
+  it("offers this build's copy when GitHub does not answer, says so once, and asks again next time", async () => {
+    const logs: string[] = [];
+    let up = false;
+    const own = createOwnScripts({
+      base: BASE,
+      remote: LIST,
+      log: (l) => logs.push(l),
+      timeoutMs: 20,
+      fetchJson: async (url) => {
+        if (url !== LIST) return here("poche");
+        if (!up) return new Promise(() => {}); // never answers
+        return listed("poche", "nouveau");
+      },
+    });
+    expect((await own.load()).map((e) => e.url)).toEqual([`${BASE}poche/`]);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/could not be read \(no answer\); offering the copy in this build/);
+    up = true;
+    expect((await own.load()).map((e) => e.name)).toEqual(["poche", "nouveau"]);
+    expect(logs).toHaveLength(1);
+  });
+
+  it("is empty, and says why, only when neither list arrives", async () => {
+    const logs: string[] = [];
+    const own = createOwnScripts({
+      base: BASE,
+      remote: LIST,
+      log: (l) => logs.push(l),
+      fetchJson: async () => {
+        throw new Error("offline");
+      },
+    });
+    expect(await own.load()).toEqual([]);
+    expect(logs[0]).toMatch(/did not arrive \(offline; offline\)/);
+  });
+
+  it("links a listed script to its repository, one from beside the page to its README", () => {
+    expect(ownPage("https://github.com/pinktentacle/poche")).toBe("https://github.com/pinktentacle/poche");
+    expect(ownPage(`${BASE}poche/`)).toBe(`${BASE}poche/README.md`);
+  });
+
+  it("the index this build serves is the list, with every script's repository and cover", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const index = JSON.parse(readFileSync(join(__dirname, "..", "public", "own-scripts", "index.json"), "utf8")) as unknown;
+    const list = parseOwnList(index);
+    const names = (index as { scripts: Array<{ name: string }> }).scripts.map((s) => s.name);
+    expect(list.map((e) => e.name)).toEqual(names);
+    for (const e of list) {
+      expect(e.url).toBe(`https://github.com/pinktentacle/${e.name}`);
+      expect(e.cover).toMatch(/^https:\/\/raw\.githubusercontent\.com\/pinktentacle\/[a-z0-9_-]+\/HEAD\/screenshots\/[\w.-]+\.png$/);
+    }
   });
 });
 

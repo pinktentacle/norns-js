@@ -22,7 +22,7 @@
 import { Vfs, normalise, basename, dirname } from "./vfs.js";
 import { insideExtensions } from "../community/extensions.js";
 import { runFind } from "./find.js";
-import { runProgram } from "./programs.js";
+import { programPath, runProgram, shellWords, soxCommand } from "./programs.js";
 
 export interface ShellResult {
   /** Standard output, as norns expects to receive it. */
@@ -378,6 +378,12 @@ function runPipe(text: string, stage: string): string | null {
     return done(rows.filter((l, i) => i === 0 || l !== rows[i - 1]));
   const tail = /^tail\s+-n\s*\+(\d+)/.exec(stage);
   if (tail !== null) return done(rows.slice(Number(tail[1]) - 1));
+  // E9-276 — and the last N lines, `tail -n 1` / `tail -1`.
+  const tailN = /^tail(?:\s+(?:-n\s*(\d+)|-(\d+)))?\s*$/.exec(stage);
+  if (tailN !== null) {
+    const n = Number(tailN[1] ?? tailN[2] ?? 10);
+    return done(n === 0 ? [] : rows.slice(-n));
+  }
   // E9-150 — `wc -l` and `head`, both of which the catalogue writes and
   // both of which were refused. `ls ~/dust/code | wc -l` is how one script
   // asks how many are installed; `head -n 1` is how another takes the
@@ -398,6 +404,22 @@ function runPipe(text: string, stage: string): string | null {
   // long one and refused the other.
   const head = /^head\s*(?:-n\s*)?-?(\d+)?\s*$/.exec(stage);
   if (head !== null) return done(rows.slice(0, Number(head[1] ?? 10)));
+
+  // E9-275 — `awk '{print $N}'`, the other half of `sox f -n stat 2>&1 |
+  // grep Length | awk '{print $3}'` and `sox --i f | grep 'Sample Rate' |
+  // awk '{print $4}'`: fields split on blanks (or -F), printed with spaces.
+  const awk = /^awk\s+(?:-F\s*(?:'([^']*)'|"([^"]*)"|(\S+))\s+)?'\{\s*print\s+([^}]*?)\s*\}'\s*$/.exec(stage);
+  if (awk !== null) {
+    const sep = awk[1] ?? awk[2] ?? awk[3];
+    const want = awk[4]!.split(/\s*,\s*/).map((x) => /^\$(\d+)$/.exec(x)?.[1]);
+    if (want.some((x) => x === undefined)) return null;
+    return done(
+      rows.map((l) => {
+        const f = sep !== undefined ? l.split(sep) : l.trim().split(/\s+/);
+        return want.map((n) => (Number(n) === 0 ? l : (f[Number(n) - 1] ?? ""))).join(" ");
+      }),
+    );
+  }
 
   const grep = /^grep\s+(-\w+\s+)?(.+)$/.exec(stage);
   if (grep !== null) {
@@ -727,6 +749,48 @@ function runLine(vfs: Vfs, command: string, depth: number): ShellResult {
     if (bg !== null && !/&&$/.test(cmd)) {
       cmd = bg[1]!.trim().replace(/\s*2>\s*(?:\/dev\/null|&1)\s*$/, "").trim();
       background = true;
+    }
+  }
+
+  // --- `command -v` / `which` for the programs here (E9-275) ---------------
+  //
+  // sampswap and makebreakbeat ask `command -v sox` and stop with "need to
+  // install sox first" on an empty answer.
+  {
+    const cv = /^(?:command\s+-v|which)\s+(\S+)\s*$/.exec(cmd);
+    if (cv !== null) {
+      const name = unquote(cv[1]!);
+      const path = programPath(name);
+      if (path !== null) return OK(`${path}\n`);
+      // E9-276 — still refused, but by the name asked about: makebreakbeat's
+      // dnb.lua asks for aubioonset, and "unsupported shell command: command"
+      // said nothing about what was missing.
+      if (!/[|;&<>`$]/.test(name)) return NO(`${cv[0]!.trim()}: ${name} is not a program in this build`);
+    }
+  }
+
+  // --- sox's report through grep and awk (E9-275) ---------------------------
+  //
+  // `sox f -n stat 2>&1 | grep Length | awk '{print $3}'`: the program runs,
+  // its stderr joins its stdout when the line says 2>&1, and the stages are
+  // the ones runPipe knows.
+  {
+    const head = /^(?:\S*\/)?(soxi?)\s/.exec(cmd);
+    if (head !== null && cmd.includes("|")) {
+      const { head: first, pipes, redirect } = pipeline(cmd);
+      if (pipes.length > 0 && redirect === null) {
+        const merge = /\s2>&1(?=\s|$)/.test(first);
+        const words = shellWords(first.replace(/\s2>&1(?=\s|$)/g, " ").replace(/\s2>\s*\/dev\/null(?=\s|$)/g, " "));
+        const r = soxCommand(vfs, head[1]!, words.slice(1), merge);
+        if (r.refused !== undefined) return r;
+        let text = r.out;
+        for (const stage of pipes) {
+          const t = runPipe(text, stage.trim());
+          if (t === null) return NO(`unsupported in a pipe after sox: ${stage.trim()}`);
+          text = t;
+        }
+        return OK(text);
+      }
     }
   }
 
@@ -1276,6 +1340,28 @@ function runLine(vfs: Vfs, command: string, depth: number): ShellResult {
       moveOne(vfs, src, to);
     }
     return OK("");
+  }
+
+  // --- tail and head of a file (E9-276) ------------------------------------
+  //
+  // sampswap and makebreakbeat start their work as a `lua` process and read
+  // how far it has got, every frame, with `tail -n1 /tmp/breaktemp-progress`
+  // — the process appends a number per step. Lines keep their own endings,
+  // so a last line without one comes back without one, as tail prints it.
+  {
+    const th = /^(tail|head)(?:\s+(?:-n\s*([+-]?\d+)|-(\d+)))?\s+('[^']*'|"[^"]*"|[^\s|<>;&]+)\s*$/.exec(cmd);
+    if (th !== null) {
+      const path = normalise(unquote(th[4]!), vfs.home);
+      const data = vfs.read(path);
+      if (data === null) return { out: "", ok: false, failed: true };
+      const lines = new TextDecoder().decode(data).match(/[^\n]*\n|[^\n]+$/g) ?? [];
+      const spec = th[2] ?? th[3] ?? "10";
+      const n = Math.abs(Number(spec));
+      let pick: string[];
+      if (th[1] === "tail") pick = spec.startsWith("+") ? lines.slice(Math.max(0, n - 1)) : n === 0 ? [] : lines.slice(-n);
+      else pick = spec.startsWith("-") ? lines.slice(0, Math.max(0, lines.length - n)) : lines.slice(0, n);
+      return OK(pick.join(""));
+    }
   }
 
   // --- cat -----------------------------------------------------------------

@@ -24,6 +24,7 @@ import { writeFileSync } from "node:fs";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { RELAY_PREFIX, relayRelease } from "./tools/gh-release.mjs";
+import { INFO_PREFIX, relayInfo } from "./tools/info-relay.mjs";
 
 /**
  * E9-227 — the GitHub release relay on the dev and preview servers, so
@@ -33,9 +34,11 @@ import { RELAY_PREFIX, relayRelease } from "./tools/gh-release.mjs";
 const releaseRelay = () => {
   const handle = (req: IncomingMessage, res: ServerResponse, next: () => void): void => {
     const path = new URL(req.url ?? "/", "http://localhost").pathname;
-    if (!path.startsWith(RELAY_PREFIX)) return next();
+    // E9-277 — and the info sheet's relay (tools/info-relay.mjs), the same way.
+    const relay = path.startsWith(RELAY_PREFIX) ? relayRelease : path.startsWith(INFO_PREFIX) ? relayInfo : null;
+    if (relay === null) return next();
     void (async () => {
-      const r: Response = await relayRelease(path, {
+      const r: Response = await relay(path, {
         fetch: (u: string, init: RequestInit) => fetch(u, init),
         method: req.method ?? "GET",
         site: req.headers["sec-fetch-site"] ?? null,

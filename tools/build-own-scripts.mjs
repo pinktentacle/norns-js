@@ -102,7 +102,11 @@ for (const s of list.scripts) {
       writeFileSync(lp, text);
     }
   }
-  index.scripts.push({ name: s.name, author: list.author, description: s.description, tags: s.tags });
+  // E9-278 — each script is also its own public repository; the published
+  // list (tools/publish-own-scripts.ps1) is this index, and the page installs
+  // a script from its repository and shows the cover from there.
+  const repo = s.repo ?? `https://github.com/${list.author}/${s.name}`;
+  index.scripts.push({ name: s.name, author: list.author, description: s.description, tags: s.tags, repo, cover });
 }
 
 if (existsSync(OUT)) {

@@ -9,7 +9,9 @@
         "drums",
         "sequencer",
         "sampler"
-      ]
+      ],
+      "repo": "https://github.com/pinktentacle/no12",
+      "cover": "screenshots/playing.png"
     },
     {
       "name": "poche",
@@ -19,7 +21,9 @@
         "drums",
         "sequencer",
         "synth"
-      ]
+      ],
+      "repo": "https://github.com/pinktentacle/poche",
+      "cover": "screenshots/playing.png"
     },
     {
       "name": "remous",
@@ -29,7 +33,9 @@
         "generative",
         "toy",
         "grid"
-      ]
+      ],
+      "repo": "https://github.com/pinktentacle/remous",
+      "cover": "screenshots/stones.png"
     },
     {
       "name": "nianfo",
@@ -39,7 +45,9 @@
         "ambient",
         "loops",
         "drone"
-      ]
+      ],
+      "repo": "https://github.com/pinktentacle/nianfo",
+      "cover": "screenshots/wall.png"
     },
     {
       "name": "rainforest",
@@ -49,7 +57,33 @@
         "ambient",
         "generative",
         "field recording"
-      ]
+      ],
+      "repo": "https://github.com/pinktentacle/rainforest",
+      "cover": "screenshots/dawn.png"
+    },
+    {
+      "name": "fireflies",
+      "author": "pinktentacle",
+      "description": "a summer meadow at night, where fireflies learn to flash together",
+      "tags": [
+        "ambient",
+        "generative",
+        "grid"
+      ],
+      "repo": "https://github.com/pinktentacle/fireflies",
+      "cover": "screenshots/night.png"
+    },
+    {
+      "name": "mycelium",
+      "author": "pinktentacle",
+      "description": "a fungus under the forest floor: feed it, touch it, and hear the signals it carries",
+      "tags": [
+        "ambient",
+        "generative",
+        "grid"
+      ],
+      "repo": "https://github.com/pinktentacle/mycelium",
+      "cover": "screenshots/summer.png"
     }
   ]
 }

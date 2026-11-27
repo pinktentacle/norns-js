@@ -30,6 +30,10 @@ class CroneProcessor extends AudioWorkletProcessor {
     this.failed = null;
     this.pending = []; // commands that arrived before the module was ready
     this.tapeQueue = []; // {pcm, at} chunks waiting for room in the play ring
+    // E9-272: non-finite engine samples zeroed since the last report, and
+    // blocks since it (reported at most once a second).
+    this.nonFinite = 0;
+    this.nonFiniteBlocks = 0;
 
     // --- E4-14: what this costs -------------------------------------
     //
@@ -340,7 +344,21 @@ class CroneProcessor extends AudioWorkletProcessor {
     // the previous block's samples in place would make a disconnected engine
     // buzz on 128 frames for ever, which sounds like a stuck note rather
     // than like nothing being connected.
-    copyIn(inputs[0], b.extL, b.extR, n);
+    // E9-272 — THE ENGINE'S NaN AND INFINITIES STOP HERE. A SuperCollider
+    // engine can output them (noizeop divides by a difference that is 0 at
+    // its default settings), and crone has no guard: one NaN reaches the
+    // reverb's and the compressor's state and stays there, and the whole
+    // output is silent until reload. Measured: every script after noizeop
+    // in a batch was silent; reverb and comp off brought the sound back.
+    // A norns runs the same unguarded crone and would go silent until a
+    // restart; here a non-finite sample becomes 0, counted, and said.
+    const bad = copyInFinite(inputs[0], b.extL, b.extR, n);
+    if (bad > 0) this.nonFinite += bad;
+    if (this.nonFinite > 0 && ++this.nonFiniteBlocks >= 375) {
+      this.port.postMessage({ type: "nonFinite", samples: this.nonFinite });
+      this.nonFinite = 0;
+      this.nonFiniteBlocks = 0;
+    }
     copyIn(inputs[1], b.adcL, b.adcR, n);
 
     this.M._crone_process(n);
@@ -410,6 +428,28 @@ class CroneProcessor extends AudioWorkletProcessor {
 }
 
 /** Fill a stereo pair from one worklet input, zeroing what is not connected. */
+/**
+ * copyIn, with every non-finite sample replaced by 0. Answers how many were.
+ * `x - x` is 0 for a finite x and NaN for NaN or an infinity.
+ */
+function copyInFinite(input, left, right, n) {
+  copyIn(input, left, right, n);
+  let bad = 0;
+  for (let i = 0; i < n; i++) {
+    const l = left[i];
+    if (l - l !== 0) {
+      left[i] = 0;
+      bad++;
+    }
+    const r = right[i];
+    if (r - r !== 0) {
+      right[i] = 0;
+      bad++;
+    }
+  }
+  return bad;
+}
+
 function copyIn(input, left, right, n) {
   const l = input && input[0];
   const r = input && (input[1] || input[0]);

@@ -91,7 +91,13 @@ export async function probe(name, opts = {}) {
     } else if (a.note !== undefined) {
       // A device under the keyboard's own name, so it takes the vport the
       // keyboard has (port 1 here), through the manager a real one uses.
-      window.__probeKbd ??= n.midi.add({ descriptor: { id: "probe-keyboard", name: "virtual midi keyboard" }, send() {} });
+      // THE KEYBOARD ALREADY THERE, when there is one: the exerciser adds a
+      // "virtual midi keyboard" of its own, which takes port 1, and a second
+      // one landed on port 2 — where a script listening on midi.connect(1)
+      // never hears it (piwip read as silent for that, 2026-11-27).
+      window.__probeKbd ??=
+        [...n.midi.devices.values()].find((d) => d?.descriptor?.name === "virtual midi keyboard") ??
+        n.midi.add({ descriptor: { id: "probe-keyboard", name: "virtual midi keyboard" }, send() {} });
       const kb = window.__probeKbd;
       kb.receive([0x90, a.note, a.vel ?? 100]);
       const p = await listen(a.ms ?? 600);

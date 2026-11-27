@@ -8,6 +8,10 @@
 
 import type { NornsRegistry } from "../norns/registry.js";
 import type { OscRemote } from "./remote.js";
+import { OscFloat } from "../engine/osc.js";
+
+/** One argument as matron's `_osc_send` writes it (E9-274). */
+export type OscOut = string | boolean | null | OscFloat;
 
 export interface OscRegisterOptions {
   /** Null when no relay was configured: see `remote.ts` for why that is a state. */
@@ -15,8 +19,10 @@ export interface OscRegisterOptions {
   /**
    * E9-239 — a message for a program on THIS norns: sclang (57120),
    * scsynth (57110) or matron itself (10111). True when it was delivered.
+   * E9-274 — with the arguments as matron types them: every number a float
+   * (`OscFloat`), a boolean T or F, nil N.
    */
-  readonly local?: (port: number, path: string, args: Array<number | string>) => boolean;
+  readonly local?: (port: number, path: string, args: OscOut[]) => boolean;
   readonly log?: (line: string) => void;
 }
 
@@ -45,15 +51,27 @@ export function registerOsc(registry: NornsRegistry, opts: OscRegisterOptions): 
       return;
     }
     const where = `${host}:${p}`;
-    const values = (Array.isArray(args) ? args : []).filter(
-      (a): a is number | string => typeof a === "number" || typeof a === "string",
-    );
+    const raw: unknown[] = Array.isArray(args) ? args : [];
+    const values = raw.filter((a): a is number | string => typeof a === "number" || typeof a === "string");
+    // E9-274 — AS weaver.cc's `_osc_send` TYPES THEM: a number is
+    // `lo_message_add_float` whatever its value, a boolean `add_true` /
+    // `add_false`, nil `add_nil`, a string a string. Only numbers and
+    // strings went through, so a boolean simply vanished: hs010's voice
+    // sends {note, vel, forceslide} and its SuperCollider half got two
+    // arguments and nil for the third. A table or a function is an error
+    // on hardware (`invalid osc argument type`) and is left out here.
+    const typed: OscOut[] = [];
+    for (const a of raw) {
+      if (typeof a === "number") typed.push(new OscFloat(a));
+      else if (typeof a === "string" || typeof a === "boolean") typed.push(a);
+      else if (a === null || a === undefined) typed.push(null);
+    }
     // E9-239 — LOCALHOST IS NOT THE NETWORK. On a norns, `osc.send` to
     // localhost:57120 is how a mod or an nb voice talks to its own
     // SuperCollider half: nb_smpKit loads and triggers its samples that way.
     // Here every send needed a relay, so those went nowhere and the voice
     // was silent; the three programs on this "machine" are in this page.
-    if (LOCAL_HOST.test(host) && opts.local?.(p, String(path ?? ""), values)) return;
+    if (LOCAL_HOST.test(host) && opts.local?.(p, String(path ?? ""), typed)) return;
     if (!opts.remote) {
       if (!warned) {
         warned = true;

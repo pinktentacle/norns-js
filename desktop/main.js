@@ -43,6 +43,7 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { respond } from "../tools/serve.mjs";
 import { RELAY_PREFIX, relayRelease } from "../tools/gh-release.mjs";
+import { INFO_PREFIX, relayInfo } from "../tools/info-relay.mjs";
 
 const HERE = import.meta.dirname;
 const ROOT = resolve(HERE, "..");
@@ -600,6 +601,15 @@ async function main() {
     // own origin. See tools/gh-release.mjs.
     if (url.pathname.startsWith(RELAY_PREFIX)) {
       return relayRelease(url.pathname, {
+        fetch: (u, init) => net.fetch(u, init),
+        method: request.method,
+        site: request.headers.get("sec-fetch-site"),
+      });
+    }
+    // E9-277 — the info sheet's lines thread and README pictures, the same
+    // way: this policy allows no outside image, and lines sends no CORS.
+    if (url.pathname.startsWith(INFO_PREFIX)) {
+      return relayInfo(url.pathname, {
         fetch: (u, init) => net.fetch(u, init),
         method: request.method,
         site: request.headers.get("sec-fetch-site"),

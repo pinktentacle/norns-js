@@ -1,0 +1,104 @@
+{
+ "files": [
+  {
+   "path": "LICENSE",
+   "size": 1069
+  },
+  {
+   "path": "README.md",
+   "size": 3360
+  },
+  {
+   "path": "fireflies.lua",
+   "size": 30192
+  },
+  {
+   "path": "img/far.png",
+   "size": 585
+  },
+  {
+   "path": "img/lantern.png",
+   "size": 103
+  },
+  {
+   "path": "img/mist.png",
+   "size": 219
+  },
+  {
+   "path": "img/moon.png",
+   "size": 342
+  },
+  {
+   "path": "img/near.png",
+   "size": 710
+  },
+  {
+   "path": "img/sky_00.png",
+   "size": 590
+  },
+  {
+   "path": "img/sky_01.png",
+   "size": 497
+  },
+  {
+   "path": "img/sky_02.png",
+   "size": 472
+  },
+  {
+   "path": "img/sky_03.png",
+   "size": 526
+  },
+  {
+   "path": "img/sky_04.png",
+   "size": 548
+  },
+  {
+   "path": "img/sky_05.png",
+   "size": 554
+  },
+  {
+   "path": "img/sky_06.png",
+   "size": 558
+  },
+  {
+   "path": "img/sky_07.png",
+   "size": 558
+  },
+  {
+   "path": "img/sky_08.png",
+   "size": 537
+  },
+  {
+   "path": "img/sky_09.png",
+   "size": 484
+  },
+  {
+   "path": "img/sky_10.png",
+   "size": 540
+  },
+  {
+   "path": "img/sky_11.png",
+   "size": 597
+  },
+  {
+   "path": "lib/Engine_Fireflies.sc",
+   "size": 8603
+  },
+  {
+   "path": "lib/scene.lua",
+   "size": 1334
+  },
+  {
+   "path": "lib/swarm.lua",
+   "size": 8575
+  },
+  {
+   "path": "screenshots/dusk.png",
+   "size": 4466
+  },
+  {
+   "path": "screenshots/night.png",
+   "size": 5217
+  }
+ ]
+}

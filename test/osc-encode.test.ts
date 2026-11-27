@@ -16,7 +16,7 @@
 // neither of them is ours.
 
 import { describe, expect, it } from "vitest";
-import { encodeMessage, decode } from "../src/engine/osc.js";
+import { encodeMessage, decode, OscFloat } from "../src/engine/osc.js";
 
 /** The four-byte alignment OSC requires, which is most of the format. */
 const isAligned = (b: Uint8Array): boolean => b.length % 4 === 0;
@@ -76,7 +76,7 @@ describe("encoding an OSC message", () => {
   });
 
   it("refuses an argument it has no tag for, rather than writing nonsense", () => {
-    expect(() => encodeMessage("/a", [true as unknown as number])).toThrow(/unsupported/);
+    expect(() => encodeMessage("/a", [{ a: 1 } as unknown as number])).toThrow(/unsupported/);
   });
 
   /**
@@ -144,5 +144,30 @@ describe("decoding what matron hands Lua (E9-238)", () => {
     expect(Array.from(args[3] as Uint8Array)).toEqual([0, 0x90, 60, 100]);
     expect(args.slice(4, 8)).toEqual([true, false, null, Infinity]);
     expect(args[8]).toBe(9);
+  });
+});
+
+// E9-274 — what matron's osc.send writes, which the encoder could not:
+// booleans and nil as bare type tags, and every number as a float.
+describe("encoding as matron's osc.send does", () => {
+  it("writes true, false and nil as T, F and N with no bytes", () => {
+    const b = encodeMessage("/hs010/note_on", [new OscFloat(36), new OscFloat(0.875), false, true, null]);
+    expect(isAligned(b)).toBe(true);
+    const back = decode(b) as { address: string; args: unknown[] };
+    expect(back.address).toBe("/hs010/note_on");
+    expect(back.args).toEqual([36, 0.875, false, true, null]);
+    const tags = new TextDecoder().decode(b.subarray(16, 24)).replace(/\0+$/, "");
+    expect(tags).toBe(",ffFTN");
+    // 16 address + 8 tags + two floats; the T, F and N carry nothing.
+    expect(b.length).toBe(16 + 8 + 8);
+  });
+
+  it("writes a whole number wrapped in OscFloat as f, not i", () => {
+    const b = encodeMessage("/x", [new OscFloat(1), 1]);
+    const tags = new TextDecoder().decode(b.subarray(4, 8)).replace(/\0+$/, "");
+    expect(tags).toBe(",fi");
+    const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+    expect(v.getFloat32(8, false)).toBe(1);
+    expect(v.getInt32(12, false)).toBe(1);
   });
 });

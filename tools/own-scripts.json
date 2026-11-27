@@ -51,6 +51,26 @@
         "field recording"
       ],
       "cover": "screenshots/dawn.png"
+    },
+    {
+      "name": "fireflies",
+      "description": "a summer meadow at night, where fireflies learn to flash together",
+      "tags": [
+        "ambient",
+        "generative",
+        "grid"
+      ],
+      "cover": "screenshots/night.png"
+    },
+    {
+      "name": "mycelium",
+      "description": "a fungus under the forest floor: feed it, touch it, and hear the signals it carries",
+      "tags": [
+        "ambient",
+        "generative",
+        "grid"
+      ],
+      "cover": "screenshots/summer.png"
     }
   ]
 }

@@ -5,16 +5,17 @@
 
 import { installCapture, captured, uncapturedAudioContext } from "./capture.js";
 import { timed } from "../norns/call-cost.js";
-import { decode, encodeMessage } from "./osc.js";
+import { decode, encodeMessage, type OscFloat } from "./osc.js";
 import { onlyDefsAndSync, routeLangPacket } from "./lang-route.js";
 import { createWriteTracker } from "./sound-writes.js";
 import { rawBufferReadOf, type RawBufferRead } from "./raw-buffer-read.js";
 import { defLoadOf, mirrorDefs } from "./def-files.js";
 import { loadClassLibrary } from "./classlib-loader.js";
 import { serialiseSend } from "./reentry.js";
+import { installControlBusView } from "./control-buses.js";
 
 /** What an OSC argument can be: int32, float32 or string, plus blobs. */
-export type OscArg = number | string | Uint8Array;
+export type OscArg = number | string | Uint8Array | boolean | null | OscFloat;
 
 installCapture(); // before any wasm import; see capture.ts
 
@@ -389,6 +390,8 @@ export async function createEngineHost(opts: EngineHostOptions = {}): Promise<En
   // one is inside the server deadlocks the main thread; see reentry.ts.
   const serverSend = serialiseSend<Uint8Array>(scsynth.sendOsc.bind(scsynth));
   scsynth.sendOsc = serverSend;
+  // E9-271 — Bus:getSynchronous reads the server's buses through this.
+  installControlBusView(scsynth);
 
   // E9-30 — STK's wavetables, into the SERVER's filesystem.
   //

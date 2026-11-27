@@ -30,6 +30,33 @@ export function toBytes(v: Bytes | string): Bytes {
 }
 
 /**
+ * E9-276 — a working directory, for the length of one command.
+ *
+ * The shell has none: a relative path is read from `/`, which every caller
+ * so far has lived with. A `lua` process has one — sampswap starts it as
+ * `cd …/sampswap/lib/ && lua sampswap.lua`, and the script then writes
+ * `original.wav` beside itself — so while a command it runs is being
+ * carried out, relative paths are read from there. Null the rest of the
+ * time, so nothing else changes.
+ */
+let cwd: string | null = null;
+
+export function withCwd<T>(dir: string, f: () => T): T {
+  const prev = cwd;
+  cwd = normalise(dir);
+  try {
+    return f();
+  } finally {
+    cwd = prev;
+  }
+}
+
+/** The directory relative paths are read from right now, or null for `/`. */
+export function currentCwd(): string | null {
+  return cwd;
+}
+
+/**
  * Absolute, no trailing slash, no `.` or `..`, `~` expanded.
  *
  * norns writes paths by concatenating strings, so `//` and a trailing slash
@@ -38,7 +65,7 @@ export function toBytes(v: Bytes | string): Bytes {
 export function normalise(path: string, home = "/home/we"): string {
   let p = path.trim();
   if (p === "~" || p.startsWith("~/")) p = home + p.slice(1);
-  if (!p.startsWith("/")) p = "/" + p;
+  if (!p.startsWith("/")) p = (cwd ?? "") + "/" + p;
   const parts: string[] = [];
   for (const seg of p.split("/")) {
     if (!seg || seg === ".") continue;

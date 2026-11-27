@@ -265,6 +265,10 @@ export async function startCrone(opts: CroneOptions): Promise<Crone> {
         opts.onTapeFinished?.(m["dropped"] as number);
         return;
       }
+      if (m["type"] === "nonFinite") {
+        reportNonFinite(m["samples"] as number);
+        return;
+      }
     };
     node.port.onmessage = onMessage;
     // A node whose processor never reports is indistinguishable from one that
@@ -273,6 +277,27 @@ export async function startCrone(opts: CroneOptions): Promise<Crone> {
     // the same reason (E4-04).
     setTimeout(() => reject(new Error("crone worklet did not report ready within 10 s")), 10_000);
   });
+
+  // E9-272 — the engine sent NaN or infinities and processor.js zeroed them.
+  // The first time says what and why; after that at most every 10 s.
+  let nonFiniteTotal = 0;
+  let nonFiniteLogged = -Infinity;
+  function reportNonFinite(samples: number): void {
+    const first = nonFiniteTotal === 0;
+    nonFiniteTotal += samples;
+    const now = Date.now();
+    if (first) {
+      log(
+        `crone: the engine sent ${samples} non-finite samples (NaN or infinity) — zeroed at crone's input, ` +
+          "so the reverb and the compressor keep working. A norns has no such guard: there the output " +
+          "would stay silent until a restart. The engine's own sound is not changed otherwise.",
+      );
+      nonFiniteLogged = now;
+    } else if (now - nonFiniteLogged >= 10_000) {
+      log(`crone: still zeroing non-finite samples from the engine (${nonFiniteTotal} so far)`);
+      nonFiniteLogged = now;
+    }
+  }
 
   function handleEvents(m: Record<string, unknown>): void {
     const d = m["dropped"] as number;

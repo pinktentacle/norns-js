@@ -123,7 +123,19 @@ export async function exportToDisk() {
     return a;
   };
   const byKey = new Map((disk.results ?? []).map((a) => [`${a[0]}|${a[2]}`, a]));
-  for (const r of read(RESULTS, [])) byKey.set(`${r.label}|${r.name}`, row(r));
+  for (const r of read(RESULTS, [])) {
+    const k = `${r.label}|${r.name}`;
+    const a = row(r);
+    // A HAND NOTE ON DISK STAYS. Notes are written into the file after the
+    // run, by hand; this page's row has none, and replacing the row lost two
+    // of them (writes-retest, 2026-11-27). The page still wins on the rest.
+    const old = byKey.get(k);
+    if (old && old[5] && !a[5]) {
+      while (a.length < 5) a.push("");
+      a[5] = old[5];
+    }
+    byKey.set(k, a);
+  }
   const done = [...new Set([...(disk.done ?? []), ...read(DONE, [])])].sort();
   const rows = [...byKey.values()].map((a) => JSON.stringify(a));
   // One result per line, so a diff of the file reads as the rows that changed.

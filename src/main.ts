@@ -19,7 +19,7 @@ import luaprofLua from "./lua/norns-js/luaprof.lua?raw";
 import { luaHeapBytes } from "./lua/wasm53.js";
 import { clockStepMs, createProbe, oscName, readPlayback, type Probe } from "./ui/probe.js";
 import { createReclaim, type Reclaim } from "./ui/latency-reclaim.js";
-import { decode as decodeOsc, encodeMessage as encodeOsc } from "./engine/osc.js";
+import { decode as decodeOsc, encodeMessage as encodeOsc, OscFloat } from "./engine/osc.js";
 import { createScreen, type Screen } from "./screen/screen.js";
 import { loadScreenModuleWeb } from "./screen/screen-web.js";
 import { createScreenCanvas } from "./ui/canvas.js";
@@ -44,7 +44,7 @@ import { createWakeupWatch } from "./ui/wakeups.js";
 import { accountedMs, callCosts, resetCallCosts, sayCost, timed, watchCallCost } from "./norns/call-cost.js";
 import { registerScreenImages } from "./screen/images.js";
 import { registerHardware, type Hardware } from "./norns/hardware.js";
-import { registerOsc } from "./osc/register.js";
+import { registerOsc, type OscOut } from "./osc/register.js";
 import { exercise, scriptsIn, type ExerciseOptions } from "./exercise/runner.js";
 import { OscRemote } from "./osc/remote.js";
 import { browserStorage, createSettings, dbToGain, type DeviceId } from "./ui/settings.js";
@@ -62,7 +62,7 @@ import { createMaidenPanel } from "./ui/maiden-panel.js";
 import { createVfsStore } from "./editor/store.js";
 import { createRunner } from "./editor/runner.js";
 import { installFromRepo, ownRepo, parseRepoUrl } from "./community/install.js";
-import { createOwnScripts, isOwnUrl, ownBase, ownCover, ownName, withOwn } from "./community/own-scripts.js";
+import { createOwnScripts, isOwnUrl, OWN_LIST, ownBase, ownCover, ownName, withOwn } from "./community/own-scripts.js";
 import { CATALOGS_DIR, fetchAndStoreCatalogs } from "./community/maiden-catalogs.js";
 import { needsOf } from "./community/needs.js";
 import { installStudyEngine, studyEngineOf } from "./community/study-engines.js";
@@ -88,6 +88,7 @@ import { unpack as unpackArchive } from "./fs/unpack.js";
 import { fetchFile, quarters } from "./fs/release-relay.js";
 import { setJackGraph, type ShellFetch } from "./fs/shell.js";
 import { setProgramHost } from "./fs/programs.js";
+import { prepareSox, soxUnavailable } from "./fs/sox.js";
 import { jackRoute } from "./crone/jack.js";
 import { engineReadsInput } from "./engine/input-use.js";
 import { GridManager } from "./grid/manager.js";
@@ -107,7 +108,8 @@ import { RemoteGridTransport } from "./grid/remote.js";
 import { createScriptsStore } from "./ui/scripts-store.js";
 import { createCoverStore } from "./community/covers.js";
 import { createMetaStore } from "./community/meta.js";
-import { parseCatalog } from "./community/catalog.js";
+import { parseCatalog, type Catalog, type CatalogEntry } from "./community/catalog.js";
+import { createInfoPanel } from "./ui/info-panel.js";
 import { mainScript } from "./ui/scripts-model.js";
 import { restartInto } from "./ui/restart-into.js";
 import { createScriptDownloads, type DownloadsView } from "./ui/script-downloads.js";
@@ -1388,7 +1390,7 @@ async function main(): Promise<void> {
   // scsynth through the engine host, matron by its own osc.event (later,
   // not inside the send — a script sending to itself on hardware hears
   // it on the next pass of the event loop too).
-  const oscLocal = (port: number, path: string, args: Array<number | string>): boolean => {
+  const oscLocal = (port: number, path: string, args: Array<number | string | OscOut>): boolean => {
     if (port === 57120 && scEngine !== null) {
       scEngine.sendToLang(path, args);
       return true;
@@ -1398,8 +1400,10 @@ async function main(): Promise<void> {
       return true;
     }
     if (port === 10111) {
+      // matron hears its own floats back as numbers.
+      const plain = args.map((a) => (a instanceof OscFloat ? a.value : a));
       setTimeout(() => {
-        cbLater()?.oscEvent(path, [...args], ["127.0.0.1", "10111"]);
+        cbLater()?.oscEvent(path, plain, ["127.0.0.1", "10111"]);
         dirtyFlag();
       }, 0);
       return true;
@@ -1410,6 +1414,11 @@ async function main(): Promise<void> {
     remote: oscRemote,
     local: oscLocal,
     log: (l) => log(l),
+  });
+  // E9-275 — sox runs synchronously from os.execute, so it is compiled now,
+  // in the background, and is there by the time a script asks for it.
+  void prepareSox().then((ok) => {
+    if (!ok) log(`sox: ${soxUnavailable()}`);
   });
   // E9-267 — what sendosc, oscnotify and audiowaveform need from the page
   // (src/fs/programs.ts): the same OSC routes as `osc.send`, and the
@@ -4311,7 +4320,10 @@ async function main(): Promise<void> {
   // `own-scripts/`. Asked for now, so the store has them the first time it
   // opens; see `own-scripts.ts`.
   const OWN_BASE = ownBase(document.baseURI);
-  const ownScripts = createOwnScripts({ base: OWN_BASE, log });
+  // E9-278 — the published list first (a new script needs no release; each
+  // is installed from its own repository), the copy in this build when
+  // GitHub cannot be reached.
+  const ownScripts = createOwnScripts({ base: OWN_BASE, remote: OWN_LIST, log });
   void ownScripts.load();
 
   const maiden = createMaidenPanel({
@@ -4483,7 +4495,7 @@ async function main(): Promise<void> {
           covers: createCoverStore({
             addressOf: (name) => {
               const e = ownScripts.last().find((x) => x.name === name);
-              return e === undefined ? null : ownCover(e.url);
+              return e === undefined ? null : (e.cover ?? ownCover(e.url));
             },
           }),
           // E9-209 — stars and dates, for "popular" and "new", and the
@@ -4533,6 +4545,48 @@ async function main(): Promise<void> {
   if (scriptsStore === null) scriptsButton.setAttribute("disabled", "");
   scriptsButton.addEventListener("click", () => scriptsStore?.toggle());
   expose({ store: scriptsStore });
+
+  // --- info: the loaded script's README and discussion (E9-277) ------------
+  //
+  // For the last script asked for: the one somebody wants to read about is
+  // as often the one that has just failed to start as the one playing.
+  const infoButton = $("#info");
+  const findEntry = (c: Catalog | null, name: string): CatalogEntry | null =>
+    c?.entries.find((e) => e.name.toLowerCase() === name.toLowerCase()) ?? null;
+  const info = createInfoPanel({
+    host: $("#infopanel") as HTMLElement,
+    vfs,
+    script: () => lastScriptPath,
+    entry: async (name) => {
+      // The catalogue kept from last time first; the network only for a
+      // script it does not know (or when there is none yet).
+      let kept: Catalog | null = null;
+      try {
+        const text = vfs.readText(`${CATALOGS_DIR}/community.json`);
+        if (text !== null) kept = withOwn(parseCatalog(JSON.parse(text)), ownScripts.last());
+      } catch {
+        kept = null;
+      }
+      const hit = findEntry(kept, name);
+      if (hit !== null) return hit;
+      const [c, own] = await Promise.all([fetchAndStoreCatalogs(vfs, { log }), ownScripts.load()]);
+      return findEntry(withOwn(c, own), name);
+    },
+    onToggle: (on) => {
+      dialogOpen = on;
+      infoButton.setAttribute("aria-expanded", String(on));
+    },
+  });
+  // A sheet over the whole page, like the store: nothing in the rail can be
+  // reached while it is up, so it closes the popovers as it opens and is
+  // not one of them.
+  infoButton.addEventListener("click", () => {
+    if (info.isOpen()) return info.close();
+    closeOtherPanels(null);
+    if (scriptsStore?.open === true) scriptsStore.hide();
+    info.open();
+  });
+  expose({ info });
 
   // --- the devices panel --------------------------------------------------
   //

@@ -216,6 +216,17 @@ const COMPONENTS = [
     licence: "lame/COPYING",
   },
   {
+    // E9-275 — the sox program (GPL-2.0+); libsox alone is LGPL-2.1+, and
+    // it is linked into the program here, so the program's licence leads.
+    what: "SoX",
+    who: "Chris Bagwell, Lance Norskog and the SoX contributors",
+    spdx: "GPL-2.0-or-later",
+    url: "https://sourceforge.net/projects/sox/",
+    pin: "sox-14.4.2 (Debian 14.4.2+git20190427 orig)",
+    ships: "the sox command scripts run (public/sox/sox.wasm)",
+    licence: "sox/LICENSE.GPL",
+  },
+  {
     what: "sc-plugins-extra (ByteBeat, PulsePTR, TrianglePTR, FormantTriPTR)",
     who: "their respective authors",
     spdx: "GPL-3.0-or-later",
@@ -294,6 +305,16 @@ const COMPONENTS = [
     ships: "the code editor in the project panel",
     licence: null,
     from: "node_modules/ace-builds/LICENSE",
+  },
+  {
+    what: "marked",
+    who: "Christopher Jeffrey and the marked contributors (Markdown.pl: John Gruber)",
+    spdx: "MIT",
+    url: "https://github.com/markedjs/marked",
+    pin: "marked, the version in package-lock.json",
+    ships: "the README in the info sheet (E9-277)",
+    licence: null,
+    from: "node_modules/marked/LICENSE",
   },
 ];
 

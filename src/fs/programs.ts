@@ -23,9 +23,12 @@
 // page itself started — which is every process there is here — so `pkill`
 // of something never started finds nothing and exits 1, as it would.
 
-import { basename, dirname, normalise, type Vfs } from "./vfs.js";
+import { basename, currentCwd, dirname, normalise, withCwd, type Vfs } from "./vfs.js";
 import type { ShellResult } from "./shell.js";
 import { parseSoundHeader } from "./wav-header.js";
+import { runSox, soxReady, soxUnavailable } from "./sox.js";
+import { luaCommand, type LuaProcessHost } from "./lua-cli.js";
+import { luaReady } from "../lua/lua.js";
 import {
   HELP,
   VERSION,
@@ -91,6 +94,11 @@ function spawn(name: string, cmdline: string, stop: () => void): number {
   const pid = nextPid++;
   processes.set(pid, { pid, name, cmdline, stop });
   return pid;
+}
+
+/** A process that ended by itself: it leaves the table, as a reaped child does. */
+function reap(pid: number): void {
+  processes.delete(pid);
 }
 
 function killWhere(test: (p: Process) => boolean): number {
@@ -398,6 +406,45 @@ function audiowaveform(vfs: Vfs, argv: readonly string[], background: boolean): 
     : NO(`audiowaveform: ${basename(input)} is decoded in the background; ${basename(output)} appears when it is done`);
 }
 
+// --- sox -----------------------------------------------------------------------
+
+/**
+ * E9-275 — `sox` / `soxi`, the real program (src/fs/sox.ts). `mergeErr` is
+ * a `2>&1` on the line: sox writes `stat` and its warnings to stderr, and
+ * `sox f -n stat 2>&1 | grep Length` reads them from there.
+ */
+export function soxCommand(vfs: Vfs, name: string, argv: readonly string[], mergeErr: boolean): ShellResult {
+  // E9-276: from a lua process, its working directory.
+  const r = runSox(vfs, argv, name, currentCwd() ?? "/home/we");
+  if (r === null) return NO(`${name}: ${soxUnavailable()}`);
+  const out = mergeErr ? r.stdout + r.stderr : r.stdout;
+  if (r.code !== 0) {
+    const why = r.stderr.trim().split("\n")[0] ?? "";
+    if (why !== "") sayOnce(why);
+    return { out, ok: false, failed: true };
+  }
+  return OK(out);
+}
+
+/** What `command -v` and `which` answer for the programs here. */
+export function programPath(name: string): string | null {
+  if ((name === "sox" || name === "soxi") && soxReady()) return `/usr/bin/${name}`;
+  // E9-276: norns has Lua 5.3 on the command line; the scripts take it for granted.
+  if ((name === "lua" || name === "lua5.3") && luaReady()) return `/usr/bin/${name}`;
+  return null;
+}
+
+// --- lua -------------------------------------------------------------------------
+
+const luaHost: LuaProcessHost = {
+  spawn: (name, cmdline, stop) => spawn(name, cmdline, stop),
+  exit: (pid) => reap(pid),
+  log: (line) => host?.log?.(line),
+};
+
+/** The programs a leading `cd X &&` may lead to: those that read relative paths. */
+const CD_PROGRAMS = new Set(["lua", "lua5.3", "sox", "soxi"]);
+
 // --- dispatch ----------------------------------------------------------------
 
 /**
@@ -406,6 +453,21 @@ function audiowaveform(vfs: Vfs, argv: readonly string[], background: boolean): 
  */
 export function runProgram(vfs: Vfs, cmd: string, background: boolean): ShellResult | null {
   if (/^ps\s/.test(cmd) && /\|\s*xargs\b[^|]*\bkill\b/.test(cmd)) return psKill(cmd);
+  // E9-276 — `cd …/sampswap/lib/ && lua sampswap.lua …`: the program runs
+  // from there. Only for the programs here that read relative paths; any
+  // other `cd X && …` is the shell's, as before.
+  {
+    const cd = /^cd\s+('[^']*'|"[^"]*"|\S+)\s*&&\s*([\s\S]+)$/.exec(cmd);
+    if (cd !== null) {
+      const rest = cd[2]!.trim();
+      const head = shellWords(rest)[0];
+      if (head !== undefined && CD_PROGRAMS.has(basename(head)) && !/&&|\|\||;|\|/.test(rest)) {
+        const dir = normalise(shellWords(cd[1]!)[0] ?? "", vfs.home);
+        if (!vfs.isDir(dir)) return FAILED(`sh: 1: cd: can't cd to ${dir}`);
+        return withCwd(dir, () => runProgram(vfs, rest, background));
+      }
+    }
+  }
   let w = shellWords(cmd);
   if (w.some((x) => x === "|" || x === ";" || x === "&&" || x === "||")) return null;
   if (w[0] === "nohup") w = w.slice(1);
@@ -414,6 +476,12 @@ export function runProgram(vfs: Vfs, cmd: string, background: boolean): ShellRes
   const name = basename(w[0]!);
   const argv = w.slice(1);
   switch (name) {
+    case "sox":
+    case "soxi":
+      return soxCommand(vfs, name, argv, false);
+    case "lua":
+    case "lua5.3":
+      return luaCommand(vfs, argv, background, w.join(" "), currentCwd() ?? "/home/we", luaHost);
     case "sendosc":
       return sendosc(argv);
     case "oscnotify":

@@ -49,6 +49,7 @@ files:
   - desktop/probe.js
   - tools/serve.mjs
   - tools/gh-release.mjs
+  - tools/info-relay.mjs
   - package.json
 
 extraResources:

@@ -258,17 +258,42 @@ export function registerScreenImages(registry: NornsRegistry, opts: ImageOptions
     const skipX = ox - dx;
     const skipY = oy - dy;
 
-    const dst = screen.peek(ox, oy, cw, ch);
-    if (dst.length < cw * ch) return;
+    // E9-280 — IN EIGHT BITS, ON THE SURFACE ITSELF, as matron's cairo
+    // does (`cairo_set_source_surface` and a fill). This went through
+    // `peek` and `poke`, and `screen_peek` is upstream's: it reads the low
+    // nibble of a pixel, `& 0xF`, which is the level only when the byte is
+    // a whole level times 17. A pixel left by antialiasing or by the ADD
+    // operator is not, so it came back as some other level -- 0x2C as 12 --
+    // and was written back as that, even under a fully TRANSPARENT part of
+    // the image. fireflies drew a soft glow and then its meadow over it,
+    // and the glow came out as a ring of bright dots. Now a transparent
+    // pixel leaves the surface alone, an opaque one writes its level, and
+    // one in between is composited OVER in premultiplied alpha.
+    const data = screen.surface();
+    if (data.length < SCREEN_W * SCREEN_H * 4) return;
     for (let j = 0; j < ch; j++) {
       for (let i = 0; i < cw; i++) {
         const s = (sy + skipY + j) * img.width + (sx + skipX + i);
-        const d = j * cw + i;
-        const a = img.alpha[s]! / 255;
-        dst[d] = Math.round(img.grey[s]! * a + dst[d]! * (1 - a));
+        const a = img.alpha[s]!;
+        if (a === 0) continue;
+        const v = img.grey[s]! * 17;
+        const o = ((oy + j) * SCREEN_W + (ox + i)) * 4;
+        if (a === 255) {
+          data[o] = v;
+          data[o + 1] = v;
+          data[o + 2] = v;
+          data[o + 3] = 255;
+          continue;
+        }
+        const k = (255 - a) / 255;
+        const sv = (v * a) / 255;
+        data[o] = Math.round(sv + data[o]! * k);
+        data[o + 1] = Math.round(sv + data[o + 1]! * k);
+        data[o + 2] = Math.round(sv + data[o + 2]! * k);
+        data[o + 3] = Math.round(a + data[o + 3]! * k);
       }
     }
-    screen.poke(ox, oy, cw, ch, dst);
+    screen.touched();
   };
 
   // --- the image object, as Lua sees it ----------------------------------

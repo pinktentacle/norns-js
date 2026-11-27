@@ -29,7 +29,7 @@
 //              drawn, not when each scrolls into view.
 
 import type { CatalogEntry } from "../community/catalog.js";
-import { OWN_TAG } from "../community/own-scripts.js";
+import { OWN_TAG, ownPage } from "../community/own-scripts.js";
 import type { CoverStore } from "../community/covers.js";
 import type { MetaStore, ScriptMeta } from "../community/meta.js";
 import { standing, type Standing } from "../community/verdicts.js";
@@ -883,7 +883,7 @@ export function createScriptsStore(opts: ScriptsStoreOptions): ScriptsStore {
     for (const l of [
       link("documentation", e.documentation),
       link("discussion", e.discussion),
-      own ? link("readme", `${e.url.replace(/\/*$/, "/")}README.md`) : link("source", e.url),
+      own ? link("readme", ownPage(e.url)) : link("source", e.url),
     ]) {
       if (l !== null) links.append(l);
     }

@@ -35,6 +35,8 @@ export interface CatalogEntry {
   readonly tags: readonly string[];
   readonly discussion: string | null;
   readonly documentation: string | null;
+  /** E9-278 — the store's picture, when the entry says where it is (our own scripts). */
+  readonly cover?: string;
 }
 
 export interface Catalog {

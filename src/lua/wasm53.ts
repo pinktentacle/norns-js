@@ -141,6 +141,13 @@ const LUA_REGISTRYINDEX = -1001000; // LUAI_MAXSTACK is 1000000 in 5.3
  * its initial 16 MB throughout.
  */
 const installed: Array<(L: Ptr) => number> = [];
+/** Each JavaScript function's table index, once it has one. E9-276. */
+const slots = new Map<(S: LuaState) => number, number>();
+
+/** How many host functions the table holds. For tests (E9-276). */
+export function luaHostFunctions(): number {
+  return installed.length;
+}
 
 export const lua = {
   LUA_OK,
@@ -191,6 +198,18 @@ export const lua = {
   lua_tointeger: (L: LuaState, i: number): number =>
     Number(mod()._lua_tointegerx(L as Ptr, i, 0)),
   lua_rawlen: (L: LuaState, i: number): number => mod()._njs_rawlen(L as Ptr, i),
+  /**
+   * E9-276 — the string at `i` as BYTES, or null when it is not one. A file
+   * a `lua` process writes is whatever it wrote, and a UTF-8 round trip
+   * would change every byte above 0x7f.
+   */
+  lua_tobytes: (L: LuaState, i: number): Uint8Array | null => {
+    const m = mod();
+    const n = m._njs_tostring_len(L as Ptr, i);
+    if (n < 0) return null;
+    const p = m._njs_tostring_ptr(L as Ptr, i);
+    return m.HEAPU8.slice(p, p + n);
+  },
   lua_touserdata: (L: LuaState, i: number): unknown => mod()._lua_touserdata(L as Ptr, i),
   /**
    * The value at `i` as a JavaScript string.
@@ -247,6 +266,15 @@ export const lua = {
    */
   lua_pushcfunction: (L: LuaState, fn: (S: LuaState) => number): void => {
     const m = mod();
+    // E9-276 — THE SAME FUNCTION, THE SAME SLOT. A `lua` process is a new
+    // state each run, and its host functions are module constants: pushed
+    // again, they reuse the index they were given the first time instead
+    // of growing the table by a dozen per run.
+    const known = slots.get(fn);
+    if (known !== undefined) {
+      m._lua_pushcclosure(L as Ptr, known, 0);
+      return;
+    }
     const wrapped = (S: Ptr): number => {
       try {
         return fn(S);
@@ -262,6 +290,7 @@ export const lua = {
     };
     installed.push(wrapped as (L: Ptr) => number);
     const idx = m.addFunction(wrapped, "ii");
+    slots.set(fn, idx);
     m._lua_pushcclosure(L as Ptr, idx, 0);
   },
 
@@ -305,6 +334,8 @@ export const lua = {
   lua_pcall: (L: LuaState, na: number, nr: number, ef: number): number =>
     mod()._lua_pcallk(L as Ptr, na, nr, ef, 0, 0),
   lua_error: (L: LuaState): number => mod()._lua_error(L as Ptr),
+  /** E9-276 — a `lua` process's state, freed when the process ends. */
+  lua_close: (L: LuaState): void => void mod()._lua_close(L as Ptr),
 
   /**
    * fengari's hook for a JavaScript throw escaping a host function.

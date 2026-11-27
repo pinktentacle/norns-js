@@ -439,7 +439,7 @@ describe("listing a folder the way a script actually asks", () => {
   });
 
   it("refuses a pipe it cannot do, instead of answering wrongly", () => {
-    const r = runShell(banked(), `ls -p ${D} | awk '{print $1}'`);
+    const r = runShell(banked(), `ls -p ${D} | awk '{s+=$1} END {print s}'`);
     expect(r.ok).toBe(false);
     expect(r.refused).toContain("unsupported pipe");
   });

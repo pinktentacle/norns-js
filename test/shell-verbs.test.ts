@@ -168,7 +168,7 @@ describe("cat", () => {
   it("still refuses a stage it cannot do, rather than half-answering", () => {
     const v = new Vfs();
     v.write("/tmp/foo", "x\n");
-    const r = runShell(v, "cat /tmp/foo | awk '{print $1}' > /tmp/files");
+    const r = runShell(v, "cat /tmp/foo | awk '{s+=$1} END {print s}' > /tmp/files");
     expect(r.ok).toBe(false);
     expect(r.refused).toMatch(/unsupported pipe/);
     expect(v.readText("/tmp/files"), "it wrote before it refused").toBeNull();

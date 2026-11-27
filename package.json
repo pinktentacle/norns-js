@@ -5,18 +5,19 @@
   "description": "norns in the browser",
   "dependencies": {
     "ace-builds": "^1.45.2",
+    "marked": "18.2.0",
     "supersonic-scsynth": "^0.95.1",
     "supersonic-scsynth-core": "^0.95.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
-    "fengari": "^0.1.5",
-    "wasmoon": "^1.16.0",
     "electron": "^45.3.1",
     "electron-builder": "^26.18.0",
+    "fengari": "^0.1.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.7",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.0",
+    "wasmoon": "^1.16.0"
   },
   "license": "AGPL-3.0-or-later",
   "desktopName": "norns-js.desktop",
@@ -57,7 +58,7 @@
     "blockers": "node tools/build-blockers.mjs"
   },
   "main": "desktop/main.js",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "author": "pinktentacle",
   "homepage": "https://norns-js.pages.dev/",
   "repository": {

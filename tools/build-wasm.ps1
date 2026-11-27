@@ -193,6 +193,14 @@ $steps = @(
     Why  = "libsndfile.a: Buffer.write, Recorder and DiskOut in scsynth"
   },
   @{
+    # E9-275 — the sox command scripts run, after sndfile because its FLAC,
+    # Ogg Vorbis and LAME come from there.
+    Name = "sox"; Stage = 1; How = "bash"; Clean = $true
+    Run  = @("tools/sox/build.sh")
+    Makes = @("public/sox/sox.wasm", "public/sox/sox.js")
+    Why  = "sox.wasm: the sox command (src/fs/sox.ts)"
+  },
+  @{
     Name = "sclang"; Stage = 1; How = "bash"; Clean = $true
     Run  = @("tools/sclang/build.sh")
     Makes = @("third_party/supercollider/build-wasm/wasm-dist/sclang/sclang.js",

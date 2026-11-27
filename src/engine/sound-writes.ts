@@ -88,7 +88,7 @@ export interface WriteTracker {
   /** Every packet on its way from sclang to the server, before it is forwarded. */
   fromLang(bytes: Uint8Array): void;
   /** Every `/done` and `/fail` from the server, with its arguments. */
-  fromServer(address: string, args: ReadonlyArray<number | string | Uint8Array>): void;
+  fromServer(address: string, args: ReadonlyArray<unknown>): void;
 }
 
 const dirOf = (p: string): string => {

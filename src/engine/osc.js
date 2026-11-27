@@ -10,6 +10,18 @@ const dec = new TextDecoder();
 
 const pad4 = (n) => (n + 3) & ~3;
 
+/**
+ * E9-274 — a number that goes out as an OSC float even when it is whole.
+ * matron's `osc.send` writes every Lua number with `lo_message_add_float`
+ * (weaver.cc `_osc_send`), so SuperCollider hears 1.0 where this encoder,
+ * left to itself, would write the integer 1.
+ */
+export class OscFloat {
+  constructor(value) {
+    this.value = value;
+  }
+}
+
 function encString(s) {
   const b = enc.encode(s);
   const out = new Uint8Array(pad4(b.length + 1)); // +1 forces a NUL terminator
@@ -68,6 +80,15 @@ export function encodeMessage(address, args = []) {
     } else if (typeof a === "number") {
       tags[i + 1] = Number.isInteger(a) ? "i" : "f";
       bodyLen += 4;
+    } else if (a instanceof OscFloat) {
+      tags[i + 1] = "f";
+      bodyLen += 4;
+    } else if (a === true || a === false || a === null) {
+      // E9-274 — what matron sends for a Lua boolean and nil: the type tag
+      // alone (T, F, N), no bytes. They were dropped before the encoder
+      // ever saw them, and hs010's voice got nil where its `forceslide`
+      // false should be: "Non boolean in test" on every note.
+      tags[i + 1] = a === null ? "N" : a ? "T" : "F";
     } else if (a instanceof Uint8Array) {
       // A BLOB: int32 length, the bytes, then padding to four. sclang
       // sends SynthDefs this way, so an encoder that cannot write one
@@ -102,8 +123,10 @@ export function encodeMessage(address, args = []) {
       view.setInt32(o, a, false); // OSC is big-endian
       o += 4;
     } else if (t === "f") {
-      view.setFloat32(o, a, false);
+      view.setFloat32(o, a instanceof OscFloat ? a.value : a, false);
       o += 4;
+    } else if (t === "T" || t === "F" || t === "N") {
+      // no body
     } else {
       view.setInt32(o, a.length, false);
       out.set(a, o + 4);
